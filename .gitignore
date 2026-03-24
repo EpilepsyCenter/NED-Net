@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# Data files
+*.edf
+*.adicht
+*.adibin
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
+
+# SDK binaries & installers
+Extras/*.msi
+adisdk/
+windows_import_service/.venv/
+
+# Test data
+imports/
+exports/
+~$*
