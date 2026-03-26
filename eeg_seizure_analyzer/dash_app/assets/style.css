@@ -1,0 +1,782 @@
+/* ── NED-Net Theme ──────────────────────────────────────────────────── */
+
+:root {
+    --ned-bg: #0f1117;
+    --ned-sidebar: #161b22;
+    --ned-surface: #1c2128;
+    --ned-surface-hover: #242a33;
+    --ned-border: #2d333b;
+    --ned-text: #e6edf3;
+    --ned-text-muted: #8b949e;
+    --ned-accent: #58a6ff;
+    --ned-accent-hover: #79c0ff;
+    --ned-success: #3fb950;
+    --ned-warning: #d29922;
+    --ned-danger: #f85149;
+    --ned-purple: #bc8cff;
+    --ned-radius: 8px;
+    --ned-transition: 0.2s ease;
+}
+
+/* ── Global ────────────────────────────────────────────────────────── */
+
+body {
+    background-color: var(--ned-bg) !important;
+    color: var(--ned-text) !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: var(--ned-bg);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--ned-border);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--ned-text-muted);
+}
+
+/* ── Layout ────────────────────────────────────────────────────────── */
+
+#app-container {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────── */
+
+#sidebar {
+    width: 280px;
+    min-width: 280px;
+    background: var(--ned-sidebar);
+    border-right: 1px solid var(--ned-border);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 100;
+    overflow-y: auto;
+}
+
+#sidebar-brand {
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--ned-border);
+}
+
+#sidebar-brand h4 {
+    color: var(--ned-accent);
+    font-weight: 700;
+    font-size: 1.15rem;
+    margin: 0 0 2px 0;
+    letter-spacing: 0.5px;
+}
+
+#sidebar-brand .subtitle {
+    color: var(--ned-text-muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+}
+
+#sidebar-content {
+    padding: 16px 20px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+#sidebar-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--ned-border);
+    font-size: 0.75rem;
+    color: var(--ned-text-muted);
+}
+
+/* ── Main content ──────────────────────────────────────────────────── */
+
+#main-content {
+    margin-left: 280px;
+    flex: 1;
+    padding: 0;
+    min-height: 100vh;
+    background: var(--ned-bg);
+}
+
+/* ── Tab bar ───────────────────────────────────────────────────────── */
+
+#tab-bar {
+    background: var(--ned-sidebar);
+    border-bottom: 1px solid var(--ned-border);
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+}
+
+#tab-bar .nav-link {
+    color: var(--ned-text-muted) !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    padding: 14px 18px !important;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    transition: color var(--ned-transition), border-color var(--ned-transition);
+    background: transparent !important;
+}
+
+#tab-bar .nav-link:hover {
+    color: var(--ned-text) !important;
+    border-bottom-color: var(--ned-border) !important;
+}
+
+#tab-bar .nav-link.active {
+    color: var(--ned-accent) !important;
+    border-bottom-color: var(--ned-accent) !important;
+    background: transparent !important;
+}
+
+/* ── Tab content area ──────────────────────────────────────────────── */
+
+#tab-content {
+    padding: 24px;
+}
+
+/* ── Cards ─────────────────────────────────────────────────────────── */
+
+.ned-card {
+    background: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: var(--ned-radius) !important;
+    transition: border-color var(--ned-transition);
+}
+
+.ned-card:hover {
+    border-color: var(--ned-text-muted) !important;
+}
+
+.ned-card .card-body {
+    padding: 16px 20px !important;
+}
+
+/* ── Metric cards ──────────────────────────────────────────────────── */
+
+.metric-card {
+    background: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: var(--ned-radius) !important;
+    padding: 16px 20px;
+    text-align: center;
+}
+
+.metric-card .metric-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--ned-text-muted);
+    margin-bottom: 6px;
+}
+
+.metric-card .metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--ned-text);
+}
+
+.metric-card .metric-value.accent {
+    color: var(--ned-accent);
+}
+
+/* ── Blinding toggle ───────────────────────────────────────────────── */
+
+.blinding-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.blinding-badge.on {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--ned-success);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+}
+
+.blinding-badge.off {
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--ned-danger);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+}
+
+/* ── Section headers ───────────────────────────────────────────────── */
+
+.sidebar-section {
+    margin-top: 20px;
+    margin-bottom: 8px;
+}
+
+.sidebar-section-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--ned-text-muted);
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.sidebar-divider {
+    border: 0;
+    border-top: 1px solid var(--ned-border);
+    margin: 16px 0;
+}
+
+/* ── Form controls (dark theme) ────────────────────────────────────── */
+
+.form-control,
+.form-select,
+input[type="number"],
+input[type="text"],
+select {
+    background-color: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    color: var(--ned-text) !important;
+    border-radius: 6px !important;
+    font-size: 0.85rem !important;
+    padding: 6px 10px !important;
+    transition: border-color var(--ned-transition) !important;
+}
+
+.form-control:focus,
+.form-select:focus,
+input:focus {
+    border-color: var(--ned-accent) !important;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15) !important;
+    outline: none !important;
+}
+
+/* ── Hide browser number input spinners ───────────────────────────── */
+
+/* Webkit / Chrome / Safari / Edge */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button,
+.dash-input input[type="number"]::-webkit-inner-spin-button,
+.dash-input input[type="number"]::-webkit-outer-spin-button,
+#tab-content input[type="number"]::-webkit-inner-spin-button,
+#tab-content input[type="number"]::-webkit-outer-spin-button,
+.form-control[type="number"]::-webkit-inner-spin-button,
+.form-control[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none !important;
+    margin: 0 !important;
+    display: none !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    pointer-events: none !important;
+}
+
+/* Firefox */
+input[type="number"],
+.dash-input input[type="number"],
+#tab-content input[type="number"],
+.form-control[type="number"] {
+    -moz-appearance: textfield !important;
+    -webkit-appearance: textfield !important;
+    appearance: textfield !important;
+}
+
+/* ── Dash 4.x dcc.Dropdown dark theme ────────────────────────────── */
+
+/* Main dropdown wrapper — the trigger/value area */
+.dash-dropdown {
+    background-color: var(--ned-surface) !important;
+    color: var(--ned-text) !important;
+}
+
+/* Trigger area (the "button" that shows current value) */
+.dash-dropdown-trigger,
+.dash-dropdown-grid-container {
+    background-color: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: 6px !important;
+    color: var(--ned-text) !important;
+}
+
+/* Value display */
+.dash-dropdown-value {
+    color: var(--ned-text) !important;
+}
+
+/* Placeholder text */
+.dash-dropdown-placeholder {
+    color: var(--ned-text-muted) !important;
+}
+
+/* Multi-select value chips */
+.dash-dropdown-value-item {
+    background-color: rgba(88, 166, 255, 0.15) !important;
+    border: 1px solid var(--ned-accent) !important;
+    color: var(--ned-accent) !important;
+    border-radius: 4px !important;
+}
+
+/* Value count badge ("+3 more") */
+.dash-dropdown-value-count {
+    color: var(--ned-text-muted) !important;
+}
+
+/* Clear button */
+.dash-dropdown-clear {
+    color: var(--ned-text-muted) !important;
+}
+.dash-dropdown-clear:hover {
+    color: var(--ned-danger) !important;
+}
+
+/* Trigger icon (chevron) */
+.dash-dropdown-trigger-icon {
+    color: var(--ned-text-muted) !important;
+}
+
+/* Dropdown content / popup panel */
+.dash-dropdown-content {
+    background-color: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: 6px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+    z-index: 200 !important;
+}
+
+/* Search input inside dropdown */
+.dash-dropdown-search-container {
+    background-color: var(--ned-surface) !important;
+    border-bottom: 1px solid var(--ned-border) !important;
+}
+.dash-dropdown-search {
+    background-color: var(--ned-surface) !important;
+    color: var(--ned-text) !important;
+    border: none !important;
+}
+.dash-dropdown-search-icon {
+    color: var(--ned-text-muted) !important;
+}
+
+/* Options list container */
+.dash-dropdown-options {
+    background-color: var(--ned-surface) !important;
+}
+
+/* Individual option */
+.dash-dropdown-option {
+    background-color: var(--ned-surface) !important;
+    color: var(--ned-text) !important;
+    cursor: pointer !important;
+}
+.dash-dropdown-option:hover,
+.dash-dropdown-option[data-focused="true"] {
+    background-color: var(--ned-surface-hover) !important;
+}
+.dash-dropdown-option[data-selected="true"],
+.dash-dropdown-option[aria-selected="true"] {
+    background-color: rgba(88, 166, 255, 0.2) !important;
+    color: var(--ned-accent) !important;
+}
+
+/* Action buttons (Select All / Deselect All) */
+.dash-dropdown-actions {
+    background-color: var(--ned-surface) !important;
+    border-top: 1px solid var(--ned-border) !important;
+}
+.dash-dropdown-action-button {
+    color: var(--ned-accent) !important;
+}
+.dash-dropdown-action-button:hover {
+    color: var(--ned-accent-hover) !important;
+}
+
+/* Dropdown wrapper */
+.dash-dropdown-wrapper {
+    background-color: transparent !important;
+}
+
+/* Catch-all for any leftover white backgrounds inside dropdowns */
+.dash-dropdown *,
+.dash-dropdown > div,
+.dash-dropdown > div > div {
+    background-color: inherit;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────── */
+
+.btn-ned-primary {
+    background: var(--ned-accent) !important;
+    border: none !important;
+    color: #000 !important;
+    font-weight: 600 !important;
+    border-radius: 6px !important;
+    padding: 8px 20px !important;
+    font-size: 0.85rem !important;
+    transition: background var(--ned-transition) !important;
+}
+
+.btn-ned-primary:hover {
+    background: var(--ned-accent-hover) !important;
+}
+
+.btn-ned-secondary {
+    background: transparent !important;
+    border: 1px solid var(--ned-border) !important;
+    color: var(--ned-text) !important;
+    font-weight: 500 !important;
+    border-radius: 6px !important;
+    padding: 8px 20px !important;
+    font-size: 0.85rem !important;
+    transition: all var(--ned-transition) !important;
+}
+
+.btn-ned-secondary:hover {
+    border-color: var(--ned-text-muted) !important;
+    background: var(--ned-surface) !important;
+}
+
+.btn-ned-danger {
+    background: transparent !important;
+    border: 1px solid rgba(248, 81, 73, 0.4) !important;
+    color: var(--ned-danger) !important;
+    font-weight: 500 !important;
+    border-radius: 6px !important;
+    padding: 8px 20px !important;
+    font-size: 0.85rem !important;
+}
+
+.btn-ned-danger:hover {
+    background: rgba(248, 81, 73, 0.1) !important;
+}
+
+/* ── Upload area ───────────────────────────────────────────────────── */
+
+.upload-area {
+    border: 2px dashed var(--ned-border);
+    border-radius: var(--ned-radius);
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all var(--ned-transition);
+    background: var(--ned-surface);
+}
+
+.upload-area:hover {
+    border-color: var(--ned-accent);
+    background: rgba(88, 166, 255, 0.05);
+}
+
+.upload-area .upload-icon {
+    font-size: 2.5rem;
+    color: var(--ned-text-muted);
+    margin-bottom: 12px;
+}
+
+.upload-area .upload-text {
+    color: var(--ned-text-muted);
+    font-size: 0.9rem;
+}
+
+.upload-area .upload-text strong {
+    color: var(--ned-accent);
+}
+
+/* ── File info card ────────────────────────────────────────────────── */
+
+.file-info {
+    font-size: 0.8rem;
+    color: var(--ned-text-muted);
+    line-height: 1.8;
+}
+
+.file-info .info-label {
+    color: var(--ned-text-muted);
+    font-weight: 500;
+}
+
+.file-info .info-value {
+    color: var(--ned-text);
+}
+
+/* ── Channel selector chips ────────────────────────────────────────── */
+
+.channel-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    margin: 3px;
+    border-radius: 16px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all var(--ned-transition);
+    border: 1px solid var(--ned-border);
+    background: var(--ned-surface);
+    color: var(--ned-text-muted);
+    user-select: none;
+}
+
+.channel-chip.selected {
+    background: rgba(88, 166, 255, 0.15);
+    border-color: var(--ned-accent);
+    color: var(--ned-accent);
+}
+
+.channel-chip:hover {
+    border-color: var(--ned-text-muted);
+}
+
+/* ── AG Grid dark theme ────────────────────────────────────────────── */
+
+.ag-theme-alpine-dark {
+    --ag-background-color: var(--ned-surface) !important;
+    --ag-header-background-color: var(--ned-sidebar) !important;
+    --ag-odd-row-background-color: var(--ned-surface) !important;
+    --ag-row-hover-color: var(--ned-surface-hover) !important;
+    --ag-selected-row-background-color: rgba(88, 166, 255, 0.12) !important;
+    --ag-border-color: var(--ned-border) !important;
+    --ag-header-foreground-color: var(--ned-text-muted) !important;
+    --ag-foreground-color: var(--ned-text) !important;
+    --ag-font-size: 0.82rem !important;
+    --ag-row-border-color: var(--ned-border) !important;
+    border-radius: var(--ned-radius) !important;
+    border: 1px solid var(--ned-border) !important;
+    overflow: hidden;
+}
+
+/* ── Plotly graph container ────────────────────────────────────────── */
+
+.dash-graph {
+    border-radius: var(--ned-radius);
+    overflow: hidden;
+}
+
+/* ── Param row (slider + input) ────────────────────────────────────── */
+
+.param-row {
+    margin-bottom: 12px;
+}
+
+.param-row .param-label {
+    font-size: 0.78rem;
+    color: var(--ned-text-muted);
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+
+.param-row .rc-slider-track {
+    background: var(--ned-accent) !important;
+}
+
+.param-row .rc-slider-handle {
+    border-color: var(--ned-accent) !important;
+    background: var(--ned-accent) !important;
+}
+
+.param-row .rc-slider-rail {
+    background: var(--ned-border) !important;
+}
+
+/* Hide overflow / spurious scrollbars on slider containers */
+.param-row .rc-slider,
+.param-row .dash-slider,
+.param-row > .row {
+    overflow: hidden !important;
+}
+
+.rc-slider-tooltip {
+    z-index: 999 !important;
+}
+
+/* ── Collapsible param sections ────────────────────────────────────── */
+
+.param-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--ned-surface);
+    border: 1px solid var(--ned-border);
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 4px;
+    transition: background var(--ned-transition);
+    user-select: none;
+}
+
+.param-section-header:hover {
+    background: var(--ned-surface-hover);
+}
+
+.param-section-header .section-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--ned-text);
+}
+
+.param-section-header .section-chevron {
+    color: var(--ned-text-muted);
+    font-size: 0.75rem;
+    transition: transform 0.2s ease;
+}
+
+.param-section-body {
+    padding: 12px 14px 4px;
+    border: 1px solid var(--ned-border);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    margin-bottom: 12px;
+    background: rgba(28, 33, 40, 0.5);
+}
+
+/* ── Status indicators ─────────────────────────────────────────────── */
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+.status-dot.active {
+    background: var(--ned-success);
+    box-shadow: 0 0 6px rgba(63, 185, 80, 0.4);
+}
+
+.status-dot.inactive {
+    background: var(--ned-text-muted);
+}
+
+/* ── Alerts ────────────────────────────────────────────────────────── */
+
+.ned-alert {
+    background: var(--ned-surface);
+    border: 1px solid var(--ned-border);
+    border-left: 3px solid var(--ned-accent);
+    border-radius: var(--ned-radius);
+    padding: 14px 18px;
+    font-size: 0.85rem;
+    color: var(--ned-text-muted);
+}
+
+.ned-alert.warning {
+    border-left-color: var(--ned-warning);
+}
+
+.ned-alert.danger {
+    border-left-color: var(--ned-danger);
+}
+
+.ned-alert.success {
+    border-left-color: var(--ned-success);
+}
+
+/* ── Empty state ───────────────────────────────────────────────────── */
+
+.empty-state {
+    text-align: center;
+    padding: 60px 24px;
+    color: var(--ned-text-muted);
+}
+
+.empty-state .empty-icon {
+    font-size: 3rem;
+    margin-bottom: 16px;
+    opacity: 0.4;
+}
+
+.empty-state .empty-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--ned-text);
+    margin-bottom: 8px;
+}
+
+.empty-state .empty-text {
+    font-size: 0.85rem;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* ── Confirmation modal ────────────────────────────────────────────── */
+
+.modal-content {
+    background: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: var(--ned-radius) !important;
+    color: var(--ned-text) !important;
+}
+
+.modal-header {
+    border-bottom: 1px solid var(--ned-border) !important;
+}
+
+.modal-footer {
+    border-top: 1px solid var(--ned-border) !important;
+}
+
+.modal-title {
+    color: var(--ned-text) !important;
+    font-weight: 600 !important;
+}
+
+/* ── Loading spinner override ──────────────────────────────────────── */
+
+._dash-loading {
+    color: var(--ned-accent) !important;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────── */
+
+/* ── Channel checklist in sidebar ──────────────────────────────────── */
+
+.channel-checklist .form-check {
+    padding: 3px 0 3px 24px;
+    margin-bottom: 0;
+}
+
+.channel-checklist .form-check-label {
+    font-size: 0.80rem;
+    color: var(--ned-text);
+    cursor: pointer;
+}
+
+.channel-checklist .form-check-input {
+    margin-top: 0.2em;
+}
+
+#sidebar-channel-selector {
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+@media (max-width: 1200px) {
+    #sidebar {
+        width: 240px;
+        min-width: 240px;
+    }
+    #main-content {
+        margin-left: 240px;
+    }
+}
