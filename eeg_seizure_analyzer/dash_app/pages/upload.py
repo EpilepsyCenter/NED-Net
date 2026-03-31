@@ -449,6 +449,41 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                 ],
             ),
 
+            # Video status + manual path input
+            html.Div(
+                style={"marginTop": "16px"},
+                children=[
+                    html.Div([
+                        html.Div(
+                            [
+                                html.Span("\u25B6 ", style={"color": "#3fb950"}),
+                                f"Video: {os.path.basename(state.extra['video_path'])}",
+                            ],
+                            style={"color": "#3fb950", "fontSize": "0.85rem"},
+                        ),
+                        # Hidden placeholders for callback
+                        dbc.Input(id="upload-video-path", type="hidden"),
+                        html.Div(dbc.Button(id="upload-video-link-btn",
+                                            style={"display": "none"})),
+                    ])
+                ] if state.extra.get("video_path") else [
+                    html.Div(
+                        "No video file auto-detected.",
+                        style={"color": "#8b949e", "fontSize": "0.85rem",
+                               "marginBottom": "8px"},
+                    ),
+                    dbc.InputGroup([
+                        dbc.Input(
+                            id="upload-video-path",
+                            placeholder="/path/to/video.mp4",
+                            type="text",
+                        ),
+                        dbc.Button("Link Video", id="upload-video-link-btn",
+                                   className="btn-ned-secondary", size="sm"),
+                    ], size="sm"),
+                ],
+            ),
+
             # Action buttons
             html.Div(
                 style={"marginTop": "20px", "display": "flex", "gap": "12px"},
@@ -611,6 +646,37 @@ def _try_load_saved_spikes(state: server_state.SessionState):
         return None
 
 
+def _discover_video(state: server_state.SessionState):
+    """Look for an MP4 video file alongside the recording.
+
+    Checks for ``<basename>.mp4`` next to the source file.
+    Also checks for an MP4 matching the original upload filename
+    in common locations.
+    If found, stores the path in ``state.extra["video_path"]``.
+    """
+    rec = state.recording
+    src = getattr(rec, "source_path", None) or ""
+
+    # Try the source path directly (works for path-based loading)
+    if src and os.path.isfile(src):
+        base = os.path.splitext(src)[0]
+        mp4 = base + ".mp4"
+        if os.path.isfile(mp4):
+            state.extra["video_path"] = mp4
+            return
+
+    # Try the upload_source_path (set during path-based load)
+    upload_src = state.extra.get("upload_source_path", "")
+    if upload_src and os.path.isfile(upload_src):
+        base = os.path.splitext(upload_src)[0]
+        mp4 = base + ".mp4"
+        if os.path.isfile(mp4):
+            state.extra["video_path"] = mp4
+            return
+
+    state.extra["video_path"] = None
+
+
 # ── Callbacks ─────────────────────────────────────────────────────────
 
 
@@ -668,6 +734,7 @@ def on_file_upload(contents, filename, sid, refresh):
                 os.unlink(tmp_path)
 
             state.recording = recording
+            _discover_video(state)
             return None, (refresh or 0) + 1
 
         else:
@@ -710,6 +777,7 @@ def on_path_load(n_clicks, path, sid, refresh):
             recording = read_adicht(path)
             recording.source_path = path
             state.recording = recording
+            _discover_video(state)
             return None, (refresh or 0) + 1
 
         else:
@@ -790,6 +858,9 @@ def on_load_channels(n_clicks, selected_channels, sid, refresh):
                 os.unlink(load_path)
 
         state.extra.pop("upload_file_bytes", None)
+
+        # Discover associated video file
+        _discover_video(state)
 
         # Auto-load saved detections if available
         det_status = _try_load_saved_detections(state)
@@ -876,4 +947,24 @@ def on_load_new_file(n_clicks, sid, refresh):
     state.extra.pop("tr_annotations", None)
     state.extra.pop("tr_current_idx", None)
     state.extra.pop("sz_selected_event_key", None)
+    state.extra.pop("video_path", None)
+    return (refresh or 0) + 1
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("upload-video-link-btn", "n_clicks"),
+    State("upload-video-path", "value"),
+    State("session-id", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def on_link_video(n_clicks, video_path, sid, refresh):
+    """Manually link a video file to the current recording."""
+    if not n_clicks or not video_path:
+        return no_update
+    state = server_state.get_session(sid)
+    if not os.path.isfile(video_path):
+        return no_update
+    state.extra["video_path"] = video_path
     return (refresh or 0) + 1

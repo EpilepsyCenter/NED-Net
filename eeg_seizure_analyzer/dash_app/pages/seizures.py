@@ -259,7 +259,7 @@ def layout(sid: str | None) -> html.Div:
             html.Div(
                 id="sz-event-inspector",
                 style={"marginTop": "4px"},
-                children=_prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr)
+                children=_prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid=sid)
                 if has_results and selected_event_key else [],
             ),
         ],
@@ -1224,7 +1224,7 @@ def _event_key(event):
     return f"{event.onset_sec:.4f}_{event.channel}"
 
 
-def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr):
+def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid=None):
     """Pre-render the inspector for a previously selected event (tab restoration)."""
     if not selected_event_key or not state.seizure_events:
         return []
@@ -1244,6 +1244,7 @@ def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr):
             show_threshold=insp_opts.get("show_threshold", True),
             bandpass_on=insp_opts.get("bandpass", False),
             y_range=float(insp_yr) if insp_yr and insp_yr > 0 else None,
+            sid=sid,
         )
     except Exception:
         return []
@@ -1463,6 +1464,7 @@ def on_row_select(selected_rows, show_spikes, show_baseline, show_threshold,
             show_threshold=show_threshold,
             bandpass_on=bandpass_on,
             y_range=float(insp_yrange) if insp_yrange and insp_yrange > 0 else None,
+            sid=sid,
         )
     except Exception as e:
         import traceback
@@ -1473,7 +1475,7 @@ def on_row_select(selected_rows, show_spikes, show_baseline, show_threshold,
 def _render_inspector(rec, event, det_info, state, *,
                       show_spikes=True, show_baseline=True,
                       show_threshold=True, bandpass_on=False,
-                      y_range=None):
+                      y_range=None, sid=None):
     """Build full event inspector: EEG trace, activity, spectrogram, power over time."""
     context_sec = 10.0
     ch = event.channel
@@ -1738,6 +1740,46 @@ def _render_inspector(rec, event, det_info, state, *,
         dbc.Col(metric_card("Severity", event.severity), width=2),
     ], className="g-3 mb-3")
 
+    # ── Video player (if available) ────────────────────────────────
+    video_section = []
+    video_path = state.extra.get("video_path")
+    if video_path and sid:
+        import os
+        vname = os.path.basename(video_path)
+        graph_id = "sz-insp-eeg-graph"
+        video_id = "sz-insp-video"
+        video_section = [
+            html.Div(
+                style={"marginTop": "16px"},
+                children=[
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center",
+                               "gap": "12px", "marginBottom": "8px"},
+                        children=[
+                            html.Label("Video", style={"fontSize": "0.82rem",
+                                                        "fontWeight": "600",
+                                                        "color": "#8b949e"}),
+                            html.Span(vname, style={"fontSize": "0.78rem",
+                                                     "color": "#484f58"}),
+                        ],
+                    ),
+                    html.Video(
+                        id=video_id,
+                        src=f"/video/{sid}#t={win_start:.1f}",
+                        controls=True,
+                        style={
+                            "width": "100%",
+                            "maxHeight": "360px",
+                            "borderRadius": "8px",
+                            "backgroundColor": "#000",
+                        },
+                    ),
+                ],
+            ),
+        ]
+    else:
+        graph_id = "sz-insp-eeg-graph"
+
     return html.Div([
         html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0"}),
         html.H5("Event Inspector",
@@ -1745,7 +1787,9 @@ def _render_inspector(rec, event, det_info, state, *,
         detail_metrics,
         html.Div("EEG Trace", style={"fontSize": "0.82rem", "fontWeight": "600",
                                       "color": "#8b949e", "marginBottom": "4px"}),
-        dcc.Graph(figure=fig_eeg, config={"scrollZoom": True, "displayModeBar": True}),
+        dcc.Graph(id=graph_id, figure=fig_eeg,
+                  config={"scrollZoom": True, "displayModeBar": True}),
+        *video_section,
         dbc.Row([
             dbc.Col([
                 html.Div("Spectrogram", style={"fontSize": "0.82rem", "fontWeight": "600",

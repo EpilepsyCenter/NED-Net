@@ -19,7 +19,7 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, tools
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -33,6 +33,49 @@ app = Dash(
 )
 
 server = app.server
+
+# ── Video streaming route (range-request support) ────────────────────
+
+import os
+from flask import request, Response, send_file
+
+@server.route("/video/<path:session_id>")
+def serve_video(session_id):
+    """Serve the associated MP4 video file with HTTP range request support."""
+    state = server_state.get_session(session_id)
+    if state is None or state.recording is None:
+        return Response("No recording loaded", status=404)
+
+    video_path = state.extra.get("video_path")
+    if not video_path or not os.path.isfile(video_path):
+        return Response("No video found", status=404)
+
+    file_size = os.path.getsize(video_path)
+    range_header = request.headers.get("Range")
+
+    if range_header:
+        # Parse range: "bytes=start-end"
+        byte_range = range_header.replace("bytes=", "").split("-")
+        start = int(byte_range[0])
+        end = int(byte_range[1]) if byte_range[1] else min(start + 2 * 1024 * 1024, file_size - 1)
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        with open(video_path, "rb") as f:
+            f.seek(start)
+            data = f.read(length)
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Content-Type": "video/mp4",
+        }
+        return Response(data, status=206, headers=headers)
+
+    # Full file (shouldn't happen with video, but handle it)
+    return send_file(video_path, mimetype="video/mp4", conditional=True)
+
 
 # ── Clientside callback for slider/input sync ─────────────────────────
 # Single callback with both as Input; uses dash_clientside.callback_context
@@ -57,6 +100,25 @@ clientside_callback(
     Input({"type": "param-slider", "key": MATCH}, "value"),
     Input({"type": "param-input", "key": MATCH}, "value"),
 )
+
+# ── Clientside callbacks for video sync ───────────────────────────────
+
+# Viewer: auto-seek video when EEG start position changes (arrows, input)
+clientside_callback(
+    """
+    function(startSec) {
+        var video = document.getElementById('viewer-video-player');
+        if (video && startSec != null) {
+            video.currentTime = startSec;
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("viewer-video-sync", "n_clicks"),
+    Input("viewer-start-input", "value"),
+    prevent_initial_call=True,
+)
+
 
 # ── Sidebar layout ────────────────────────────────────────────────────
 
@@ -135,6 +197,7 @@ TOP_TAB_DEFS = [
     ("viewer", "Viewer"),
     ("detection", "Detection"),      # parent — has subtabs
     ("training_grp", "Training"),    # parent — has subtabs
+    ("tools_grp", "Tools"),          # parent — has subtabs
     ("results", "Results"),
     ("settings", "Settings"),
 ]
@@ -148,12 +211,16 @@ TRAINING_SUBTABS = [
     ("training", "Seizure"),
     ("training_spikes", "Interictal Spikes"),
 ]
+TOOLS_SUBTABS = [
+    ("video_converter", "Video Converter"),
+]
 
 # All routable tab IDs (for render_tab and state)
 ALL_TAB_IDS = (
     ["upload", "viewer"]
     + [tid for tid, _ in DETECTION_SUBTABS]
     + [tid for tid, _ in TRAINING_SUBTABS]
+    + [tid for tid, _ in TOOLS_SUBTABS]
     + ["results", "settings"]
 )
 
@@ -280,6 +347,7 @@ def init_session(sid):
 _PARENT_DEFAULT_SUBTAB = {
     "detection": "seizures",
     "training_grp": "training",
+    "tools_grp": "video_converter",
 }
 # Map subtab IDs back to their parent
 _SUBTAB_TO_PARENT = {}
@@ -287,6 +355,8 @@ for _st_id, _ in DETECTION_SUBTABS:
     _SUBTAB_TO_PARENT[_st_id] = "detection"
 for _st_id, _ in TRAINING_SUBTABS:
     _SUBTAB_TO_PARENT[_st_id] = "training_grp"
+for _st_id, _ in TOOLS_SUBTABS:
+    _SUBTAB_TO_PARENT[_st_id] = "tools_grp"
 
 
 @callback(
@@ -352,6 +422,8 @@ def _build_subtab_bar(active_subtab: str):
         subtabs = DETECTION_SUBTABS
     elif parent == "training_grp":
         subtabs = TRAINING_SUBTABS
+    elif parent == "tools_grp":
+        subtabs = TOOLS_SUBTABS
     else:
         return {"display": "none"}, []
 
@@ -405,6 +477,8 @@ def render_tab(active_tab, _refresh, sid):
             "Interictal Spike Training",
             "Training and annotation of interictal spikes will be available here.",
         )
+    elif active_tab == "video_converter":
+        return tools.layout(sid)
     elif active_tab == "results":
         return _placeholder_tab(
             "Results",
@@ -669,6 +743,14 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
         status_items.append(html.Div("\U0001F4DD Annotations: saved to disk", style=_muted))
     else:
         status_items.append(html.Div("\u2B55 No annotations yet", style=_dim))
+
+    # Video file
+    video_path = state.extra.get("video_path")
+    if video_path:
+        vname = os.path.basename(video_path)
+        status_items.append(html.Div(f"\u25B6 Video: {vname}", style=_muted))
+    else:
+        status_items.append(html.Div("\u2B55 No video file", style=_dim))
 
     # "Recall detection params" button — show if any detection file exists
     if has_det_file or has_sp_file:

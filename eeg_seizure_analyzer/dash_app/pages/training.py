@@ -298,6 +298,47 @@ def _minmax_downsample(
     return np.array(times_out), np.array(data_out)
 
 
+def _training_video_player(state, sid, onset_sec):
+    """Return a video player for training review, or an empty div."""
+    import os
+    video_path = state.extra.get("video_path")
+    if not video_path or not sid:
+        return html.Div(id="tr-video-container", style={"display": "none"})
+
+    vname = os.path.basename(video_path)
+    graph_id = "tr-review-graph"
+    video_id = "tr-review-video"
+
+    return html.Div(
+        id="tr-video-container",
+        style={"marginTop": "12px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "alignItems": "center",
+                       "gap": "12px", "marginBottom": "6px"},
+                children=[
+                    html.Label("Video", style={"fontSize": "0.82rem",
+                                                "fontWeight": "600",
+                                                "color": "#8b949e"}),
+                    html.Span(vname, style={"fontSize": "0.78rem",
+                                             "color": "#484f58"}),
+                ],
+            ),
+            html.Video(
+                id=video_id,
+                src=f"/video/{sid}#t={max(0, onset_sec - 10):.1f}",
+                controls=True,
+                style={
+                    "width": "100%",
+                    "maxHeight": "360px",
+                    "borderRadius": "8px",
+                    "backgroundColor": "#000",
+                },
+            ),
+        ],
+    )
+
+
 # ── Review Mode Plot ──────────────────────────────────────────────────
 
 
@@ -721,6 +762,7 @@ def layout(sid: str | None) -> html.Div:
         children=[
             # Keyboard shortcut stores
             dcc.Store(id="tr-keyboard-store", data={"key": "", "ts": 0}),
+            dcc.Store(id="tr-video-seek", data=0),
             html.Div(id="tr-keyboard-listener", style={"display": "none"}),
 
             # Header
@@ -1016,6 +1058,10 @@ def layout(sid: str | None) -> html.Div:
                         ),
                         type="circle", color="#58a6ff",
                     ),
+
+                    # Video player (if available)
+                    _training_video_player(state, sid,
+                                          current_event.onset_sec if current_event else 0),
 
                     # Boundary adjustment
                     html.Div(
@@ -1379,6 +1425,7 @@ def save_channel_filter(val, sid):
     Output("tr-onset-input", "value"),
     Output("tr-offset-input", "value"),
     Output("tr-duration-display", "children"),
+    Output("tr-video-seek", "data"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-filter-toggle", "value"),
@@ -1413,11 +1460,11 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
     _no = no_update
     if mode != "review":
-        return _no, _no, _no, _no, _no, _no, _no
+        return _no, _no, _no, _no, _no, _no, _no, _no
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return go.Figure(), "No events", html.Span(), "", 0, 0, ""
+        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0
 
     trigger = ctx.triggered_id
 
@@ -1587,7 +1634,25 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     ev_offset = round(event.offset_sec, 3)
     ev_dur = f"({event.offset_sec - event.onset_sec:.2f}s)"
 
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur
+    video_seek = max(0, ev_onset - 10)
+    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek
+
+
+# Clientside callback: seek the training video when event changes
+clientside_callback(
+    """
+    function(seekTime) {
+        var video = document.getElementById('tr-review-video');
+        if (video && seekTime != null && seekTime >= 0) {
+            video.currentTime = seekTime;
+        }
+        return seekTime;
+    }
+    """,
+    Output("tr-video-seek", "data", allow_duplicate=True),
+    Input("tr-video-seek", "data"),
+    prevent_initial_call=True,
+)
 
 
 def _find_next_pending(filtered: list[AnnotatedEvent], current_idx: int):

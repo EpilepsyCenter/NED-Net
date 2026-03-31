@@ -337,6 +337,50 @@ def layout(sid: str | None) -> html.Div:
                 type="circle",
                 color="#58a6ff",
             ),
+
+            # Video player (shown if MP4 exists)
+            _video_player(state, sid, v_start),
+        ],
+    )
+
+
+def _video_player(state, sid, start_sec):
+    """Return a video player div if an MP4 is available, else a hidden div."""
+    video_path = state.extra.get("video_path")
+    if not video_path:
+        return html.Div(id="viewer-video-container", style={"display": "none"})
+
+    import os
+    fname = os.path.basename(video_path)
+
+    return html.Div(
+        id="viewer-video-container",
+        style={"marginTop": "16px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "12px",
+                       "marginBottom": "8px"},
+                children=[
+                    html.Label("Video", style={"fontSize": "0.85rem",
+                                                "fontWeight": "600",
+                                                "color": "#c9d1d9"}),
+                    html.Span(fname, style={"fontSize": "0.78rem",
+                                             "color": "#8b949e"}),
+                    dbc.Button("Sync to EEG", id="viewer-video-sync",
+                               size="sm", className="btn-ned-secondary"),
+                ],
+            ),
+            html.Video(
+                id="viewer-video-player",
+                src=f"/video/{sid}",
+                controls=True,
+                style={
+                    "width": "100%",
+                    "maxHeight": "400px",
+                    "borderRadius": "8px",
+                    "backgroundColor": "#000",
+                },
+            ),
         ],
     )
 
