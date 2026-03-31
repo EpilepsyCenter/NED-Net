@@ -60,6 +60,15 @@ class SpikeDetectionParams:
     baseline_rms_window_sec: float = 10.0
     rolling_lookback_sec: float = 1800.0
     rolling_step_sec: float = 300.0
+    # Isolation — reject spikes inside high-rate bursts (seizures)
+    isolation_window_sec: float = 2.0         # window around spike to count neighbours
+    isolation_max_neighbours: int = 6         # max spikes allowed in window (above → reject)
+    # Confidence scoring weights (0–1, used in composite)
+    w_amplitude: float = 0.20
+    w_sharpness: float = 0.20
+    w_local_snr: float = 0.25
+    w_after_slow_wave: float = 0.20
+    w_phase_ratio: float = 0.15
 
 
 @dataclass

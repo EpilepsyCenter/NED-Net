@@ -38,6 +38,32 @@ def load_user_defaults() -> dict | None:
         return None
 
 
+_SP_DEFAULTS_FILE = _DEFAULTS_DIR / "spike_defaults.json"
+
+
+def save_spike_user_defaults(params: dict) -> str:
+    """Save spike detection parameters to a JSON file."""
+    serialisable = {
+        k: v for k, v in params.items()
+        if v is None or isinstance(v, (str, int, float, bool, list))
+    }
+    _DEFAULTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_SP_DEFAULTS_FILE, "w") as f:
+        json.dump(serialisable, f, indent=2)
+    return str(_SP_DEFAULTS_FILE)
+
+
+def load_spike_user_defaults() -> dict | None:
+    """Load spike user defaults from disk."""
+    if not _SP_DEFAULTS_FILE.exists():
+        return None
+    try:
+        with open(_SP_DEFAULTS_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 # ── Layout helpers ────────────────────────────────────────────────────
 
 

@@ -34,15 +34,102 @@ def layout(sid: str | None) -> html.Div:
     if state.all_channels_info:
         return _channel_selection_layout(state)
 
-    # Default: upload area
-    return _upload_layout()
+    # If user clicked "Load File" on landing, show upload form
+    if state.extra.get("show_upload_form"):
+        return _upload_layout()
+
+    # Default: landing page
+    return _landing_layout()
+
+
+def _landing_layout() -> html.Div:
+    """Full-width landing page with logo, description, and action buttons."""
+    return html.Div(
+        style={
+            "display": "flex",
+            "flexDirection": "column",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "minHeight": "calc(100vh - 80px)",
+            "padding": "40px 24px",
+            "textAlign": "center",
+        },
+        children=[
+            html.Img(
+                src="/assets/nednet_logo.png",
+                style={
+                    "width": "260px",
+                    "marginBottom": "24px",
+                },
+            ),
+            html.P(
+                "Automated detection and annotation of seizures and "
+                "interictal spikes in long-term EEG recordings.",
+                style={
+                    "fontSize": "1.05rem",
+                    "color": "#8b949e",
+                    "maxWidth": "520px",
+                    "marginBottom": "36px",
+                    "lineHeight": "1.6",
+                },
+            ),
+            html.Div(
+                style={"display": "flex", "gap": "16px"},
+                children=[
+                    dbc.Button(
+                        "Load File",
+                        id="landing-load-file-btn",
+                        className="btn-ned-primary",
+                        size="lg",
+                    ),
+                    dbc.Button(
+                        "Load Project",
+                        id="landing-load-project-btn",
+                        className="btn-ned-secondary",
+                        size="lg",
+                        disabled=True,
+                        title="Coming soon",
+                    ),
+                ],
+            ),
+            html.Div(
+                "v0.1",
+                style={
+                    "marginTop": "48px",
+                    "fontSize": "0.75rem",
+                    "color": "#484f58",
+                },
+            ),
+        ],
+    )
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("landing-load-file-btn", "n_clicks"),
+    State("session-id", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def landing_load_file(n_clicks, sid, refresh):
+    """Switch from landing to upload form when Load File is clicked."""
+    if not n_clicks:
+        return no_update
+    state = server_state.get_session(sid)
+    state.extra["show_upload_form"] = True
+    return (refresh or 0) + 1
 
 
 def _upload_layout() -> html.Div:
     return html.Div(
         style={"padding": "24px", "maxWidth": "800px", "margin": "0 auto"},
         children=[
-            html.H4("Upload Recording", style={"marginBottom": "24px"}),
+            html.H4("Load Recording", style={"marginBottom": "8px"}),
+            html.P(
+                "Supported files: EDF and ADICHT (Windows only)",
+                style={"fontSize": "0.85rem", "color": "#8b949e",
+                       "marginBottom": "24px"},
+            ),
 
             # Upload area
             dcc.Upload(
@@ -52,18 +139,10 @@ def _upload_layout() -> html.Div:
                     children=[
                         html.Div("\u21E7", className="upload-icon"),
                         html.Div([
-                            html.Strong("Drop an EDF file here"),
+                            html.Strong("Drop a file here"),
                             html.Br(),
                             "or click to browse",
                         ], className="upload-text"),
-                        html.Div(
-                            ".edf" + (" / .adicht" if sys.platform == "win32" else ""),
-                            style={
-                                "marginTop": "8px",
-                                "fontSize": "0.75rem",
-                                "opacity": "0.5",
-                            },
-                        ),
                     ],
                 ),
                 multiple=False,
@@ -370,19 +449,166 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                 ],
             ),
 
-            # Change selection button
+            # Action buttons
             html.Div(
-                style={"marginTop": "20px"},
+                style={"marginTop": "20px", "display": "flex", "gap": "12px"},
                 children=[
                     dbc.Button(
                         "Change Channel Selection",
                         id="upload-change-btn",
                         className="btn-ned-secondary",
                     ),
+                    dbc.Button(
+                        "Load Another File",
+                        id="upload-new-file-btn",
+                        className="btn-ned-secondary",
+                    ),
                 ],
             ),
         ],
     )
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _try_load_saved_detections(state: server_state.SessionState):
+    """Attempt to load previously saved detections from disk.
+
+    Populates ``state.seizure_events``, ``state.st_detection_info``,
+    and ``state.detected_events`` if a JSON file is found alongside
+    the EDF.  Also restores detection parameters, filter settings,
+    and channel selection into server state so both the Seizure and
+    Training tabs start with the saved configuration.
+
+    Returns a Dash component indicating success or ``None``.
+    """
+    try:
+        rec = state.recording
+        src = getattr(rec, "source_path", None) or ""
+        if not src or not src.lower().endswith(".edf"):
+            return None
+
+        from eeg_seizure_analyzer.io.persistence import load_detections
+
+        result = load_detections(src)
+        if result is None:
+            return None
+
+        events = result["events"]
+        # Assign event IDs if missing (legacy detection files)
+        if events and all(ev.event_id == 0 for ev in events):
+            events.sort(key=lambda e: (e.channel, e.onset_sec))
+            for i, ev in enumerate(events, start=1):
+                ev.event_id = i
+        state.seizure_events = events
+        state.st_detection_info = result.get("detection_info", {})
+        state.detected_events = list(events) + state.spike_events
+
+        # Restore detection parameters so Seizure tab shows what was used
+        saved_params = result.get("params", {})
+        if saved_params:
+            state.extra["sz_params"] = saved_params
+            # Also restore dropdown values if stored under their keys
+            if "sz-bl-method" in saved_params:
+                state.extra["sz_bl_method"] = saved_params["sz-bl-method"]
+            if "sz-bnd-method" in saved_params:
+                state.extra["sz_bnd_method"] = saved_params["sz-bnd-method"]
+
+        # Restore channel selection
+        saved_channels = result.get("channels", [])
+        if saved_channels:
+            state.extra["sz_selected_channels"] = saved_channels
+
+        # Restore filter settings from detection file into BOTH tabs
+        fs = result.get("filter_settings", {})
+        filter_on = fs.get("filter_enabled", True)  # default ON
+        filter_vals = fs.get("filter_values", {})
+
+        # Seizure tab
+        state.extra["sz_filter_enabled"] = filter_on
+        if filter_vals:
+            state.extra["sz_filter_values"] = filter_vals
+
+        # Training tab — map the common keys (min + max)
+        state.extra["tr_filter_on"] = filter_on
+        if filter_vals:
+            state.extra["tr_min_conf"] = filter_vals.get("min_conf", 0)
+            state.extra["tr_min_dur"] = filter_vals.get("min_dur", 0)
+            state.extra["tr_min_lbl"] = filter_vals.get("min_lbl", 0)
+            state.extra["tr_max_conf"] = filter_vals.get("max_conf", None)
+            state.extra["tr_max_dur"] = filter_vals.get("max_dur", None)
+            state.extra["tr_max_lbl"] = filter_vals.get("max_lbl", None)
+
+        n = len(events)
+        return alert(
+            f"Loaded {n} saved seizure detection(s) from disk"
+            f" (filter {'ON' if filter_on else 'OFF'}).",
+            "info",
+        )
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def _try_load_saved_spikes(state: server_state.SessionState):
+    """Attempt to load previously saved interictal spike detections from disk.
+
+    Populates ``state.spike_events``, ``state.sp_detection_info``,
+    and merges into ``state.detected_events``.  Restores IS parameters,
+    filters, and channel selection.
+
+    Returns a Dash component indicating success or ``None``.
+    """
+    try:
+        rec = state.recording
+        src = getattr(rec, "source_path", None) or ""
+        if not src or not src.lower().endswith(".edf"):
+            return None
+
+        from eeg_seizure_analyzer.io.persistence import load_spike_detections
+
+        result = load_spike_detections(src)
+        if result is None:
+            return None
+
+        events = result["events"]
+        state.spike_events = events
+        state.sp_detection_info = result.get("detection_info", {})
+        state.detected_events = state.seizure_events + events
+
+        # Restore IS detection parameters so Spikes tab shows what was used
+        saved_params = result.get("params", {})
+        if saved_params:
+            state.extra["sp_params"] = saved_params
+            if "sp-bl-method" in saved_params:
+                state.extra["sp_bl_method"] = saved_params["sp-bl-method"]
+
+        # Restore channel selection
+        saved_channels = result.get("channels", [])
+        if saved_channels:
+            state.extra["sp_selected_channels"] = saved_channels
+
+        # Restore filter settings
+        fs = result.get("filter_settings", {})
+        if fs:
+            filter_on = fs.get("filter_enabled", True)
+            filter_vals = fs.get("filter_values", {})
+            filter_vals.pop("channel", None)  # channel filter not persisted
+            state.extra["sp_filter_enabled"] = filter_on
+            if filter_vals:
+                state.extra["sp_filter_values"] = filter_vals
+
+        n = len(events)
+        return alert(
+            f"Loaded {n} saved interictal spike detection(s) from disk.",
+            "info",
+        )
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────
@@ -509,6 +735,17 @@ def on_load_channels(n_clicks, selected_channels, sid, refresh):
 
     state = server_state.get_session(sid)
 
+    # Clear previous detections/annotations when loading a new file
+    state.seizure_events = []
+    state.spike_events = []
+    state.detected_events = []
+    state.st_detection_info = {}
+    state.sp_detection_info = {}
+    # Clear training annotations from previous file
+    state.extra.pop("tr_annotations", None)
+    state.extra.pop("tr_current_idx", None)
+    state.extra.pop("sz_selected_event_key", None)
+
     try:
         file_bytes = state.extra.get("upload_file_bytes")
         source_path = state.extra.get("upload_source_path")
@@ -553,7 +790,20 @@ def on_load_channels(n_clicks, selected_channels, sid, refresh):
                 os.unlink(load_path)
 
         state.extra.pop("upload_file_bytes", None)
-        return None, (refresh or 0) + 1
+
+        # Auto-load saved detections if available
+        det_status = _try_load_saved_detections(state)
+        sp_status = _try_load_saved_spikes(state)
+
+        # Combine status messages
+        combined = []
+        if det_status:
+            combined.append(det_status)
+        if sp_status:
+            combined.append(sp_status)
+        load_status = html.Div(combined) if combined else None
+
+        return load_status, (refresh or 0) + 1
 
     except Exception as e:
         return alert(f"Error loading: {e}", "danger"), no_update
@@ -596,4 +846,34 @@ def on_change_channels(n_clicks, sid, refresh):
         state.all_channels_info = scan_edf_channels(source)
         state.extra["upload_source_path"] = source
         state.extra["upload_filename"] = os.path.basename(source)
+    return (refresh or 0) + 1
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("upload-new-file-btn", "n_clicks"),
+    State("session-id", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def on_load_new_file(n_clicks, sid, refresh):
+    """Reset everything to start fresh with a new file."""
+    if not n_clicks:
+        return no_update
+    state = server_state.get_session(sid)
+    state.recording = None
+    state.all_channels_info = []
+    state.activity_recordings = {}
+    state.channel_pairings = []
+    state.seizure_events = []
+    state.spike_events = []
+    state.detected_events = []
+    state.st_detection_info = {}
+    state.sp_detection_info = {}
+    state.extra.pop("upload_file_bytes", None)
+    state.extra.pop("upload_source_path", None)
+    state.extra.pop("upload_filename", None)
+    state.extra.pop("tr_annotations", None)
+    state.extra.pop("tr_current_idx", None)
+    state.extra.pop("sz_selected_event_key", None)
     return (refresh or 0) + 1

@@ -69,10 +69,17 @@ _SZ_SLIDER_KEYS = list(_SZ_DEFAULTS.keys())
 
 # Default filter values
 _FILTER_DEFAULTS = {
-    "min_conf": 0, "min_dur": 0, "min_spikes": 0, "min_amp": 0,
-    "min_lbl": 0, "min_top_amp": 0,
-    "min_ll": 0, "min_energy": 0, "min_sigbl": 0,
-    "min_freq": 0, "min_td": 0,
+    "min_conf": 0, "max_conf": None,
+    "min_dur": 0, "max_dur": None,
+    "min_spikes": 0, "max_spikes": None,
+    "min_amp": 0, "max_amp": None,
+    "min_lbl": 0, "max_lbl": None,
+    "min_top_amp": 0, "max_top_amp": None,
+    "min_ll": 0, "max_ll": None,
+    "min_energy": 0, "max_energy": None,
+    "min_sigbl": 0, "max_sigbl": None,
+    "min_freq": 0, "max_freq": None,
+    "min_td": 0, "max_td": None,
     "channel": None, "severity": "",
 }
 
@@ -106,6 +113,9 @@ def layout(sid: str | None) -> html.Div:
     # Ensures params survive tab switches even if the ALL-pattern callback
     # in main.py doesn't fire reliably during component mount/unmount.
     resolved = {k: _val(k) for k in _SZ_DEFAULTS}
+    # Include dropdown values so they're saved in the detection file too
+    resolved["sz-bl-method"] = state.extra.get("sz_bl_method", "percentile")
+    resolved["sz-bnd-method"] = state.extra.get("sz_bnd_method", "signal")
     state.extra["sz_params"] = resolved
 
     # Channel selector — restore persisted selection
@@ -129,11 +139,13 @@ def layout(sid: str | None) -> html.Div:
     # Persisted filter values
     # Start from defaults, then overlay any saved values (handles schema changes)
     fv = {**_FILTER_DEFAULTS, **state.extra.get("sz_filter_values", {})}
-    # Force hidden filters to 0 — they have no UI slider to reset them
+    # Force hidden filters to 0/None — they have no visible UI to reset them
     for _hk in ("min_ll", "min_energy", "min_sigbl", "min_td"):
         fv[_hk] = 0
+    for _hk in ("max_ll", "max_energy", "max_sigbl", "max_td"):
+        fv[_hk] = None
     state.extra["sz_filter_values"] = fv  # persist cleaned values
-    filter_enabled = state.extra.get("sz_filter_enabled", False)
+    filter_enabled = state.extra.get("sz_filter_enabled", True)
 
     # Inspector options
     insp_opts = state.extra.get("sz_inspector_opts", dict(_INSP_DEFAULTS))
@@ -222,9 +234,9 @@ def layout(sid: str | None) -> html.Div:
                     html.Div(style={"flex": "1"}),
                     dbc.Button("Recall Defaults", id="sz-recall-defaults-btn",
                                className="btn-ned-secondary", size="sm"),
-                    dbc.Button("Save Settings", id="sz-save-settings-btn",
+                    dbc.Button("Save User Params", id="sz-save-settings-btn",
                                className="btn-ned-secondary", size="sm"),
-                    dbc.Button("Recall Settings", id="sz-recall-settings-btn",
+                    dbc.Button("Recall User Params", id="sz-recall-settings-btn",
                                className="btn-ned-secondary", size="sm"),
                 ],
             ),
@@ -257,26 +269,29 @@ def layout(sid: str | None) -> html.Div:
 # ── Confidence filtering controls ──────────────────────────────────
 
 
-def _filter_slider(label, fid, min_val, max_val, step, value):
-    """A small slider + input pair for filter controls."""
+def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
+                   value_min, value_max=None):
+    """A compact min–max input pair for filter controls."""
+    _inp_style = {"width": "100%", "height": "28px", "fontSize": "0.78rem"}
     return dbc.Col([
         html.Label(label, style={"fontSize": "0.75rem", "color": "#8b949e"}),
         html.Div(
-            style={"display": "flex", "alignItems": "center", "gap": "8px"},
+            style={"display": "flex", "alignItems": "center", "gap": "4px"},
             children=[
-                html.Div(
-                    dcc.Slider(
-                        id=f"{fid}-slider",
-                        min=min_val, max=max_val, step=step, value=value,
-                        marks=None, tooltip={"placement": "bottom", "always_visible": False},
-                    ),
-                    style={"flex": "1"},
-                ),
                 dcc.Input(
-                    id=fid, type="number",
-                    min=min_val, max=max_val, step=step, value=value,
+                    id=fid_min, type="number",
+                    min=min_val, max=max_val, step=step, value=value_min,
+                    placeholder="min",
                     debounce=True, className="form-control",
-                    style={"width": "70px", "height": "28px", "fontSize": "0.78rem"},
+                    style=_inp_style,
+                ),
+                html.Span("–", style={"color": "#8b949e", "fontSize": "0.8rem"}),
+                dcc.Input(
+                    id=fid_max, type="number",
+                    min=min_val, max=max_val, step=step, value=value_max,
+                    placeholder="max",
+                    debounce=True, className="form-control",
+                    style=_inp_style,
                 ),
             ],
         ),
@@ -310,25 +325,25 @@ def _confidence_filter_controls(visible: bool, rec=None, fv=None,
                     ),
                 ],
             ),
-            # Row 1: basic filters
+            # Row 1: basic filters (min–max)
             dbc.Row([
-                _filter_slider("Min Confidence", "sz-filter-min-conf",
-                               0, 1, 0.05, fv.get("min_conf", 0)),
-                _filter_slider("Min Duration (s)", "sz-filter-min-dur",
-                               0, 120, 0.5, fv.get("min_dur", 0)),
-                _filter_slider("Min Spikes", "sz-filter-min-spikes",
-                               0, 100, 1, fv.get("min_spikes", 0)),
-                _filter_slider("Min Amp (xBL)", "sz-filter-min-amp",
-                               0, 50, 0.5, fv.get("min_amp", 0)),
-                _filter_slider("Min Local BL", "sz-filter-min-lbl",
-                               0, 10, 0.1, fv.get("min_lbl", 0)),
-                _filter_slider("Min Top Amp", "sz-filter-min-top-amp",
-                               0, 20, 0.5, fv.get("min_top_amp", 0)),
+                _filter_range("Confidence", "sz-filter-min-conf", "sz-filter-max-conf",
+                              0, 1, 0.05, fv.get("min_conf", 0), fv.get("max_conf")),
+                _filter_range("Duration (s)", "sz-filter-min-dur", "sz-filter-max-dur",
+                              0, 120, 0.5, fv.get("min_dur", 0), fv.get("max_dur")),
+                _filter_range("Spikes", "sz-filter-min-spikes", "sz-filter-max-spikes",
+                              0, 100, 1, fv.get("min_spikes", 0), fv.get("max_spikes")),
+                _filter_range("Amp (xBL)", "sz-filter-min-amp", "sz-filter-max-amp",
+                              0, 50, 0.5, fv.get("min_amp", 0), fv.get("max_amp")),
+                _filter_range("Local BL", "sz-filter-min-lbl", "sz-filter-max-lbl",
+                              0, 10, 0.1, fv.get("min_lbl", 0), fv.get("max_lbl")),
+                _filter_range("Top Amp", "sz-filter-min-top-amp", "sz-filter-max-top-amp",
+                              0, 20, 0.5, fv.get("min_top_amp", 0), fv.get("max_top_amp")),
             ], className="g-2 mb-2"),
             # Row 2: quality metric filters + channel/severity
             dbc.Row([
-                _filter_slider("Min Freq (Hz)", "sz-filter-min-freq",
-                               0, 50, 0.5, fv.get("min_freq", 0)),
+                _filter_range("Freq (Hz)", "sz-filter-min-freq", "sz-filter-max-freq",
+                              0, 50, 0.5, fv.get("min_freq", 0), fv.get("max_freq")),
                 dbc.Col([
                     html.Label("Channel", style={"fontSize": "0.75rem", "color": "#8b949e"}),
                     dcc.Dropdown(
@@ -356,22 +371,22 @@ def _confidence_filter_controls(visible: bool, rec=None, fv=None,
             ], className="g-2"),
             # Hidden filters — kept for callback compatibility / future use
             html.Div(style={"display": "none"}, children=[
-                _filter_slider("Min LL (z)", "sz-filter-min-ll",
-                               0, 50, 0.5, fv.get("min_ll", 0)),
-                _filter_slider("Min Energy (z)", "sz-filter-min-energy",
-                               0, 50, 0.5, fv.get("min_energy", 0)),
-                _filter_slider("Min Sig/BL", "sz-filter-min-sigbl",
-                               0, 50, 0.5, fv.get("min_sigbl", 0)),
-                _filter_slider("Min \u03b8/\u03b4", "sz-filter-min-td",
-                               0, 10, 0.1, fv.get("min_td", 0)),
+                _filter_range("LL (z)", "sz-filter-min-ll", "sz-filter-max-ll",
+                              0, 50, 0.5, fv.get("min_ll", 0), fv.get("max_ll")),
+                _filter_range("Energy (z)", "sz-filter-min-energy", "sz-filter-max-energy",
+                              0, 50, 0.5, fv.get("min_energy", 0), fv.get("max_energy")),
+                _filter_range("Sig/BL", "sz-filter-min-sigbl", "sz-filter-max-sigbl",
+                              0, 50, 0.5, fv.get("min_sigbl", 0), fv.get("max_sigbl")),
+                _filter_range("θ/δ", "sz-filter-min-td", "sz-filter-max-td",
+                              0, 10, 0.1, fv.get("min_td", 0), fv.get("max_td")),
             ]),
         ],
     )
 
 
-# ── Filter slider sync callbacks ──────────────────────────────────
+# ── Filter input IDs ──────────────────────────────────────────────
 
-_ALL_FILTER_IDS = [
+_ALL_FILTER_MIN_IDS = [
     "sz-filter-min-conf", "sz-filter-min-dur",
     "sz-filter-min-spikes", "sz-filter-min-amp",
     "sz-filter-min-lbl", "sz-filter-min-top-amp",
@@ -380,20 +395,16 @@ _ALL_FILTER_IDS = [
     "sz-filter-min-td",
 ]
 
-for _fid in _ALL_FILTER_IDS:
-    @callback(
-        Output(f"{_fid}-slider", "value"),
-        Output(_fid, "value"),
-        Input(f"{_fid}-slider", "value"),
-        Input(_fid, "value"),
-        prevent_initial_call=True,
-    )
-    def _sync_filter(slider_val, input_val, __fid=_fid):
-        trigger = ctx.triggered_id
-        if trigger == f"{__fid}-slider":
-            return no_update, slider_val
-        else:
-            return input_val, no_update
+_ALL_FILTER_MAX_IDS = [
+    "sz-filter-max-conf", "sz-filter-max-dur",
+    "sz-filter-max-spikes", "sz-filter-max-amp",
+    "sz-filter-max-lbl", "sz-filter-max-top-amp",
+    "sz-filter-max-ll", "sz-filter-max-energy",
+    "sz-filter-max-sigbl", "sz-filter-max-freq",
+    "sz-filter-max-td",
+]
+
+_ALL_FILTER_IDS = _ALL_FILTER_MIN_IDS + _ALL_FILTER_MAX_IDS
 
 
 # ── Inspector controls ─────────────────────────────────────────────
@@ -639,16 +650,8 @@ def toggle_boundary_controls(method):
     Input("sz-bl-method", "value"),
     Input("sz-bnd-method", "value"),
     Input("sz-classify-subtypes", "value"),
-    # Filter values
-    Input("sz-filter-min-conf", "value"),
-    Input("sz-filter-min-dur", "value"),
-    Input("sz-filter-min-spikes", "value"),
-    Input("sz-filter-min-amp", "value"),
-    Input("sz-filter-min-ll", "value"),
-    Input("sz-filter-min-energy", "value"),
-    Input("sz-filter-min-sigbl", "value"),
-    Input("sz-filter-min-freq", "value"),
-    Input("sz-filter-min-td", "value"),
+    # Filter values (min + max)
+    *[Input(fid, "value") for fid in _ALL_FILTER_IDS],
     Input("sz-filter-channel", "value"),
     Input("sz-filter-severity", "value"),
     # Filter enabled toggle
@@ -662,16 +665,20 @@ def toggle_boundary_controls(method):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def auto_save_sz_extras(
-    channels, bl_method, bnd_method, classify,
-    filt_conf, filt_dur, filt_spikes, filt_amp,
-    filt_ll, filt_energy, filt_sigbl, filt_freq, filt_td,
-    filt_channel, filt_severity,
-    filt_enabled,
-    insp_spikes, insp_baseline, insp_threshold, insp_bp, insp_yr,
-    sid,
-):
+def auto_save_sz_extras(*args):
     """Save all non-MATCH seizure component values to server state on any change."""
+    # Unpack *args: 4 fixed + n_min + n_max filter IDs + 2 dropdowns + 1 toggle + 5 inspector + sid
+    n_min = len(_ALL_FILTER_MIN_IDS)
+    n_max = len(_ALL_FILTER_MAX_IDS)
+    channels, bl_method, bnd_method, classify = args[0:4]
+    filt_min_vals = args[4:4 + n_min]
+    filt_max_vals = args[4 + n_min:4 + n_min + n_max]
+    filt_channel = args[4 + n_min + n_max]
+    filt_severity = args[4 + n_min + n_max + 1]
+    filt_enabled = args[4 + n_min + n_max + 2]
+    insp_spikes, insp_baseline, insp_threshold, insp_bp, insp_yr = args[-6:-1]
+    sid = args[-1]
+
     if not sid:
         return no_update
     state = server_state.get_session(sid)
@@ -685,14 +692,19 @@ def auto_save_sz_extras(
     if classify is not None:
         state.extra["sz_classify_subtypes"] = classify
     # Merge filter values — only update keys with non-None values
-    new_fv = {
-        "min_conf": filt_conf, "min_dur": filt_dur,
-        "min_spikes": filt_spikes, "min_amp": filt_amp,
-        "min_ll": filt_ll, "min_energy": filt_energy,
-        "min_sigbl": filt_sigbl, "min_freq": filt_freq,
-        "min_td": filt_td,
-        "channel": filt_channel, "severity": filt_severity,
-    }
+    _min_keys = ["min_conf", "min_dur", "min_spikes", "min_amp", "min_lbl",
+                 "min_top_amp", "min_ll", "min_energy", "min_sigbl",
+                 "min_freq", "min_td"]
+    _max_keys = ["max_conf", "max_dur", "max_spikes", "max_amp", "max_lbl",
+                 "max_top_amp", "max_ll", "max_energy", "max_sigbl",
+                 "max_freq", "max_td"]
+    new_fv = {}
+    for k, v in zip(_min_keys, filt_min_vals):
+        new_fv[k] = v
+    for k, v in zip(_max_keys, filt_max_vals):
+        new_fv[k] = v
+    new_fv["channel"] = filt_channel
+    new_fv["severity"] = filt_severity
     existing_fv = state.extra.get("sz_filter_values", dict(_FILTER_DEFAULTS))
     for k, v in new_fv.items():
         if v is not None:
@@ -712,6 +724,34 @@ def auto_save_sz_extras(
     if insp_yr is not None and insp_yr > 0:
         existing_insp["yrange"] = float(insp_yr)
     state.extra["sz_inspector_opts"] = existing_insp
+
+    # Auto-save filter settings to the detection JSON file on every change
+    # so they persist across sessions and load into both Seizure & Training tabs
+    try:
+        rec = state.recording
+        _src = getattr(rec, "source_path", None) or "" if rec else ""
+        if _src and _src.lower().endswith(".edf") and state.seizure_events:
+            from dataclasses import asdict
+            from eeg_seizure_analyzer.io.persistence import save_detections
+
+            _params = state.extra.get("sz_params", {})
+            save_detections(
+                edf_path=_src,
+                events=state.seizure_events,
+                detection_info=state.st_detection_info,
+                params_dict=_params,
+                detector_name="SpikeTrainSeizureDetector",
+                channels=state.extra.get("sz_selected_channels", []),
+                animal_id=getattr(state, "animal_id", ""),
+                filter_settings={
+                    "filter_enabled": state.extra.get("sz_filter_enabled", False),
+                    "filter_values": state.extra.get("sz_filter_values", {}),
+                },
+            )
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
     return {"saved": True}
 
 
@@ -726,8 +766,9 @@ def auto_save_sz_extras(
     Output("sz-inspector-controls", "style"),
     Input("sz-detect-btn", "n_clicks"),
     Input("sz-clear-btn", "n_clicks"),
-    # Confidence filters (inputs trigger re-filter)
-    *[Input(fid, "value") for fid in _ALL_FILTER_IDS],
+    # Confidence filters — min + max (inputs trigger re-filter)
+    *[Input(fid, "value") for fid in _ALL_FILTER_MIN_IDS],
+    *[Input(fid, "value") for fid in _ALL_FILTER_MAX_IDS],
     Input("sz-filter-channel", "value"),
     Input("sz-filter-severity", "value"),
     Input("sz-filter-enabled", "value"),
@@ -788,6 +829,9 @@ def run_detection(
     filt_min_conf, filt_min_dur, filt_min_spikes, filt_min_amp,
     filt_min_lbl, filt_min_top_amp,
     filt_min_ll, filt_min_energy, filt_min_sigbl, filt_min_freq, filt_min_td,
+    filt_max_conf, filt_max_dur, filt_max_spikes, filt_max_amp,
+    filt_max_lbl, filt_max_top_amp,
+    filt_max_ll, filt_max_energy, filt_max_sigbl, filt_max_freq, filt_max_td,
     filt_channel, filt_severity, filt_enabled,
     selected_channels,
     bp_low, bp_high, spike_amp, spike_min_uv, spike_prom,
@@ -823,6 +867,12 @@ def run_detection(
         min_ll=filt_min_ll, min_energy=filt_min_energy,
         min_sigbl=filt_min_sigbl, min_freq=filt_min_freq,
         min_td=filt_min_td,
+        max_conf=filt_max_conf, max_dur=filt_max_dur,
+        max_spikes=filt_max_spikes, max_amp=filt_max_amp,
+        max_lbl=filt_max_lbl, max_top_amp=filt_max_top_amp,
+        max_ll=filt_max_ll, max_energy=filt_max_energy,
+        max_sigbl=filt_max_sigbl, max_freq=filt_max_freq,
+        max_td=filt_max_td,
         channel=filt_channel, severity=filt_severity,
     )
 
@@ -985,9 +1035,37 @@ def run_detection(
             except Exception:
                 pass  # keep pass-1 values
 
+        # Assign stable event IDs (1-based, sorted by channel then onset)
+        seizures.sort(key=lambda e: (e.channel, e.onset_sec))
+        for i, ev in enumerate(seizures, start=1):
+            ev.event_id = i
+
         state.seizure_events = seizures
         state.st_detection_info = detection_info
         state.extra.pop("sz_selected_event_key", None)  # new detection, clear selection
+
+        # Auto-save detections to disk — use slider-key format for params
+        # so they can be directly restored into the Seizure tab UI.
+        try:
+            from eeg_seizure_analyzer.io.persistence import save_detections
+
+            _src = getattr(rec, "source_path", None) or ""
+            if _src and _src.lower().endswith(".edf"):
+                save_detections(
+                    edf_path=_src,
+                    events=seizures,
+                    detection_info=detection_info,
+                    params_dict=state.extra.get("sz_params", {}),
+                    detector_name="SpikeTrainSeizureDetector",
+                    channels=selected_channels,
+                    animal_id=getattr(state, "animal_id", ""),
+                    filter_settings={
+                        "filter_enabled": state.extra.get("sz_filter_enabled", False),
+                        "filter_values": state.extra.get("sz_filter_values", {}),
+                    },
+                )
+        except Exception:
+            pass  # save failure must not break detection
 
         # Apply any active filters
         if filt_enabled:
@@ -1023,8 +1101,12 @@ def _apply_filters(rec, seizures, classify_on, *,
                    min_lbl=0, min_top_amp=0,
                    min_ll=0, min_energy=0, min_sigbl=0,
                    min_freq=0, min_td=0,
+                   max_conf=None, max_dur=None, max_spikes=None, max_amp=None,
+                   max_lbl=None, max_top_amp=None,
+                   max_ll=None, max_energy=None, max_sigbl=None,
+                   max_freq=None, max_td=None,
                    channel=None, severity=""):
-    """Apply confidence and other filters to seizure list."""
+    """Apply min/max filters to seizure list."""
     filtered = list(seizures)
     min_conf = float(min_conf or 0)
     min_dur = float(min_dur or 0)
@@ -1038,37 +1120,98 @@ def _apply_filters(rec, seizures, classify_on, *,
     min_freq = float(min_freq or 0)
     min_td = float(min_td or 0)
 
+    def _fmax(v):
+        """Convert max filter value: None/empty → None, else float."""
+        if v is None or v == "":
+            return None
+        return float(v)
+
+    max_conf = _fmax(max_conf)
+    max_dur = _fmax(max_dur)
+    max_spikes = _fmax(max_spikes)
+    max_amp = _fmax(max_amp)
+    max_lbl = _fmax(max_lbl)
+    max_top_amp = _fmax(max_top_amp)
+    max_ll = _fmax(max_ll)
+    max_energy = _fmax(max_energy)
+    max_sigbl = _fmax(max_sigbl)
+    max_freq = _fmax(max_freq)
+    max_td = _fmax(max_td)
+
+    # --- Confidence ---
     if min_conf > 0:
         filtered = [e for e in filtered if e.confidence >= min_conf]
+    if max_conf is not None:
+        filtered = [e for e in filtered if e.confidence <= max_conf]
+    # --- Duration ---
     if min_dur > 0:
         filtered = [e for e in filtered if e.duration_sec >= min_dur]
+    if max_dur is not None:
+        filtered = [e for e in filtered if e.duration_sec <= max_dur]
+    # --- Spikes ---
     if min_spikes > 0:
         filtered = [e for e in filtered
-                    if e.features.get("n_spikes", 0) >= min_spikes]
+                    if (e.features.get("n_spikes") or 0) >= min_spikes]
+    if max_spikes is not None:
+        filtered = [e for e in filtered
+                    if (e.features.get("n_spikes") or 0) <= max_spikes]
+    # --- Amp (xBL) ---
     if min_amp > 0:
         filtered = [e for e in filtered
-                    if e.features.get("max_amplitude_x_baseline", 0) >= min_amp]
+                    if (e.features.get("max_amplitude_x_baseline") or 0) >= min_amp]
+    if max_amp is not None:
+        filtered = [e for e in filtered
+                    if (e.features.get("max_amplitude_x_baseline") or 0) <= max_amp]
+    # --- Local BL ---
     if min_lbl > 0:
         filtered = [e for e in filtered
                     if (e.quality_metrics or {}).get("local_baseline_ratio", 0) >= min_lbl]
+    if max_lbl is not None:
+        filtered = [e for e in filtered
+                    if (e.quality_metrics or {}).get("local_baseline_ratio", 0) <= max_lbl]
+    # --- Top Amp ---
     if min_top_amp > 0:
         filtered = [e for e in filtered
                     if (e.quality_metrics or {}).get("top_spike_amplitude_x", 0) >= min_top_amp]
+    if max_top_amp is not None:
+        filtered = [e for e in filtered
+                    if (e.quality_metrics or {}).get("top_spike_amplitude_x", 0) <= max_top_amp]
+    # --- LL z-score ---
     if min_ll > 0:
         filtered = [e for e in filtered
                     if (e.quality_metrics or {}).get("peak_ll_zscore", 0) >= min_ll]
+    if max_ll is not None:
+        filtered = [e for e in filtered
+                    if (e.quality_metrics or {}).get("peak_ll_zscore", 0) <= max_ll]
+    # --- Energy z-score ---
     if min_energy > 0:
         filtered = [e for e in filtered
                     if (e.quality_metrics or {}).get("peak_energy_zscore", 0) >= min_energy]
+    if max_energy is not None:
+        filtered = [e for e in filtered
+                    if (e.quality_metrics or {}).get("peak_energy_zscore", 0) <= max_energy]
+    # --- Sig/BL ---
     if min_sigbl > 0:
         filtered = [e for e in filtered
                     if (e.quality_metrics or {}).get("signal_to_baseline_ratio", 0) >= min_sigbl]
+    if max_sigbl is not None:
+        filtered = [e for e in filtered
+                    if (e.quality_metrics or {}).get("signal_to_baseline_ratio", 0) <= max_sigbl]
+    # --- Freq ---
     if min_freq > 0:
         filtered = [e for e in filtered
-                    if e.features.get("mean_spike_frequency_hz", 0) >= min_freq]
+                    if (e.features.get("mean_spike_frequency_hz") or 0) >= min_freq]
+    if max_freq is not None:
+        filtered = [e for e in filtered
+                    if (e.features.get("mean_spike_frequency_hz") or 0) <= max_freq]
+    # --- θ/δ ---
     if min_td > 0:
         filtered = [e for e in filtered
                     if (e.quality_metrics or {}).get("theta_delta_ratio", 0) >= min_td]
+    if max_td is not None:
+        filtered = [e for e in filtered
+                    if (e.quality_metrics or {}).get("theta_delta_ratio", 0) <= max_td]
+    # --- Channel / Severity ---
     if channel is not None and channel != "":
         filtered = [e for e in filtered if e.channel == int(channel)]
     if severity:
@@ -1156,16 +1299,25 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         feat = e.features or {}
         qm = e.quality_metrics or {}
         ek = _event_key(e)
+        is_manual = getattr(e, "source", "detector") == "manual"
+
+        # Spike features may be None for manually added seizures
+        n_spikes = feat.get("n_spikes")
+        spike_freq = feat.get("mean_spike_frequency_hz")
+        max_amp = feat.get("max_amplitude_x_baseline")
+
         row = {
             "#": i + 1,
+            "ID": e.event_id if e.event_id > 0 else i + 1,
             "_event_key": ek,
+            "_source": "manual" if is_manual else "detector",
             "Channel": rec.channel_names[e.channel],
             "Onset (s)": round(e.onset_sec, 2),
             "Offset (s)": round(e.offset_sec, 2),
             "Duration (s)": round(e.duration_sec, 2),
-            "Spikes": feat.get("n_spikes", 0),
-            "Freq (Hz)": round(feat.get("mean_spike_frequency_hz", 0), 1),
-            "Max Amp (xBL)": round(feat.get("max_amplitude_x_baseline", 0), 1),
+            "Spikes": "\u2014" if n_spikes is None else n_spikes,
+            "Freq (Hz)": "\u2014" if spike_freq is None else round(spike_freq, 1),
+            "Max Amp (xBL)": "\u2014" if max_amp is None else round(max_amp, 1),
             "Confidence": round(e.confidence, 2),
             "Local BL": round(qm.get("local_baseline_ratio", 0), 1),
             "Top Amp": round(qm.get("top_spike_amplitude_x", 0), 1),
@@ -1185,7 +1337,9 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
 
     col_defs = [
         {"field": "#", "maxWidth": 55, "minWidth": 40},
+        {"field": "ID", "maxWidth": 55, "minWidth": 40, "headerTooltip": "Stable event ID"},
         {"field": "_event_key", "hide": True},
+        {"field": "_source", "hide": True},
         {"field": "Channel", "flex": 1, "minWidth": 75},
         {"field": "Onset (s)", "flex": 1, "minWidth": 70},
         {"field": "Offset (s)", "flex": 1, "minWidth": 70},
@@ -1217,6 +1371,16 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         "enableCellTextSelection": True,
     }
 
+    # Row style callback: highlight manual seizures in purple
+    manual_row_style = {
+        "styleConditions": [
+            {
+                "condition": "params.data._source === 'manual'",
+                "style": {"backgroundColor": "rgba(188, 140, 255, 0.12)"},
+            },
+        ],
+    }
+
     table = dag.AgGrid(
         id="sz-results-grid",
         rowData=table_data,
@@ -1226,6 +1390,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         className="ag-theme-alpine-dark",
         style={"height": "300px", "width": "100%"},
         dashGridOptions=grid_props,
+        getRowStyle=manual_row_style,
     )
 
     return html.Div([
@@ -1624,6 +1789,16 @@ def _render_inspector(rec, event, det_info, state, *,
 def handle_settings(*args):
     """Handle recall defaults, save, and recall user settings."""
     trigger = ctx.triggered_id
+    # Guard: only proceed if an actual button was clicked
+    if trigger not in ("sz-recall-defaults-btn", "sz-save-settings-btn",
+                       "sz-recall-settings-btn"):
+        return no_update, no_update
+    # Guard: check the corresponding button actually has clicks
+    btn_clicks = {"sz-recall-defaults-btn": args[0],
+                  "sz-save-settings-btn": args[1],
+                  "sz-recall-settings-btn": args[2]}
+    if not btn_clicks.get(trigger):
+        return no_update, no_update
     n_keys = len(_SZ_SLIDER_KEYS)
     n_filter_ids = len(_ALL_FILTER_IDS)
     current_values = args[3:3 + n_keys]
@@ -1650,23 +1825,33 @@ def handle_settings(*args):
         params = {k: v for k, v in zip(_SZ_SLIDER_KEYS, current_values)}
         params["sz-bl-method"] = bl_method
         params["sz-bnd-method"] = bnd_method
-        # Include filter settings
-        filter_keys = ["min_conf", "min_dur", "min_spikes", "min_amp",
-                       "min_lbl", "min_top_amp",
-                       "min_ll", "min_energy", "min_sigbl", "min_freq", "min_td"]
-        filter_params = {f"filter-{k}": v for k, v in zip(filter_keys, filter_slider_vals)}
+        # Include filter settings (min + max)
+        n_min = len(_ALL_FILTER_MIN_IDS)
+        filter_min_vals = filter_slider_vals[:n_min]
+        filter_max_vals = filter_slider_vals[n_min:]
+        _min_keys = ["min_conf", "min_dur", "min_spikes", "min_amp",
+                     "min_lbl", "min_top_amp",
+                     "min_ll", "min_energy", "min_sigbl", "min_freq", "min_td"]
+        _max_keys = ["max_conf", "max_dur", "max_spikes", "max_amp",
+                     "max_lbl", "max_top_amp",
+                     "max_ll", "max_energy", "max_sigbl", "max_freq", "max_td"]
+        filter_params = {}
+        for k, v in zip(_min_keys, filter_min_vals):
+            filter_params[f"filter-{k}"] = v
+        for k, v in zip(_max_keys, filter_max_vals):
+            filter_params[f"filter-{k}"] = v
         filter_params["filter-channel"] = filt_channel
         filter_params["filter-severity"] = filt_severity
         filter_params["filter-enabled"] = bool(filt_enabled)
         params.update(filter_params)
         path = save_user_defaults(params)
-        return alert(f"Settings saved to {path}", "success"), no_update
+        return alert(f"User params saved to {path}", "success"), no_update
 
     if trigger == "sz-recall-settings-btn":
         from eeg_seizure_analyzer.dash_app.components import load_user_defaults
         saved = load_user_defaults()
         if saved is None:
-            return alert("No saved settings found.", "warning"), no_update
+            return alert("No saved user params found.", "warning"), no_update
         # Separate filter settings from param overrides
         filter_vals = {}
         filter_keys_map = {
@@ -1675,8 +1860,14 @@ def handle_settings(*args):
             "filter-min_lbl": "min_lbl", "filter-min_top_amp": "min_top_amp",
             "filter-min_ll": "min_ll", "filter-min_energy": "min_energy",
             "filter-min_sigbl": "min_sigbl", "filter-min_freq": "min_freq",
-            "filter-min_td": "min_td", "filter-channel": "channel",
-            "filter-severity": "severity",
+            "filter-min_td": "min_td",
+            "filter-max_conf": "max_conf", "filter-max_dur": "max_dur",
+            "filter-max_spikes": "max_spikes", "filter-max_amp": "max_amp",
+            "filter-max_lbl": "max_lbl", "filter-max_top_amp": "max_top_amp",
+            "filter-max_ll": "max_ll", "filter-max_energy": "max_energy",
+            "filter-max_sigbl": "max_sigbl", "filter-max_freq": "max_freq",
+            "filter-max_td": "max_td",
+            "filter-channel": "channel", "filter-severity": "severity",
         }
         for fk, mk in filter_keys_map.items():
             if fk in saved:
@@ -1686,6 +1877,6 @@ def handle_settings(*args):
             state.extra["sz_filter_values"] = {**_FILTER_DEFAULTS, **filter_vals}
         state.extra["sz_filter_enabled"] = filter_enabled
         state.extra["sz_param_overrides"] = saved
-        return alert("User settings loaded.", "success"), (refresh or 0) + 1
+        return alert("User params loaded.", "success"), (refresh or 0) + 1
 
     return no_update, no_update

@@ -131,7 +131,7 @@ body {
     border-bottom: 2px solid transparent !important;
     border-radius: 0 !important;
     padding: 14px 18px !important;
-    font-size: 0.85rem;
+    font-size: 1.0rem;
     font-weight: 500;
     letter-spacing: 0.3px;
     transition: color var(--ned-transition), border-color var(--ned-transition);
@@ -144,6 +144,38 @@ body {
 }
 
 #tab-bar .nav-link.active {
+    color: var(--ned-accent) !important;
+    border-bottom-color: var(--ned-accent) !important;
+    background: transparent !important;
+}
+
+/* ── Subtab bar ───────────────────────────────────────────────────── */
+
+#subtab-bar {
+    background: var(--ned-sidebar);
+    border-bottom: 1px solid var(--ned-border);
+    padding: 0 24px 0 48px;
+}
+
+#subtab-bar .nav-link {
+    color: var(--ned-text-muted) !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    padding: 8px 16px !important;
+    font-size: 0.85rem;
+    font-weight: 400;
+    letter-spacing: 0.2px;
+    transition: color var(--ned-transition), border-color var(--ned-transition);
+    background: transparent !important;
+}
+
+#subtab-bar .nav-link:hover {
+    color: var(--ned-text) !important;
+    border-bottom-color: var(--ned-border) !important;
+}
+
+#subtab-bar .nav-link.active {
     color: var(--ned-accent) !important;
     border-bottom-color: var(--ned-accent) !important;
     background: transparent !important;
@@ -454,6 +486,14 @@ input[type="number"],
 .btn-ned-secondary:hover {
     border-color: var(--ned-text-muted) !important;
     background: var(--ned-surface) !important;
+}
+
+.btn-ned-secondary.active,
+.btn-ned-secondary:active:focus {
+    border-color: var(--ned-accent) !important;
+    background: rgba(88, 166, 255, 0.15) !important;
+    color: var(--ned-accent) !important;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25) !important;
 }
 
 .btn-ned-danger {

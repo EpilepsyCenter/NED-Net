@@ -25,6 +25,8 @@ class DetectedEvent:
     movement_flag: bool = False  # True if co-occurring with movement artifact
     animal_id: str = ""
     quality_metrics: dict = field(default_factory=dict)
+    event_id: int = 0  # stable ID that never changes once assigned
+    source: str = "detector"  # "detector" or "manual"
 
     @property
     def midpoint_sec(self) -> float:
@@ -33,6 +35,7 @@ class DetectedEvent:
     def to_dict(self) -> dict:
         """Export event as a flat dictionary for CSV/DataFrame export."""
         d = {
+            "event_id": self.event_id,
             "onset_sec": self.onset_sec,
             "offset_sec": self.offset_sec,
             "duration_sec": self.duration_sec,
@@ -42,6 +45,7 @@ class DetectedEvent:
             "severity": self.severity or "",
             "movement_flag": self.movement_flag,
             "animal_id": self.animal_id,
+            "source": self.source,
         }
         # Flatten features and quality_metrics into the dict
         for k, v in self.features.items():
@@ -49,6 +53,50 @@ class DetectedEvent:
         for k, v in self.quality_metrics.items():
             d[f"qm_{k}"] = v
         return d
+
+    def to_full_dict(self) -> dict:
+        """Export event as a full dictionary for JSON persistence.
+
+        Unlike ``to_dict()``, this keeps ``features`` and
+        ``quality_metrics`` as nested dicts so they can be
+        round-tripped through ``from_dict()``.
+        """
+        return {
+            "onset_sec": self.onset_sec,
+            "offset_sec": self.offset_sec,
+            "duration_sec": self.duration_sec,
+            "channel": self.channel,
+            "event_type": self.event_type,
+            "confidence": self.confidence,
+            "severity": self.severity,
+            "movement_flag": self.movement_flag,
+            "animal_id": self.animal_id,
+            "features": dict(self.features),
+            "quality_metrics": dict(self.quality_metrics),
+            "event_id": self.event_id,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DetectedEvent":
+        """Reconstruct a ``DetectedEvent`` from a dict produced by
+        ``to_full_dict()``.
+        """
+        return cls(
+            onset_sec=float(d["onset_sec"]),
+            offset_sec=float(d["offset_sec"]),
+            duration_sec=float(d["duration_sec"]),
+            channel=int(d["channel"]),
+            event_type=str(d["event_type"]),
+            confidence=float(d.get("confidence", 1.0)),
+            severity=d.get("severity") or None,
+            features=dict(d.get("features", {})),
+            movement_flag=bool(d.get("movement_flag", False)),
+            animal_id=str(d.get("animal_id", "")),
+            quality_metrics=dict(d.get("quality_metrics", {})),
+            event_id=int(d.get("event_id", 0)),
+            source=str(d.get("source", "detector")),
+        )
 
 
 class DetectorBase(ABC):

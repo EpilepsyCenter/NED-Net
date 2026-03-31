@@ -82,6 +82,55 @@ def _activity_controls(state, act_ymin=0.0, act_ymax=1.0) -> html.Div:
     )
 
 
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _filter_spikes_for_viewer(spikes, fv):
+    """Lightweight IS filter for viewer overlay (avoids cross-module import)."""
+    filtered = list(spikes)
+
+    def _fmin(v):
+        return float(v) if v is not None and v != "" else 0.0
+
+    def _fmax(v):
+        return float(v) if v is not None and v != "" else None
+
+    checks = [
+        ("min_amp", "amplitude", True),
+        ("max_amp", "amplitude", False),
+        ("min_xbl", "amplitude_x_baseline", True),
+        ("max_xbl", "amplitude_x_baseline", False),
+        ("min_dur_ms", "duration_ms", True),
+        ("max_dur_ms", "duration_ms", False),
+        ("min_snr", "local_snr", True),
+        ("max_snr", "local_snr", False),
+        ("min_sharp", "sharpness", True),
+        ("max_sharp", "sharpness", False),
+    ]
+    for fk, feat_key, is_min in checks:
+        v = fv.get(fk)
+        if is_min:
+            v = _fmin(v)
+            if v > 0:
+                filtered = [e for e in filtered
+                            if (e.features.get(feat_key) or 0) >= v]
+        else:
+            v = _fmax(v)
+            if v is not None:
+                filtered = [e for e in filtered
+                            if (e.features.get(feat_key) or 0) <= v]
+
+    # Confidence
+    min_conf = _fmin(fv.get("min_conf"))
+    if min_conf > 0:
+        filtered = [e for e in filtered if e.confidence >= min_conf]
+    max_conf = _fmax(fv.get("max_conf"))
+    if max_conf is not None:
+        filtered = [e for e in filtered if e.confidence <= max_conf]
+
+    return filtered
+
+
 # ── Layout ────────────────────────────────────────────────────────────
 
 
@@ -112,11 +161,13 @@ def layout(sid: str | None) -> html.Div:
     v_bp_high = saved.get("bp_high", 50.0)
     v_notch_freq = saved.get("notch_freq", 50)
     v_show_events = saved.get("show_events", True)
-    v_show_spikes = saved.get("show_spikes", True)
+    v_show_is = saved.get("show_is", False)
+    v_show_spikes = saved.get("show_spikes", False)
     v_show_baseline = saved.get("show_baseline", True)
     v_show_threshold = saved.get("show_threshold", True)
     v_act_ymin = saved.get("act_ymin", 0.0)
     v_act_ymax = saved.get("act_ymax", 4.0)
+    v_channels = saved.get("channels", list(range(rec.n_channels)))
 
     # Store default so callback can use it as fallback (not 100)
     state.extra["_viewer_default_yrange"] = default_yrange
@@ -124,6 +175,33 @@ def layout(sid: str | None) -> html.Div:
     return html.Div(
         style={"padding": "24px"},
         children=[
+            # Channel selection (first — most important)
+            html.Div(
+                style={"marginBottom": "8px", "display": "flex",
+                       "alignItems": "center", "gap": "8px", "flexWrap": "wrap"},
+                children=[
+                    html.Label("Channels:",
+                               style={"fontSize": "0.78rem", "color": "#8b949e",
+                                      "margin": "0", "fontWeight": "500"}),
+                    dbc.Checklist(
+                        id="viewer-channel-checks",
+                        options=[
+                            {"label": rec.channel_names[i], "value": i}
+                            for i in range(rec.n_channels)
+                        ],
+                        value=v_channels,
+                        inline=True,
+                        style={"fontSize": "0.8rem"},
+                    ),
+                    html.A("All", id="viewer-ch-all", href="#",
+                           style={"fontSize": "0.75rem", "color": "#58a6ff",
+                                  "cursor": "pointer", "marginLeft": "4px"}),
+                    html.A("None", id="viewer-ch-none", href="#",
+                           style={"fontSize": "0.75rem", "color": "#58a6ff",
+                                  "cursor": "pointer"}),
+                ],
+            ),
+
             # Controls row
             dbc.Row(
                 [
@@ -177,9 +255,11 @@ def layout(sid: str | None) -> html.Div:
                     dbc.Col([
                         html.Label("Overlays", style={"fontSize": "0.78rem", "color": "#8b949e"}),
                         html.Div([
-                            dbc.Checkbox(id="viewer-show-events", label="Events", value=v_show_events,
+                            dbc.Checkbox(id="viewer-show-events", label="Seizures", value=v_show_events,
                                          style={"fontSize": "0.8rem"}),
-                            dbc.Checkbox(id="viewer-show-spikes", label="Spikes", value=v_show_spikes,
+                            dbc.Checkbox(id="viewer-show-is", label="IS events", value=v_show_is,
+                                         style={"fontSize": "0.8rem"}),
+                            dbc.Checkbox(id="viewer-show-spikes", label="Spike dots", value=v_show_spikes,
                                          style={"fontSize": "0.8rem"}),
                             dbc.Checkbox(id="viewer-show-baseline", label="Baseline", value=v_show_baseline,
                                          style={"fontSize": "0.8rem"}),
@@ -274,6 +354,26 @@ def toggle_filter_collapse(bp_on, notch_on):
 
 
 @callback(
+    Output("viewer-channel-checks", "value"),
+    Input("viewer-ch-all", "n_clicks"),
+    Input("viewer-ch-none", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def viewer_channel_all_none(all_clicks, none_clicks, sid):
+    """Handle All/None links for viewer channel selection."""
+    trigger = ctx.triggered_id
+    state = server_state.get_session(sid)
+    if state.recording is None:
+        return no_update
+    if trigger == "viewer-ch-all":
+        return list(range(state.recording.n_channels))
+    if trigger == "viewer-ch-none":
+        return []
+    return no_update
+
+
+@callback(
     Output("viewer-start-input", "value"),
     Output("nav-time-display", "children"),
     Input("nav-start", "n_clicks"),
@@ -326,10 +426,11 @@ def handle_navigation(ns, bb, b, f, fb, start_val, window, sid):
     Input("viewer-bp-high", "value"),
     Input("viewer-notch-freq", "value"),
     Input("viewer-show-events", "value"),
+    Input("viewer-show-is", "value"),
     Input("viewer-show-spikes", "value"),
     Input("viewer-show-baseline", "value"),
     Input("viewer-show-threshold", "value"),
-    Input("selected-channels", "data"),
+    Input("viewer-channel-checks", "value"),
     Input("viewer-act-ymin", "value"),
     Input("viewer-act-ymax", "value"),
     State("session-id", "data"),
@@ -337,7 +438,7 @@ def handle_navigation(ns, bb, b, f, fb, start_val, window, sid):
 def update_viewer(
     start_sec, window_sec, y_range, plot_height,
     bp_on, notch_on, bp_low, bp_high, notch_freq,
-    show_events, show_spikes, show_baseline, show_threshold,
+    show_events, show_is, show_spikes, show_baseline, show_threshold,
     selected_channels, act_ymin, act_ymax,
     sid,
 ):
@@ -366,7 +467,7 @@ def update_viewer(
     start_idx = int(start_sec * rec.fs)
     end_idx = min(int(end_sec * rec.fs), rec.n_samples)
 
-    # Use selected channels from sidebar, default to all
+    # Use selected channels from viewer checklist, default to all
     if selected_channels is not None and len(selected_channels) > 0:
         channels = [ch for ch in selected_channels if 0 <= ch < rec.n_channels]
     else:
@@ -437,8 +538,9 @@ def update_viewer(
         "#58a6ff", "#3fb950", "#d29922", "#f85149", "#bc8cff", "#f778ba",
     ]
 
-    if show_events and state.detected_events:
-        for event in state.detected_events:
+    # Seizure event overlays (rectangles)
+    if show_events and state.seizure_events:
+        for event in state.seizure_events:
             if event.offset_sec < start_sec or event.onset_sec > end_sec:
                 continue
             if event.channel not in channel_offsets:
@@ -457,6 +559,49 @@ def update_viewer(
                 line=dict(color=_event_borders[ch_pos % len(_event_borders)], width=1),
                 layer="below",
             )
+
+    # Interictal spike event overlays (green dots at peak)
+    # Apply current IS filters if enabled
+    if show_is and state.spike_events:
+        sp_filter_on = state.extra.get("sp_filter_enabled", True)
+        if sp_filter_on:
+            sp_fv = state.extra.get("sp_filter_values", {})
+            visible_spikes = _filter_spikes_for_viewer(state.spike_events, sp_fv)
+        else:
+            visible_spikes = state.spike_events
+
+        is_t, is_y = [], []
+        for event in visible_spikes:
+            peak_t = event.features.get("peak_time_sec", event.onset_sec) if event.features else event.onset_sec
+            if peak_t < start_sec or peak_t > end_sec:
+                continue
+            if event.channel not in channel_offsets:
+                continue
+
+            ch_offset = channel_offsets[event.channel]
+            # Place dot at actual signal value if available
+            displayed = channel_displayed_data.get(event.channel)
+            sample_local = int((peak_t - start_sec) * rec.fs)
+            if displayed is not None and 0 <= sample_local < len(displayed):
+                yv = float(displayed[sample_local]) + ch_offset
+            else:
+                yv = ch_offset
+
+            is_t.append(peak_t)
+            is_y.append(yv)
+
+        if is_t:
+            is_trace = go.Scatter(
+                x=is_t, y=is_y,
+                mode="markers",
+                marker=dict(color="#3fb950", size=6, symbol="circle", opacity=0.85),
+                showlegend=False,
+                hovertemplate="IS @ %{x:.3f}s<extra></extra>",
+            )
+            if has_paired_act:
+                fig.add_trace(is_trace, row=1, col=1)
+            else:
+                fig.add_trace(is_trace)
 
     # Spike / baseline / threshold overlays from detection info
     det_info_all = state.st_detection_info
@@ -643,11 +788,13 @@ def update_viewer(
         "bp_high": bp_high,
         "notch_freq": notch_freq,
         "show_events": show_events,
+        "show_is": show_is,
         "show_spikes": show_spikes,
         "show_baseline": show_baseline,
         "show_threshold": show_threshold,
         "act_ymin": act_ymin,
         "act_ymax": act_ymax,
+        "channels": channels,
     }
 
     return fig
