@@ -1178,6 +1178,49 @@ def layout(sid: str | None) -> html.Div:
                         children=_build_event_properties(rec, current_event),
                     ),
 
+                    # Action buttons + Convulsive checkbox
+                    html.Div(
+                        style={"display": "flex", "gap": "12px",
+                               "alignItems": "center",
+                               "justifyContent": "center",
+                               "marginBottom": "10px"},
+                        children=[
+                            dbc.Button(
+                                [html.Span("\u2713 "), "Confirm (C)"],
+                                id="tr-confirm-btn",
+                                className="btn-ned-primary",
+                                style={"minWidth": "120px"},
+                            ),
+                            dbc.Button(
+                                [html.Span("\u2717 "), "Reject (R)"],
+                                id="tr-reject-btn",
+                                className="btn-ned-danger",
+                                style={"minWidth": "120px"},
+                            ),
+                            dbc.Button(
+                                [html.Span("\u2192 "), "Skip (S)"],
+                                id="tr-skip-btn",
+                                className="btn-ned-secondary",
+                                style={"minWidth": "120px"},
+                            ),
+                            html.Div(
+                                style={"borderLeft": "1px solid #2d333b",
+                                       "paddingLeft": "12px", "marginLeft": "4px"},
+                                children=[
+                                    dbc.Checkbox(
+                                        id="tr-convulsive-toggle",
+                                        label="Convulsive (V)",
+                                        value=bool((current_event.features or {}).get("convulsive", False))
+                                        if current_event else False,
+                                        style={"fontSize": "0.95rem"},
+                                        label_style={"fontWeight": "600",
+                                                     "fontSize": "0.95rem"},
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+
                     # Status badge + Y-range controls
                     html.Div(
                         style={"display": "flex", "alignItems": "center",
@@ -1261,18 +1304,18 @@ def layout(sid: str | None) -> html.Div:
                                 show_baseline=state.extra.get("tr_show_baseline", False),
                                 show_threshold=state.extra.get("tr_show_threshold", False),
                             ) if current_event else go.Figure(),
-                            config={"editable": True, "scrollZoom": True,
-                                    "displayModeBar": True},
+                            config={
+                                "editable": False,
+                                "edits": {"shapePosition": True},
+                                "scrollZoom": True,
+                                "displayModeBar": True,
+                            },
                             style={"borderRadius": "8px"},
                         ),
                         type="circle", color="#58a6ff",
                     ),
 
-                    # Video player (if available)
-                    _training_video_player(state, sid,
-                                          current_event.onset_sec if current_event else 0),
-
-                    # Boundary adjustment
+                    # Boundary adjustment (under EEG)
                     html.Div(
                         style={"display": "flex", "gap": "12px",
                                "alignItems": "center", "justifyContent": "center",
@@ -1308,47 +1351,9 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
-                    # Action buttons
-                    html.Div(
-                        style={"display": "flex", "gap": "12px",
-                               "justifyContent": "center", "marginTop": "8px",
-                               "marginBottom": "12px"},
-                        children=[
-                            dbc.Button(
-                                [html.Span("\u2713 "), "Confirm (C)"],
-                                id="tr-confirm-btn",
-                                className="btn-ned-primary",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2717 "), "Reject (R)"],
-                                id="tr-reject-btn",
-                                className="btn-ned-danger",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2192 "), "Skip (S)"],
-                                id="tr-skip-btn",
-                                className="btn-ned-secondary",
-                                style={"minWidth": "120px"},
-                            ),
-                        ],
-                    ),
-
-                    # Convulsive tag
-                    html.Div(
-                        style={"display": "flex", "justifyContent": "center",
-                               "marginBottom": "8px"},
-                        children=[
-                            dbc.Switch(
-                                id="tr-convulsive-toggle",
-                                label="Convulsive (V)",
-                                value=bool((current_event.features or {}).get("convulsive", False))
-                                if current_event else False,
-                                style={"fontSize": "0.82rem"},
-                            ),
-                        ],
-                    ),
+                    # Video player (if available)
+                    _training_video_player(state, sid,
+                                          current_event.onset_sec if current_event else 0),
 
                     # Notes textarea
                     html.Div(
@@ -1613,7 +1618,7 @@ clientside_callback(
             document.addEventListener('keydown', function(e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
                 var key = e.key.toLowerCase();
-                if (['c', 'r', 's', 'arrowleft', 'arrowright', ',', '.'].includes(key)) {
+                if (['c', 'r', 's', 'v', 'arrowleft', 'arrowright', ',', '.'].includes(key)) {
                     e.preventDefault();
                     if (window.dash_clientside && window.dash_clientside.set_props) {
                         window.dash_clientside.set_props('tr-keyboard-store', {data: {key: key, ts: Date.now()}});

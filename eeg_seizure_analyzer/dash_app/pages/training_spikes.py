@@ -913,6 +913,34 @@ def layout(sid: str | None) -> html.Div:
                         children=_build_spike_properties(rec, current_event),
                     ),
 
+                    # Action buttons
+                    html.Div(
+                        style={"display": "flex", "gap": "12px",
+                               "alignItems": "center",
+                               "justifyContent": "center",
+                               "marginBottom": "10px"},
+                        children=[
+                            dbc.Button(
+                                [html.Span("\u2713 "), "Confirm (C)"],
+                                id="trs-confirm-btn",
+                                className="btn-ned-primary",
+                                style={"minWidth": "120px"},
+                            ),
+                            dbc.Button(
+                                [html.Span("\u2717 "), "Reject (R)"],
+                                id="trs-reject-btn",
+                                className="btn-ned-danger",
+                                style={"minWidth": "120px"},
+                            ),
+                            dbc.Button(
+                                [html.Span("\u2192 "), "Skip (S)"],
+                                id="trs-skip-btn",
+                                className="btn-ned-secondary",
+                                style={"minWidth": "120px"},
+                            ),
+                        ],
+                    ),
+
                     # Status badge + Y-range controls
                     html.Div(
                         style={"display": "flex", "alignItems": "center",
@@ -996,14 +1024,18 @@ def layout(sid: str | None) -> html.Div:
                                 show_baseline=state.extra.get("trs_show_baseline", False),
                                 show_threshold=state.extra.get("trs_show_threshold", False),
                             ) if current_event else go.Figure(),
-                            config={"editable": True, "scrollZoom": True,
-                                    "displayModeBar": True},
+                            config={
+                                "editable": False,
+                                "edits": {"shapePosition": True},
+                                "scrollZoom": True,
+                                "displayModeBar": True,
+                            },
                             style={"borderRadius": "8px"},
                         ),
                         type="circle", color="#58a6ff",
                     ),
 
-                    # Boundary adjustment
+                    # Boundary adjustment (under EEG)
                     html.Div(
                         style={"display": "flex", "gap": "12px",
                                "alignItems": "center", "justifyContent": "center",
@@ -1035,33 +1067,6 @@ def layout(sid: str | None) -> html.Div:
                                 children=f"({(current_event.offset_sec - current_event.onset_sec) * 1000:.1f}ms)"
                                 if current_event else "",
                                 style={"fontSize": "0.72rem", "color": "#8b949e"},
-                            ),
-                        ],
-                    ),
-
-                    # Action buttons
-                    html.Div(
-                        style={"display": "flex", "gap": "12px",
-                               "justifyContent": "center", "marginTop": "8px",
-                               "marginBottom": "12px"},
-                        children=[
-                            dbc.Button(
-                                [html.Span("\u2713 "), "Confirm (C)"],
-                                id="trs-confirm-btn",
-                                className="btn-ned-primary",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2717 "), "Reject (R)"],
-                                id="trs-reject-btn",
-                                className="btn-ned-danger",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2192 "), "Skip (S)"],
-                                id="trs-skip-btn",
-                                className="btn-ned-secondary",
-                                style={"minWidth": "120px"},
                             ),
                         ],
                     ),
