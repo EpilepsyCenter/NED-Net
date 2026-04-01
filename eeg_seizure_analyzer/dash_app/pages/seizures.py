@@ -25,23 +25,23 @@ from eeg_seizure_analyzer.config import SpikeTrainSeizureParams
 
 _SZ_DEFAULTS = {
     "sz-bp-low": 1.0,
-    "sz-bp-high": 100.0,
+    "sz-bp-high": 50.0,
     "sz-spike-amp": 3.0,
     "sz-spike-min-uv": 0.0,
-    "sz-spike-prom": 1.5,
-    "sz-spike-maxw": 70.0,
-    "sz-spike-minw": 2.0,
-    "sz-spike-refr": 50.0,
+    "sz-spike-prom": 2.5,
+    "sz-spike-maxw": 200.0,
+    "sz-spike-minw": 10.0,
+    "sz-spike-refr": 75.0,
     "sz-max-isi": 500.0,
-    "sz-min-spikes": 5,
+    "sz-min-spikes": 10,
     "sz-min-dur": 5.0,
     "sz-min-iei": 3.0,
-    "sz-bl-pct": 15,
-    "sz-bl-rms": 10.0,
+    "sz-bl-pct": 25,
+    "sz-bl-rms": 30.0,
     # Boundary — signal method
     "sz-bnd-rms-win": 100.0,
-    "sz-bnd-rms-thr": 2.0,
-    "sz-bnd-max-trim": 5.0,
+    "sz-bnd-rms-thr": 3.0,
+    "sz-bnd-max-trim": 2.0,
     # Boundary — spike_density method
     "sz-bnd-window": 2.0,
     "sz-bnd-rate": 2.0,
@@ -60,9 +60,9 @@ _SZ_DEFAULTS = {
     "sz-conv-amp": 5.0,
     "sz-conv-postictal": 5.0,
     # Local baseline (pre-ictal comparison window)
-    "sz-lbl-start": 20.0,   # seconds before onset (stored positive, used negative)
-    "sz-lbl-end": 5.0,      # seconds before onset (stored positive, used negative)
-    "sz-lbl-trim-pct": 30.0,  # % of top-amplitude samples to trim from baseline
+    "sz-lbl-start": 15.0,
+    "sz-lbl-end": 5.0,
+    "sz-lbl-trim-pct": 30.0,
 }
 
 _SZ_SLIDER_KEYS = list(_SZ_DEFAULTS.keys())
@@ -70,10 +70,10 @@ _SZ_SLIDER_KEYS = list(_SZ_DEFAULTS.keys())
 # Default filter values
 _FILTER_DEFAULTS = {
     "min_conf": 0, "max_conf": None,
-    "min_dur": 0, "max_dur": None,
+    "min_dur": 0, "max_dur": 100,
     "min_spikes": 0, "max_spikes": None,
     "min_amp": 0, "max_amp": None,
-    "min_lbl": 0, "max_lbl": None,
+    "min_lbl": 3, "max_lbl": None,
     "min_top_amp": 0, "max_top_amp": None,
     "min_ll": 0, "max_ll": None,
     "min_energy": 0, "max_energy": None,
@@ -213,12 +213,12 @@ def layout(sid: str | None) -> html.Div:
             # Parameter sections
             dbc.Row([
                 dbc.Col([_spike_frontend_params(_val)], width=4),
-                dbc.Col([_train_grouping_params(_val)], width=4),
+                dbc.Col([
+                    _train_grouping_params(_val),
+                    html.Div(style={"marginTop": "12px"}),
+                    _boundary_params(_val, persisted_bnd_method),
+                ], width=4),
                 dbc.Col([_baseline_params(_val, persisted_bl_method)], width=4),
-            ], className="g-3 mb-3"),
-
-            dbc.Row([
-                dbc.Col([_boundary_params(_val, persisted_bnd_method)], width=6),
             ], className="g-3 mb-3"),
 
             # Hidden: subtype params (kept for callback compatibility —
@@ -242,12 +242,19 @@ def layout(sid: str | None) -> html.Div:
                                className="btn-ned-danger",
                                style={"display": "inline-block" if has_results else "none"}),
                     html.Div(style={"flex": "1"}),
-                    dbc.Button("Recall Defaults", id="sz-recall-defaults-btn",
+                    dbc.Button("Restore Defaults", id="sz-recall-defaults-btn",
                                className="btn-ned-secondary", size="sm"),
                     dbc.Button("Save User Params", id="sz-save-settings-btn",
                                className="btn-ned-secondary", size="sm"),
                     dbc.Button("Recall User Params", id="sz-recall-settings-btn",
                                className="btn-ned-secondary", size="sm"),
+                    dbc.Button("Recall Detection Params", id="sz-recall-det-btn",
+                               size="sm",
+                               style={"backgroundColor": "#d29922",
+                                      "borderColor": "#d29922",
+                                      "color": "#0d1117",
+                                      "fontWeight": "600",
+                                      "display": "inline-block" if has_results else "none"}),
                 ],
             ),
 
@@ -1874,6 +1881,7 @@ def _render_inspector(rec, event, det_info, state, *,
     Input("sz-recall-defaults-btn", "n_clicks"),
     Input("sz-save-settings-btn", "n_clicks"),
     Input("sz-recall-settings-btn", "n_clicks"),
+    Input("sz-recall-det-btn", "n_clicks"),
     *[State({"type": "param-slider", "key": k}, "value") for k in _SZ_SLIDER_KEYS],
     State("sz-bl-method", "value"),
     State("sz-bnd-method", "value"),
@@ -1893,23 +1901,24 @@ def handle_settings(*args):
     trigger = ctx.triggered_id
     # Guard: only proceed if an actual button was clicked
     if trigger not in ("sz-recall-defaults-btn", "sz-save-settings-btn",
-                       "sz-recall-settings-btn"):
+                       "sz-recall-settings-btn", "sz-recall-det-btn"):
         return no_update, no_update
     # Guard: check the corresponding button actually has clicks
     btn_clicks = {"sz-recall-defaults-btn": args[0],
                   "sz-save-settings-btn": args[1],
-                  "sz-recall-settings-btn": args[2]}
+                  "sz-recall-settings-btn": args[2],
+                  "sz-recall-det-btn": args[3]}
     if not btn_clicks.get(trigger):
         return no_update, no_update
     n_keys = len(_SZ_SLIDER_KEYS)
     n_filter_ids = len(_ALL_FILTER_IDS)
-    current_values = args[3:3 + n_keys]
-    bl_method = args[3 + n_keys]
-    bnd_method = args[3 + n_keys + 1]
-    classify = args[3 + n_keys + 2]
-    channels = args[3 + n_keys + 3]
+    current_values = args[4:4 + n_keys]
+    bl_method = args[4 + n_keys]
+    bnd_method = args[4 + n_keys + 1]
+    classify = args[4 + n_keys + 2]
+    channels = args[4 + n_keys + 3]
     # Filter states
-    filter_offset = 3 + n_keys + 4
+    filter_offset = 4 + n_keys + 4
     filter_slider_vals = args[filter_offset:filter_offset + n_filter_ids]
     filt_channel = args[filter_offset + n_filter_ids]
     filt_severity = args[filter_offset + n_filter_ids + 1]
@@ -1917,6 +1926,44 @@ def handle_settings(*args):
     sid = args[-2]
     refresh = args[-1]
     state = server_state.get_session(sid)
+
+    if trigger == "sz-recall-det-btn":
+        # Load saved detection params from disk (same logic as sidebar callback)
+        rec = state.recording
+        if rec is None or not rec.source_path:
+            return alert("No file loaded.", "warning"), no_update
+        from eeg_seizure_analyzer.io.persistence import load_detections
+        result = load_detections(rec.source_path)
+        if result is None:
+            return alert("No saved seizure detections found on disk.", "warning"), no_update
+        saved_params = result.get("params", {})
+        if saved_params:
+            state.extra["sz_param_overrides"] = dict(saved_params)
+            state.extra["sz_params"] = dict(saved_params)
+            if "sz-bl-method" in saved_params:
+                state.extra["sz_bl_method"] = saved_params["sz-bl-method"]
+            if "sz-bnd-method" in saved_params:
+                state.extra["sz_bnd_method"] = saved_params["sz-bnd-method"]
+        saved_channels = result.get("channels", [])
+        if saved_channels:
+            state.extra["sz_selected_channels"] = saved_channels
+        fs = result.get("filter_settings", {})
+        if fs:
+            filter_on = fs.get("filter_enabled", True)
+            filter_vals_d = fs.get("filter_values", {})
+            state.extra["sz_filter_enabled"] = filter_on
+            if filter_vals_d:
+                state.extra["sz_filter_values"] = filter_vals_d
+            state.extra["tr_filter_on"] = filter_on
+            if filter_vals_d:
+                state.extra["tr_min_conf"] = filter_vals_d.get("min_conf", 0)
+                state.extra["tr_min_dur"] = filter_vals_d.get("min_dur", 0)
+                state.extra["tr_min_lbl"] = filter_vals_d.get("min_lbl", 0)
+                state.extra["tr_max_conf"] = filter_vals_d.get("max_conf", None)
+                state.extra["tr_max_dur"] = filter_vals_d.get("max_dur", None)
+                state.extra["tr_max_lbl"] = filter_vals_d.get("max_lbl", None)
+        n_p = len(saved_params)
+        return alert(f"Detection params recalled ({n_p} params).", "success"), (refresh or 0) + 1
 
     if trigger == "sz-recall-defaults-btn":
         state.extra["sz_param_overrides"] = dict(_SZ_DEFAULTS)

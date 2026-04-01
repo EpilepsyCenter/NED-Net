@@ -130,6 +130,8 @@ def param_control(
     slider_id = {"type": "param-slider", "key": id_key}
     input_id = {"type": "param-input", "key": id_key}
 
+    display_val = int(value) if is_int else value
+
     return html.Div(
         className="param-row",
         children=[
@@ -138,43 +140,36 @@ def param_control(
                 children=[
                     label,
                     html.Span(
+                        f"  {display_val}",
+                        id={"type": "param-display", "key": id_key},
+                        style={"color": "#58a6ff", "fontWeight": "500",
+                               "marginLeft": "6px", "fontSize": "0.80rem"},
+                    ),
+                    html.Span(
                         " (?)",
                         title=tooltip or "",
                         style={"cursor": "help", "opacity": "0.5"},
                     ) if tooltip else None,
                 ],
             ),
-            dbc.Row(
-                [
-                    dbc.Col(
-                        dcc.Slider(
-                            id=slider_id,
-                            min=min_val,
-                            max=max_val,
-                            step=step,
-                            value=value,
-                            marks=marks,
-                            tooltip={"placement": "bottom", "always_visible": False},
-                            className="param-slider",
-                        ),
-                        width=9,
-                    ),
-                    dbc.Col(
-                        dcc.Input(
-                            id=input_id,
-                            type="number",
-                            min=min_val,
-                            max=max_val,
-                            step=step,
-                            value=int(value) if is_int else value,
-                            debounce=True,
-                            className="form-control",
-                            style={"padding": "4px 6px", "fontSize": "0.82rem"},
-                        ),
-                        width=3,
-                    ),
-                ],
-                className="g-1 align-items-center",
+            dcc.Slider(
+                id=slider_id,
+                min=min_val,
+                max=max_val,
+                step=step,
+                value=value,
+                marks=marks,
+                tooltip={"placement": "bottom", "always_visible": False},
+                className="param-slider",
+            ),
+            # Hidden input — keeps auto-save + sync working
+            dcc.Input(
+                id=input_id,
+                type="number",
+                min=min_val, max=max_val, step=step,
+                value=display_val,
+                debounce=True,
+                style={"display": "none"},
             ),
         ],
     )

@@ -23,19 +23,19 @@ from eeg_seizure_analyzer.config import SpikeDetectionParams
 # ── Default parameter values ────────────────────────────────────────
 
 _SP_DEFAULTS = {
-    "sp-bp-low": 10.0,
-    "sp-bp-high": 70.0,
-    "sp-amp-thr": 4.0,
+    "sp-bp-low": 3.0,
+    "sp-bp-high": 50.0,
+    "sp-amp-thr": 7.0,
     "sp-min-amp": 0.0,
-    "sp-prom": 1.5,
-    "sp-maxw": 70.0,
-    "sp-minw": 2.0,
-    "sp-refr": 200.0,
-    "sp-bl-pct": 15,
-    "sp-bl-rms": 10.0,
+    "sp-prom": 6.0,
+    "sp-maxw": 300.0,
+    "sp-minw": 10.0,
+    "sp-refr": 750.0,
+    "sp-bl-pct": 25,
+    "sp-bl-rms": 30.0,
     # Isolation
     "sp-iso-win": 2.0,
-    "sp-iso-max": 6,
+    "sp-iso-max": 1,
 }
 
 _SP_SLIDER_KEYS = list(_SP_DEFAULTS.keys())
@@ -50,10 +50,10 @@ _SP_INSP_DEFAULTS = {
 
 _SP_FILTER_DEFAULTS = {
     "min_amp": 0, "max_amp": None,
-    "min_xbl": 0, "max_xbl": None,
+    "min_xbl": 15, "max_xbl": None,
     "min_dur_ms": 0, "max_dur_ms": None,
-    "min_conf": 0, "max_conf": None,
-    "min_snr": 0, "max_snr": None,
+    "min_conf": 0.7, "max_conf": None,
+    "min_snr": 10, "max_snr": None,
     "min_sharp": 0, "max_sharp": None,
 }
 
@@ -138,18 +138,21 @@ def layout(sid: str | None) -> html.Div:
 
             # Channel selector
             html.Div(
-                style={"marginBottom": "12px"},
+                style={"marginBottom": "16px"},
                 children=[
-                    html.Label("Channels", style={"fontSize": "0.78rem",
-                                                   "color": "#8b949e",
-                                                   "marginRight": "8px"}),
+                    html.Label(
+                        "Channels to analyze",
+                        style={"fontSize": "0.82rem", "fontWeight": "500",
+                               "marginBottom": "6px", "display": "block",
+                               "color": "#8b949e"},
+                    ),
                     dcc.Dropdown(
                         id="sp-channel-selector",
                         options=ch_options,
                         value=selected_channels,
                         multi=True,
-                        placeholder="All channels",
-                        style={"fontSize": "0.82rem", "maxWidth": "600px"},
+                        placeholder="Select channels...",
+                        style={"fontSize": "0.82rem"},
                     ),
                 ],
             ),
@@ -184,12 +187,19 @@ def layout(sid: str | None) -> html.Div:
                         style={"display": "inline-block" if has_results else "none"},
                     ),
                     html.Div(style={"flex": "1"}),
-                    dbc.Button("Recall Defaults", id="sp-recall-defaults-btn",
+                    dbc.Button("Restore Defaults", id="sp-recall-defaults-btn",
                                className="btn-ned-secondary", size="sm"),
                     dbc.Button("Save User Params", id="sp-save-settings-btn",
                                className="btn-ned-secondary", size="sm"),
                     dbc.Button("Recall User Params", id="sp-recall-settings-btn",
                                className="btn-ned-secondary", size="sm"),
+                    dbc.Button("Recall Detection Params", id="sp-recall-det-btn",
+                               size="sm",
+                               style={"backgroundColor": "#d29922",
+                                      "borderColor": "#d29922",
+                                      "color": "#0d1117",
+                                      "fontWeight": "600",
+                                      "display": "inline-block" if has_results else "none"}),
                 ],
             ),
 
@@ -1046,6 +1056,7 @@ def show_spike_inspector(selected_rows, show_baseline, show_threshold,
     Input("sp-recall-defaults-btn", "n_clicks"),
     Input("sp-save-settings-btn", "n_clicks"),
     Input("sp-recall-settings-btn", "n_clicks"),
+    Input("sp-recall-det-btn", "n_clicks"),
     *[State({"type": "param-slider", "key": k}, "value") for k in _SP_SLIDER_KEYS],
     State("sp-bl-method", "value"),
     State("sp-channel-selector", "value"),
@@ -1061,28 +1072,58 @@ def handle_sp_settings(*args):
     """Handle recall defaults, save, and recall user settings for spikes."""
     trigger = ctx.triggered_id
     if trigger not in ("sp-recall-defaults-btn", "sp-save-settings-btn",
-                       "sp-recall-settings-btn"):
+                       "sp-recall-settings-btn", "sp-recall-det-btn"):
         return no_update, no_update
     # Check actual click
     btn_clicks = {"sp-recall-defaults-btn": args[0],
                   "sp-save-settings-btn": args[1],
-                  "sp-recall-settings-btn": args[2]}
+                  "sp-recall-settings-btn": args[2],
+                  "sp-recall-det-btn": args[3]}
     if not btn_clicks.get(trigger):
         return no_update, no_update
 
     n_keys = len(_SP_SLIDER_KEYS)
     n_filt = len(_SP_ALL_FILTER_IDS)
-    current_values = args[3:3 + n_keys]
-    bl_method = args[3 + n_keys]
-    channels = args[3 + n_keys + 1]
+    current_values = args[4:4 + n_keys]
+    bl_method = args[4 + n_keys]
+    channels = args[4 + n_keys + 1]
     # Filter states
-    filter_offset = 3 + n_keys + 2
+    filter_offset = 4 + n_keys + 2
     filter_vals = args[filter_offset:filter_offset + n_filt]
     filt_channel = args[filter_offset + n_filt]
     filt_enabled = args[filter_offset + n_filt + 1]
     sid = args[-2]
     refresh = args[-1]
     state = server_state.get_session(sid)
+
+    if trigger == "sp-recall-det-btn":
+        # Load saved spike detection params from disk
+        rec = state.recording
+        if rec is None or not rec.source_path:
+            return alert("No file loaded.", "warning"), no_update
+        from eeg_seizure_analyzer.io.persistence import load_spike_detections
+        result = load_spike_detections(rec.source_path)
+        if result is None:
+            return alert("No saved spike detections found on disk.", "warning"), no_update
+        saved_params = result.get("params", {})
+        if saved_params:
+            state.extra["sp_param_overrides"] = dict(saved_params)
+            state.extra["sp_params"] = dict(saved_params)
+            if "sp-bl-method" in saved_params:
+                state.extra["sp_bl_method"] = saved_params["sp-bl-method"]
+        sp_channels = result.get("channels", [])
+        if sp_channels:
+            state.extra["sp_selected_channels"] = sp_channels
+        sp_fs = result.get("filter_settings", {})
+        if sp_fs:
+            sp_filter_on = sp_fs.get("filter_enabled", True)
+            sp_filter_vals_d = sp_fs.get("filter_values", {})
+            sp_filter_vals_d.pop("channel", None)
+            state.extra["sp_filter_enabled"] = sp_filter_on
+            if sp_filter_vals_d:
+                state.extra["sp_filter_values"] = sp_filter_vals_d
+        n_p = len(saved_params)
+        return alert(f"Detection params recalled ({n_p} params).", "success"), (refresh or 0) + 1
 
     if trigger == "sp-recall-defaults-btn":
         state.extra["sp_param_overrides"] = dict(_SP_DEFAULTS)

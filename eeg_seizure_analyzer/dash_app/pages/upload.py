@@ -335,7 +335,6 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                         value=default_selected,
                         multi=True,
                         placeholder="Select channels...",
-                        style={"backgroundColor": "#1c2128", "color": "#e6edf3"},
                     ),
                 ],
             ),

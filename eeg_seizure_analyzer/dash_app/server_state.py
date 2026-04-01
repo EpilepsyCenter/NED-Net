@@ -33,7 +33,7 @@ class SessionState:
     sp_detection_info: dict = field(default_factory=dict)
 
     # Blinding
-    blinding_on: bool = True
+    blinding_on: bool = False
     blinding_log: list = field(default_factory=list)
 
     # User defaults

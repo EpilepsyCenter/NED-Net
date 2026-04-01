@@ -87,16 +87,17 @@ clientside_callback(
     """
     function(sliderVal, inputVal) {
         const ctx = dash_clientside.callback_context;
-        if (!ctx.triggered.length) return [sliderVal, sliderVal];
+        if (!ctx.triggered.length) return [sliderVal, sliderVal, '  ' + sliderVal];
         const trigger = ctx.triggered[0].prop_id;
         if (trigger.includes('param-slider')) {
-            return [sliderVal, sliderVal];
+            return [sliderVal, sliderVal, '  ' + sliderVal];
         }
-        return [inputVal, inputVal];
+        return [inputVal, inputVal, '  ' + inputVal];
     }
     """,
     Output({"type": "param-slider", "key": MATCH}, "value"),
     Output({"type": "param-input", "key": MATCH}, "value"),
+    Output({"type": "param-display", "key": MATCH}, "children"),
     Input({"type": "param-slider", "key": MATCH}, "value"),
     Input({"type": "param-input", "key": MATCH}, "value"),
 )
@@ -139,19 +140,22 @@ def _sidebar():
             html.Div(
                 id="sidebar-content",
                 children=[
-                    # ── Blinding ──────────────────────────────────
-                    section_header("BLINDING"),
-                    html.Div(id="blinding-badge-container",
-                             children=[blinding_badge(True)]),
-                    dbc.Switch(
-                        id="blinding-toggle",
-                        label="Blinding ON",
-                        value=True,
-                        className="mt-2",
-                        style={"fontSize": "0.82rem"},
+                    # ── Blinding (hidden for now) ─────────────────
+                    html.Div(
+                        style={"display": "none"},
+                        children=[
+                            section_header("BLINDING"),
+                            html.Div(id="blinding-badge-container",
+                                     children=[blinding_badge(False)]),
+                            dbc.Switch(
+                                id="blinding-toggle",
+                                label="Blinding OFF",
+                                value=False,
+                                className="mt-2",
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ],
                     ),
-
-                    sidebar_divider(),
 
                     # ── File info ─────────────────────────────────
                     section_header("RECORDING"),
@@ -229,22 +233,27 @@ TAB_DEFS = [(tid, label) for tid, label in TOP_TAB_DEFS]
 
 
 def _tab_bar():
+    # Split tabs: main tabs on the left, Tools & Settings pushed right
+    _LEFT_TABS = [t for t in TOP_TAB_DEFS if t[0] not in ("tools_grp", "settings")]
+    _RIGHT_TABS = [t for t in TOP_TAB_DEFS if t[0] in ("tools_grp", "settings")]
+    nav_items = [
+        dbc.NavLink(label, id=f"tab-{tid}", active=tid == "upload", n_clicks=0)
+        for tid, label in _LEFT_TABS
+    ]
+    nav_items.append(html.Div(style={"flex": "1"}))  # spacer
+    nav_items.extend(
+        dbc.NavLink(label, id=f"tab-{tid}", active=False, n_clicks=0)
+        for tid, label in _RIGHT_TABS
+    )
     return html.Div(
         id="tab-bar",
         children=[
             # Main tab row
             dbc.Nav(
-                [
-                    dbc.NavLink(
-                        label,
-                        id=f"tab-{tid}",
-                        active=tid == "upload",
-                        n_clicks=0,
-                    )
-                    for tid, label in TOP_TAB_DEFS
-                ],
+                nav_items,
                 pills=False,
                 className="nav-tabs",
+                style={"display": "flex", "flexWrap": "nowrap"},
             ),
             # Subtab row (shown when Detection or Training is active)
             html.Div(
@@ -749,25 +758,13 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
     else:
         status_items.append(html.Div("\u2B55 No video file", style=_dim))
 
-    # "Recall detection params" button — show if any detection file exists
-    if has_det_file or has_sp_file:
-        status_items.append(html.Div(
-            dbc.Button(
-                "Recall Detection Params",
-                id="sidebar-recall-det-params",
-                className="btn-ned-secondary",
-                size="sm",
-                style={"marginTop": "6px", "width": "100%"},
-            ),
-        ))
-    else:
-        # Hidden placeholder so the callback doesn't error
-        status_items.append(html.Div(
-            dbc.Button(
-                id="sidebar-recall-det-params",
-                style={"display": "none"},
-            ),
-        ))
+    # Hidden placeholder — "Recall Detection Params" moved inline to detection pages
+    status_items.append(html.Div(
+        dbc.Button(
+            id="sidebar-recall-det-params",
+            style={"display": "none"},
+        ),
+    ))
 
     # Flash message (set by recall_detection_params, consumed once)
     flash = state.extra.pop("sidebar_flash", None)

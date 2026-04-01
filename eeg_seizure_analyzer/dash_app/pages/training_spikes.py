@@ -711,16 +711,11 @@ def layout(sid: str | None) -> html.Div:
                     ),
                 ], width=2),
                 dbc.Col([
-                    html.Label("Animal ID",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
                     dcc.Input(
-                        id="trs-animal-id", type="text",
-                        value=animal_id, debounce=True,
-                        placeholder="e.g. M001",
-                        className="form-control",
-                        style={"width": "100%"},
+                        id="trs-animal-id", type="hidden",
+                        value=animal_id,
                     ),
-                ], width=2),
+                ], style={"display": "none"}),
                 dbc.Col([
                     html.Label("Channel",
                                style={"fontSize": "0.78rem", "color": "#8b949e"}),
