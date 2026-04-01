@@ -274,6 +274,33 @@ def _label_badge(label: str) -> html.Span:
     )
 
 
+def _event_badge(event) -> html.Span:
+    """Label badge + optional activity z-score indicator."""
+    children = [_label_badge(event.label)]
+    act_z = (event.features or {}).get("activity_zscore")
+    if act_z is not None:
+        # Color by severity: grey <1, yellow 1-3, red >3
+        if act_z > 3:
+            _c = {"bg": "#f8514922", "border": "#f85149", "text": "#f85149"}
+        elif act_z > 1:
+            _c = {"bg": "#d2992222", "border": "#d29922", "text": "#d29922"}
+        else:
+            _c = {"bg": "#8b949e22", "border": "#8b949e", "text": "#8b949e"}
+        children.append(html.Span(
+            f"Act {act_z:+.1f}\u03c3",
+            style={
+                "fontSize": "0.68rem", "fontWeight": "600",
+                "padding": "2px 8px", "borderRadius": "12px",
+                "marginLeft": "6px",
+                "color": _c["text"],
+                "background": _c["bg"],
+                "border": f"1px solid {_c['border']}",
+            },
+        ))
+    return html.Span(children, style={"display": "flex", "gap": "4px",
+                                       "alignItems": "center"})
+
+
 def _minmax_downsample(
     time_arr: np.ndarray, data: np.ndarray, target_points: int = 2400,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -344,7 +371,8 @@ def _training_video_player(state, sid, onset_sec):
 
 def _build_review_figure(rec, event: AnnotatedEvent, state,
                          bp_low=1.0, bp_high=50.0,
-                         y_range=None, act_ymin=0.0, act_ymax=4.0):
+                         y_range=None, act_ymin=0.0, act_ymax=4.0,
+                         show_baseline=False, show_threshold=False):
     """Build the EEG plot for review mode: +/- 10s around event."""
     context_sec = 10.0
     ch = event.channel
@@ -463,6 +491,34 @@ def _build_review_figure(rec, event: AnnotatedEvent, state,
             layer="below",
             editable=False,
             name="act_highlight",
+        )
+
+    # Baseline / threshold lines
+    det_info = state.st_detection_info.get(ch, {})
+    baseline_val = det_info.get("baseline_mean")
+    threshold_val = det_info.get("threshold")
+    _row_kw = dict(row=1, col=1) if has_act else {}
+    if show_baseline and baseline_val is not None:
+        fig.add_hline(
+            y=baseline_val, **_row_kw,
+            line=dict(color="#3fb950", width=1, dash="dot"),
+            annotation_text="Baseline",
+            annotation_position="top right",
+        )
+        fig.add_hline(
+            y=-baseline_val, **_row_kw,
+            line=dict(color="#3fb950", width=1, dash="dot"),
+        )
+    if show_threshold and threshold_val is not None:
+        fig.add_hline(
+            y=threshold_val, **_row_kw,
+            line=dict(color="#d29922", width=1, dash="dash"),
+            annotation_text="Threshold",
+            annotation_position="top right",
+        )
+        fig.add_hline(
+            y=-threshold_val, **_row_kw,
+            line=dict(color="#d29922", width=1, dash="dash"),
         )
 
     # Y-axis range
@@ -746,7 +802,10 @@ def layout(sid: str | None) -> html.Div:
 
     # Current event info for review mode
     current_event = filtered[current_idx] if filtered else None
-    event_label_badge = _label_badge(current_event.label) if current_event else html.Span()
+    if current_event:
+        event_label_badge = _event_badge(current_event)
+    else:
+        event_label_badge = html.Span()
     if current_event and filtered:
         _ch = current_event.channel
         _ch_name = rec.channel_names[_ch] if _ch < len(rec.channel_names) else f"Ch{_ch}"
@@ -978,6 +1037,14 @@ def layout(sid: str | None) -> html.Div:
                                        "fontWeight": "600", "fontSize": "0.9rem"},
                                 children=event_nav_text,
                             ),
+                            dcc.Input(
+                                id="tr-jump-to", type="number",
+                                min=1, step=1, debounce=True,
+                                placeholder="#",
+                                className="form-control",
+                                style={"width": "60px", "height": "30px",
+                                       "fontSize": "0.78rem", "textAlign": "center"},
+                            ),
                             dbc.Button(
                                 "Next (> .) \u25B6", id="tr-next-btn", size="sm",
                                 className="btn-ned-secondary",
@@ -1038,7 +1105,21 @@ def layout(sid: str | None) -> html.Div:
                                               value=0, style={"display": "none"}),
                                     dcc.Input(id="tr-act-ymax", type="number",
                                               value=4, style={"display": "none"}),
-                                ]),
+                                ]) + [
+                                    dbc.Switch(
+                                        id="tr-show-baseline",
+                                        label="Baseline",
+                                        value=state.extra.get("tr_show_baseline", False),
+                                        style={"fontSize": "0.72rem",
+                                               "marginLeft": "12px"},
+                                    ),
+                                    dbc.Switch(
+                                        id="tr-show-threshold",
+                                        label="Threshold",
+                                        value=state.extra.get("tr_show_threshold", False),
+                                        style={"fontSize": "0.72rem"},
+                                    ),
+                                ],
                             ),
                         ],
                     ),
@@ -1051,6 +1132,8 @@ def layout(sid: str | None) -> html.Div:
                                 rec, current_event, state,
                                 y_range=tr_yrange,
                                 act_ymin=tr_act_ymin, act_ymax=tr_act_ymax,
+                                show_baseline=state.extra.get("tr_show_baseline", False),
+                                show_threshold=state.extra.get("tr_show_threshold", False),
                             ) if current_event else go.Figure(),
                             config={"editable": True, "scrollZoom": True,
                                     "displayModeBar": True},
@@ -1122,6 +1205,21 @@ def layout(sid: str | None) -> html.Div:
                                 id="tr-skip-btn",
                                 className="btn-ned-secondary",
                                 style={"minWidth": "120px"},
+                            ),
+                        ],
+                    ),
+
+                    # Convulsive tag
+                    html.Div(
+                        style={"display": "flex", "justifyContent": "center",
+                               "marginBottom": "8px"},
+                        children=[
+                            dbc.Switch(
+                                id="tr-convulsive-toggle",
+                                label="Convulsive (V)",
+                                value=bool((current_event.features or {}).get("convulsive", False))
+                                if current_event else False,
+                                style={"fontSize": "0.82rem"},
                             ),
                         ],
                     ),
@@ -1426,6 +1524,7 @@ def save_channel_filter(val, sid):
     Output("tr-offset-input", "value"),
     Output("tr-duration-display", "children"),
     Output("tr-video-seek", "data"),
+    Output("tr-convulsive-toggle", "value"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-filter-toggle", "value"),
@@ -1437,6 +1536,7 @@ def save_channel_filter(val, sid):
     Input("tr-max-lbl", "value"),
     Input("tr-prev-btn", "n_clicks"),
     Input("tr-next-btn", "n_clicks"),
+    Input("tr-jump-to", "value"),
     Input("tr-confirm-btn", "n_clicks"),
     Input("tr-reject-btn", "n_clicks"),
     Input("tr-skip-btn", "n_clicks"),
@@ -1444,6 +1544,9 @@ def save_channel_filter(val, sid):
     Input("tr-yrange", "value"),
     Input("tr-act-ymin", "value"),
     Input("tr-act-ymax", "value"),
+    Input("tr-show-baseline", "value"),
+    Input("tr-show-threshold", "value"),
+    Input("tr-convulsive-toggle", "value"),
     State("tr-onset-input", "value"),
     State("tr-offset-input", "value"),
     State("tr-notes", "value"),
@@ -1452,19 +1555,20 @@ def save_channel_filter(val, sid):
 )
 def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
                   max_conf, max_dur, max_lbl,
-                  prev_clicks, next_clicks,
+                  prev_clicks, next_clicks, jump_to,
                   confirm_clicks, reject_clicks, skip_clicks,
                   kb_data, tr_yrange, tr_act_ymin, tr_act_ymax,
+                  show_baseline, show_threshold, convulsive_toggle,
                   onset_input, offset_input,
                   notes_val, sid):
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
     _no = no_update
     if mode != "review":
-        return _no, _no, _no, _no, _no, _no, _no, _no
+        return _no, _no, _no, _no, _no, _no, _no, _no, _no
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0
+        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False
 
     trigger = ctx.triggered_id
 
@@ -1521,7 +1625,7 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
         fig = go.Figure()
         apply_fig_theme(fig)
         fig.update_layout(height=400)
-        return fig, "No events to review", html.Span(), "", 0, 0, ""
+        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False
 
     current_idx = state.extra.get("tr_current_idx", 0)
 
@@ -1535,6 +1639,8 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
             action = "reject"
         elif key == "s":
             action = "skip"
+        elif key == "v":
+            action = "toggle_convulsive"
         elif key in ("arrowleft", ","):
             action = "prev"
         elif key in ("arrowright", "."):
@@ -1549,9 +1655,13 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
         action = "prev"
     elif trigger == "tr-next-btn":
         action = "next"
+    elif trigger == "tr-jump-to":
+        action = "jump"
+    elif trigger == "tr-convulsive-toggle":
+        action = "set_convulsive"
 
     # Save notes for current event before moving
-    if action in ("confirm", "reject", "skip", "prev", "next"):
+    if action in ("confirm", "reject", "skip", "prev", "next", "jump"):
         if 0 <= current_idx < len(filtered):
             event = filtered[current_idx]
             # Find in full annotations list and update notes
@@ -1606,11 +1716,35 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
             elif current_idx < len(filtered) - 1:
                 current_idx += 1
 
+    # Handle convulsive tag
+    if action in ("toggle_convulsive", "set_convulsive"):
+        if 0 <= current_idx < len(filtered):
+            event = filtered[current_idx]
+            for ann in annotations:
+                if (ann.onset_sec == event.onset_sec and
+                        ann.channel == event.channel and
+                        ann.source == event.source):
+                    if action == "toggle_convulsive":
+                        # Keyboard V: toggle
+                        cur = (ann.features or {}).get("convulsive", False)
+                        if ann.features is None:
+                            ann.features = {}
+                        ann.features["convulsive"] = not cur
+                    else:
+                        # Switch click: set to current toggle value
+                        if ann.features is None:
+                            ann.features = {}
+                        ann.features["convulsive"] = bool(convulsive_toggle)
+                    break
+            _auto_save(state, annotations)
+
     # Navigate
     if action == "skip" or action == "next":
         current_idx = min(current_idx + 1, len(filtered) - 1)
     elif action == "prev":
         current_idx = max(current_idx - 1, 0)
+    elif action == "jump" and jump_to is not None:
+        current_idx = max(0, min(int(jump_to) - 1, len(filtered) - 1))
 
     # Clamp
     current_idx = max(0, min(current_idx, len(filtered) - 1))
@@ -1618,9 +1752,15 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
 
     # Build figure
     event = filtered[current_idx]
+    # Persist baseline/threshold toggle state
+    state.extra["tr_show_baseline"] = bool(show_baseline)
+    state.extra["tr_show_threshold"] = bool(show_threshold)
+
     fig = _build_review_figure(rec, event, state,
                                y_range=yr, act_ymin=act_ymin_val,
-                               act_ymax=act_ymax_val)
+                               act_ymax=act_ymax_val,
+                               show_baseline=bool(show_baseline),
+                               show_threshold=bool(show_threshold))
 
     _ch = event.channel
     _ch_name = rec.channel_names[_ch] if _ch < len(rec.channel_names) else f"Ch{_ch}"
@@ -1628,14 +1768,15 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     _id_str = f" [#{event.event_id}]" if event.event_id > 0 else ""
     _suffix = f" — {_ch_name}" + (f" ({_animal})" if _animal else "")
     nav_text = f"Event {current_idx + 1} of {len(filtered)}{_id_str}{_suffix}"
-    badge = _label_badge(event.label)
+    badge = _event_badge(event)
     notes = event.notes or ""
     ev_onset = round(event.onset_sec, 3)
     ev_offset = round(event.offset_sec, 3)
     ev_dur = f"({event.offset_sec - event.onset_sec:.2f}s)"
 
     video_seek = max(0, ev_onset - 10)
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek
+    is_convulsive = bool((event.features or {}).get("convulsive", False))
+    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive
 
 
 # Clientside callback: seek the training video when event changes

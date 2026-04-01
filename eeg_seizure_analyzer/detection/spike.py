@@ -47,6 +47,8 @@ class SpikeDetector(DetectorBase):
         recording: EEGRecording,
         channel: int,
         params: SpikeDetectionParams | None = None,
+        baseline_rms: float | None = None,
+        baseline_std: float | None = None,
     ) -> list[DetectedEvent]:
         if params is None:
             params = SpikeDetectionParams()
@@ -58,7 +60,12 @@ class SpikeDetector(DetectorBase):
         filtered = bandpass_filter(data, fs, params.bandpass_low, params.bandpass_high)
 
         # Step 2: compute baseline (mean, std)
-        bl_mean, bl_std = self._compute_baseline(filtered, fs, params)
+        if baseline_rms is not None:
+            # Precomputed baseline (from chunked pipeline)
+            bl_mean = baseline_rms
+            bl_std = baseline_std if baseline_std is not None else baseline_rms * 0.5
+        else:
+            bl_mean, bl_std = self._compute_baseline(filtered, fs, params)
         baseline_amp = bl_mean
 
         # Step 3: compute threshold
@@ -197,7 +204,10 @@ class SpikeDetector(DetectorBase):
         )
 
         spikes = []
-        half_win = int(0.05 * fs)  # 50ms window for peak-to-trough
+        # Use a wider analysis window to capture afterwaves (up to max_duration_ms
+        # each side, clamped to at least 50ms).
+        half_win = max(int(0.05 * fs),
+                       int(params.max_duration_ms * fs / 1000))
 
         for pk in peaks:
             win_start = max(0, pk - half_win)
@@ -210,9 +220,12 @@ class SpikeDetector(DetectorBase):
             if params.spike_min_amplitude_uv > 0 and amplitude < params.spike_min_amplitude_uv:
                 continue
 
-            # Estimate duration from zero crossings
+            # Estimate duration: envelope-based (captures afterwaves)
             peak_local = pk - win_start
-            duration_ms = self._estimate_spike_duration(segment, peak_local, fs)
+            duration_ms = self._estimate_spike_duration_envelope(
+                segment, peak_local, fs, baseline_amp)
+            # Cap to max_duration_ms
+            duration_ms = min(duration_ms, params.max_duration_ms)
 
             # ── Morphological features ──────────────────────────────
 
@@ -446,12 +459,75 @@ class SpikeDetector(DetectorBase):
             max_val = float(np.max(post_segment))
             return max_val > 0.5 * baseline_amp
 
+    def _estimate_spike_duration_envelope(
+        self,
+        segment: np.ndarray,
+        peak_idx: int,
+        fs: float,
+        baseline_amp: float,
+    ) -> float:
+        """Estimate spike duration using the signal envelope.
+
+        Instead of relying on zero crossings (which only capture the
+        initial deflection), this method looks for where the absolute
+        signal drops back to the noise floor.  This captures the full
+        spike-and-wave complex including afterwaves.
+
+        The noise floor is defined as ``noise_factor × baseline_amp``.
+        Starting from the peak, we walk backwards and forwards until
+        the absolute signal stays below the noise floor for a short
+        run (``settle_ms``).
+
+        Returns duration in milliseconds (never None).
+        """
+        abs_seg = np.abs(segment)
+        peak_amp = abs_seg[peak_idx]
+
+        # Noise floor: use the higher of 3× baseline or 25% of peak amplitude.
+        # This prevents the walk from extending into normal background
+        # fluctuations while still capturing meaningful afterwaves.
+        noise_floor = max(baseline_amp * 3.0, peak_amp * 0.25, 1e-10)
+        settle_samples = max(4, int(0.015 * fs))  # 15ms settle
+
+        # Walk backward from peak
+        start_idx = peak_idx
+        run = 0
+        for i in range(peak_idx - 1, -1, -1):
+            if abs_seg[i] < noise_floor:
+                run += 1
+                if run >= settle_samples:
+                    start_idx = i + run
+                    break
+            else:
+                run = 0
+                start_idx = i
+        else:
+            start_idx = 0
+
+        # Walk forward from peak
+        end_idx = peak_idx
+        run = 0
+        for i in range(peak_idx + 1, len(abs_seg)):
+            if abs_seg[i] < noise_floor:
+                run += 1
+                if run >= settle_samples:
+                    end_idx = i - run
+                    break
+            else:
+                run = 0
+                end_idx = i
+        else:
+            end_idx = len(abs_seg) - 1
+
+        duration_samples = max(1, end_idx - start_idx)
+        return duration_samples / fs * 1000
+
     def _estimate_spike_duration(
         self, segment: np.ndarray, peak_idx: int, fs: float,
     ) -> float | None:
-        """Estimate spike duration from zero crossings around the peak.
+        """Legacy: estimate spike duration from zero crossings.
 
-        Returns duration in milliseconds, or None if can't determine.
+        Kept for backward compatibility but no longer the primary method.
         """
         zc_before = None
         for i in range(peak_idx - 1, 0, -1):

@@ -675,15 +675,63 @@ def run_spike_detection(
         detection_info = {}
 
         channels = selected_channels or list(range(rec.n_channels))
-        for ch in channels:
-            ch_spikes = detector.detect(rec, ch, params=params)
-            all_spikes.extend(ch_spikes)
-            if hasattr(detector, "_last_detection_info"):
-                detection_info[ch] = dict(detector._last_detection_info)
+
+        # Use chunked detection for large files (>30 min per channel)
+        _src = getattr(rec, "source_path", "") or ""
+        _use_chunked = (
+            _src.lower().endswith(".edf")
+            and rec.duration_sec > 1800
+        )
+
+        if _use_chunked:
+            from eeg_seizure_analyzer.detection.base import detect_chunked
+            all_spikes, detection_info = detect_chunked(
+                detector,
+                path=_src,
+                channels=channels,
+                chunk_duration_sec=1800.0,
+                overlap_sec=10.0,  # shorter overlap for spikes (short events)
+                params=params,
+            )
+        else:
+            for ch in channels:
+                ch_spikes = detector.detect(rec, ch, params=params)
+                all_spikes.extend(ch_spikes)
+                if hasattr(detector, "_last_detection_info"):
+                    detection_info[ch] = dict(detector._last_detection_info)
 
         state.spike_events = all_spikes
         state.sp_detection_info = detection_info
         state.detected_events = state.seizure_events + all_spikes
+
+        # ── Refresh training-tab annotations ──────────────────────
+        # Clear stale in-memory annotations so the training tab
+        # re-initialises from fresh detections on next visit.
+        try:
+            from eeg_seizure_analyzer.io.annotation_store import (
+                detections_to_annotations, merge_annotations,
+                load_spike_annotations, save_spike_annotations,
+            )
+            new_annotations = detections_to_annotations(
+                all_spikes, rec.source_path or "",
+                animal_id=state.extra.get("trs_animal_id", ""),
+            )
+            existing = None
+            if rec.source_path:
+                existing = load_spike_annotations(rec.source_path)
+            if existing:
+                merged = merge_annotations(existing, new_annotations,
+                                           tolerance_sec=0.05)
+            else:
+                merged = new_annotations
+            state.extra["trs_annotations"] = [a.to_dict() for a in merged]
+            state.extra["trs_current_idx"] = 0
+            if rec.source_path:
+                save_spike_annotations(rec.source_path, merged)
+        except Exception:
+            # Fallback: just clear so layout() rebuilds from spike_events
+            state.extra.pop("trs_annotations", None)
+            state.extra["trs_current_idx"] = 0
 
         # Save to disk
         if rec.source_path:
@@ -766,10 +814,11 @@ def _build_results(rec, all_spikes, spikes, total_count=None):
             "Time (s)": round(f.get("peak_time_sec", e.onset_sec), 2),
             "Amplitude": round(f.get("amplitude", 0), 1),
             "x Baseline": round(f.get("amplitude_x_baseline", 0), 1),
-            "Duration (ms)": round(f.get("duration_ms", 0), 1)
-                if f.get("duration_ms") else "\u2014",
+            "Duration (ms)": round(float(f["duration_ms"]), 1)
+                if f.get("duration_ms") is not None else "",
             "SNR": round(f.get("local_snr", 0), 1),
-            "Sharp": round(f.get("sharpness", 1.0), 2) if f.get("sharpness") else "\u2014",
+            "Sharp": round(float(f["sharpness"]), 2)
+                if f.get("sharpness") is not None else "",
             "ASW": "\u2713" if f.get("after_slow_wave") else "",
             "Confidence": round(e.confidence, 2),
             "_idx": orig_idx,

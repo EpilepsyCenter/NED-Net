@@ -19,7 +19,7 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, tools
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -473,10 +473,7 @@ def render_tab(active_tab, _refresh, sid):
     elif active_tab == "training":
         return training.layout(sid)
     elif active_tab == "training_spikes":
-        return _placeholder_tab(
-            "Interictal Spike Training",
-            "Training and annotation of interictal spikes will be available here.",
-        )
+        return training_spikes.layout(sid)
     elif active_tab == "video_converter":
         return tools.layout(sid)
     elif active_tab == "results":

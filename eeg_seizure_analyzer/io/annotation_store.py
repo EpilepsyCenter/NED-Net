@@ -152,6 +152,15 @@ def annotation_json_path(edf_path: str) -> Path:
     return p.with_suffix("").with_name(p.stem + "_ned_annotations.json")
 
 
+def spike_annotation_json_path(edf_path: str) -> Path:
+    """Derive the spike annotations JSON path from an EDF file path.
+
+    Replaces the file extension with ``_ned_spike_annotations.json``.
+    """
+    p = Path(edf_path)
+    return p.with_suffix("").with_name(p.stem + "_ned_spike_annotations.json")
+
+
 # ---------------------------------------------------------------------------
 # Save / Load
 # ---------------------------------------------------------------------------
@@ -361,3 +370,63 @@ def merge_annotations(
     # Sort by onset time for consistency
     merged.sort(key=lambda e: (e.channel, e.onset_sec))
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Spike-specific save / load  (separate file from seizure annotations)
+# ---------------------------------------------------------------------------
+
+def save_spike_annotations(
+    edf_path: str,
+    annotations: list[AnnotatedEvent],
+    annotator: str = "",
+    animal_id: str = "",
+    filter_settings: dict | None = None,
+) -> Path:
+    """Serialise spike annotations to a JSON file next to the EDF.
+
+    Uses ``_ned_spike_annotations.json`` suffix (separate from seizure
+    annotations).  Atomic write via temp + rename.
+    """
+    out_path = spike_annotation_json_path(edf_path)
+
+    payload = {
+        "version": _ANNOTATION_FORMAT_VERSION,
+        "edf_path": str(edf_path),
+        "annotator": annotator,
+        "animal_id": animal_id,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "n_annotations": len(annotations),
+        "annotations": [_sanitize(a.to_dict()) for a in annotations],
+    }
+    if filter_settings:
+        payload["filter_settings"] = _sanitize(filter_settings)
+
+    dir_name = str(out_path.parent)
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".tmp", prefix=".ned_spk_ann_", dir=dir_name
+    )
+    try:
+        with os.fdopen(fd, "w") as fp:
+            json.dump(payload, fp, indent=2, cls=_NumpyEncoder)
+        os.replace(tmp_path, str(out_path))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    return out_path
+
+
+def load_spike_annotations(edf_path: str) -> list[AnnotatedEvent] | None:
+    """Load previously saved spike annotations for an EDF file."""
+    json_path = spike_annotation_json_path(edf_path)
+    if not json_path.is_file():
+        return None
+
+    with open(json_path, "r") as fp:
+        raw = json.load(fp)
+
+    return [AnnotatedEvent.from_dict(d) for d in raw.get("annotations", [])]

@@ -965,13 +965,33 @@ def run_detection(
         seizures = []
         detection_info = {}
 
-        for ch in selected_channels:
-            if ch < 0 or ch >= rec.n_channels:
-                continue
-            ch_events = detector.detect(rec, ch, params=params)
-            seizures.extend(ch_events)
-            if hasattr(detector, "_last_detection_info"):
-                detection_info[ch] = detector._last_detection_info.copy()
+        # Use chunked detection for large files (>30 min per channel)
+        _src = getattr(rec, "source_path", "") or ""
+        _use_chunked = (
+            _src.lower().endswith(".edf")
+            and rec.duration_sec > 1800
+        )
+
+        if _use_chunked:
+            from eeg_seizure_analyzer.detection.base import detect_chunked
+            valid_channels = [ch for ch in selected_channels
+                              if 0 <= ch < rec.n_channels]
+            seizures, detection_info = detect_chunked(
+                detector,
+                path=_src,
+                channels=valid_channels,
+                chunk_duration_sec=1800.0,
+                overlap_sec=30.0,
+                params=params,
+            )
+        else:
+            for ch in selected_channels:
+                if ch < 0 or ch >= rec.n_channels:
+                    continue
+                ch_events = detector.detect(rec, ch, params=params)
+                seizures.extend(ch_events)
+                if hasattr(detector, "_last_detection_info"):
+                    detection_info[ch] = detector._last_detection_info.copy()
 
         seizures.sort(key=lambda e: e.onset_sec)
 
@@ -1040,9 +1060,65 @@ def run_detection(
         for i, ev in enumerate(seizures, start=1):
             ev.event_id = i
 
+        # ── Activity channel z-score ──────────────────────────────
+        # If paired activity channels exist, compute activity z-score
+        # for each event (stored as a feature for the ML model).
+        act_rec = state.activity_recordings.get("paired")
+        pairings = state.channel_pairings or []
+        if act_rec is not None and pairings and seizures:
+            try:
+                from eeg_seizure_analyzer.processing.activity import (
+                    flag_events_activity,
+                )
+                eeg_to_act = {}
+                for p in pairings:
+                    if p.activity_index is not None:
+                        eeg_to_act[p.eeg_index] = p.activity_index
+
+                for act_idx in set(eeg_to_act.values()):
+                    act_data = act_rec.data[act_idx]
+                    act_fs = act_rec.fs
+                    ch_events = [
+                        ev for ev in seizures
+                        if eeg_to_act.get(ev.channel) == act_idx
+                    ]
+                    if ch_events:
+                        flag_events_activity(ch_events, act_data, act_fs)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
         state.seizure_events = seizures
         state.st_detection_info = detection_info
         state.extra.pop("sz_selected_event_key", None)  # new detection, clear selection
+
+        # ── Refresh training-tab annotations ──────────────────────
+        # Clear stale in-memory annotations so the training tab
+        # re-initialises from fresh detections on next visit.
+        try:
+            from eeg_seizure_analyzer.io.annotation_store import (
+                detections_to_annotations, merge_annotations,
+                load_annotations, save_annotations,
+            )
+            _src = getattr(rec, "source_path", None) or ""
+            new_annotations = detections_to_annotations(
+                seizures, _src,
+                animal_id=state.extra.get("tr_animal_id", ""),
+            )
+            existing = load_annotations(_src) if _src else None
+            if existing:
+                merged = merge_annotations(existing, new_annotations,
+                                           tolerance_sec=1.0)
+            else:
+                merged = new_annotations
+            state.extra["tr_annotations"] = [a.to_dict() for a in merged]
+            state.extra["tr_current_idx"] = 0
+            if _src:
+                save_annotations(_src, merged)
+        except Exception:
+            # Fallback: just clear so layout() rebuilds from seizure_events
+            state.extra.pop("tr_annotations", None)
+            state.extra["tr_current_idx"] = 0
 
         # Auto-save detections to disk — use slider-key format for params
         # so they can be directly restored into the Seizure tab UI.

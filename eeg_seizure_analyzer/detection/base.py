@@ -195,14 +195,14 @@ def detect_chunked(
 
     Returns
     -------
-    list[DetectedEvent]
-        All detected events with times relative to file start.
+    tuple[list[DetectedEvent], dict[int, dict]]
+        (events, detection_info) — events with times relative to file start,
+        and per-channel detection metadata (baseline, threshold, spike times).
     """
     from eeg_seizure_analyzer.io.edf_reader import (
         read_edf_metadata,
         read_edf_window,
     )
-    from eeg_seizure_analyzer.processing.features import compute_zscore_baseline
     from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 
     meta = read_edf_metadata(path, channels)
@@ -219,8 +219,7 @@ def detect_chunked(
     baseline_percentile = getattr(params, "baseline_percentile", 15)
     baseline_rms_window_sec = getattr(params, "baseline_rms_window_sec", 10.0)
 
-    # ── Pass 1: Compute global baseline per channel ──────────────────
-    # Stream through in chunks to avoid loading entire file
+    # ── Pass 1a: Collect RMS per window to find quiet periods ─────────
     rms_windows_per_channel: dict[int, list[float]] = {ch: [] for ch in channels}
     win_samples = int(baseline_rms_window_sec * meta.fs)
 
@@ -232,7 +231,6 @@ def detect_chunked(
             filtered = bandpass_filter(
                 chunk.data[i], meta.fs, bandpass_low, bandpass_high
             )
-            # Compute RMS in non-overlapping windows
             n_wins = len(filtered) // win_samples
             for w in range(n_wins):
                 seg = filtered[w * win_samples : (w + 1) * win_samples]
@@ -241,22 +239,66 @@ def detect_chunked(
                 )
         pos += dur
 
-    # Compute percentile baseline from all RMS windows
-    baseline_per_channel: dict[int, float] = {}
+    # Determine quiet-window cutoff per channel
+    rms_cutoff_per_channel: dict[int, float] = {}
     for ch in channels:
         rms_arr = np.array(rms_windows_per_channel[ch])
         if len(rms_arr) > 0:
-            baseline_per_channel[ch] = max(
-                float(np.percentile(rms_arr, baseline_percentile)), 1e-10
+            rms_cutoff_per_channel[ch] = float(
+                np.percentile(rms_arr, baseline_percentile)
             )
         else:
-            baseline_per_channel[ch] = 1e-10
+            rms_cutoff_per_channel[ch] = 1e-10
 
-    # Free memory
     del rms_windows_per_channel
+
+    # ── Pass 1b: Compute mean & std from quiet-window samples ───────
+    # Use running sums to avoid storing all samples in memory.
+    sum_per_ch: dict[int, float] = {ch: 0.0 for ch in channels}
+    sumsq_per_ch: dict[int, float] = {ch: 0.0 for ch in channels}
+    count_per_ch: dict[int, int] = {ch: 0 for ch in channels}
+    win_idx_per_ch: dict[int, int] = {ch: 0 for ch in channels}
+
+    pos = 0.0
+    while pos < total_sec:
+        dur = min(chunk_duration_sec, total_sec - pos)
+        chunk = read_edf_window(path, channels, start_sec=pos, duration_sec=dur)
+        for i, ch in enumerate(channels):
+            filtered = bandpass_filter(
+                chunk.data[i], meta.fs, bandpass_low, bandpass_high
+            )
+            n_wins = len(filtered) // win_samples
+            cutoff = rms_cutoff_per_channel[ch]
+            for w in range(n_wins):
+                seg = filtered[w * win_samples : (w + 1) * win_samples]
+                rms = float(np.sqrt(np.mean(seg ** 2)))
+                if rms <= cutoff:
+                    abs_seg = np.abs(seg)
+                    sum_per_ch[ch] += float(np.sum(abs_seg))
+                    sumsq_per_ch[ch] += float(np.sum(abs_seg ** 2))
+                    count_per_ch[ch] += len(abs_seg)
+                win_idx_per_ch[ch] += 1
+        pos += dur
+
+    # Compute baseline (mean, std) identically to compute_zscore_baseline
+    baseline_per_channel: dict[int, tuple[float, float]] = {}
+    for ch in channels:
+        n = count_per_ch[ch]
+        if n > 1:
+            bl_mean = max(sum_per_ch[ch] / n, 1e-10)
+            bl_std = max(
+                float(np.sqrt(sumsq_per_ch[ch] / n - bl_mean ** 2)), 1e-10
+            )
+        else:
+            bl_mean = max(rms_cutoff_per_channel[ch], 1e-10)
+            bl_std = bl_mean * 0.5  # fallback
+        baseline_per_channel[ch] = (bl_mean, bl_std)
+
+    del sum_per_ch, sumsq_per_ch, count_per_ch, win_idx_per_ch
 
     # ── Pass 2: Detect in overlapping chunks ─────────────────────────
     all_events: list[DetectedEvent] = []
+    detection_info: dict[int, dict] = {}
     pos = 0.0
 
     while pos < total_sec:
@@ -265,15 +307,66 @@ def detect_chunked(
         chunk = read_edf_window(path, channels, start_sec=pos, duration_sec=dur)
 
         for i, ch in enumerate(channels):
-            baseline_rms = baseline_per_channel[ch]
+            bl_mean, bl_std = baseline_per_channel[ch]
             events = detector.detect(
-                chunk, i, baseline_rms=baseline_rms, **detect_kwargs
+                chunk, i, baseline_rms=bl_mean, baseline_std=bl_std,
+                **detect_kwargs
             )
 
-            # Adjust event times to be relative to file start
+            # Accumulate detection info across all chunks
+            if hasattr(detector, "_last_detection_info"):
+                chunk_di = detector._last_detection_info
+                offset_samples = int(pos * meta.fs)
+                if ch not in detection_info:
+                    # First chunk: initialise with baseline/threshold
+                    detection_info[ch] = {
+                        "channel": ch,
+                        "baseline_mean": chunk_di.get("baseline_mean"),
+                        "baseline_std": chunk_di.get("baseline_std"),
+                        "threshold": chunk_di.get("threshold"),
+                        "all_spike_times": [
+                            t + pos for t in chunk_di.get("all_spike_times", [])
+                        ],
+                        "all_spike_amplitudes": list(
+                            chunk_di.get("all_spike_amplitudes", [])
+                        ),
+                        "all_spike_samples": [
+                            s + offset_samples
+                            for s in chunk_di.get("all_spike_samples", [])
+                        ],
+                    }
+                else:
+                    # Subsequent chunks: append spike data
+                    detection_info[ch]["all_spike_times"].extend(
+                        t + pos for t in chunk_di.get("all_spike_times", [])
+                    )
+                    detection_info[ch]["all_spike_amplitudes"].extend(
+                        chunk_di.get("all_spike_amplitudes", [])
+                    )
+                    detection_info[ch]["all_spike_samples"].extend(
+                        s + offset_samples
+                        for s in chunk_di.get("all_spike_samples", [])
+                    )
+
+            # Adjust event times and channel to be relative to file start
             for ev in events:
                 ev.onset_sec += pos
                 ev.offset_sec += pos
+                ev.channel = ch  # use actual channel index, not chunk-local
+
+                # Adjust spike times in features if present
+                for key in ("spike_times", ):
+                    if key in ev.features:
+                        ev.features[key] = [t + pos for t in ev.features[key]]
+                for key in ("peak_time_sec", ):
+                    if key in ev.features:
+                        ev.features[key] = ev.features[key] + pos
+                for key in ("spike_samples", ):
+                    if key in ev.features:
+                        offset_samples = int(pos * meta.fs)
+                        ev.features[key] = [s + offset_samples for s in ev.features[key]]
+                if "sample_idx" in ev.features:
+                    ev.features["sample_idx"] += int(pos * meta.fs)
 
                 # Only keep events whose onset falls within the non-overlap
                 # portion of this chunk (except for the last chunk)
@@ -302,4 +395,4 @@ def detect_chunked(
                 continue
         deduped.append(ev)
 
-    return sorted(deduped, key=lambda e: e.onset_sec)
+    return sorted(deduped, key=lambda e: e.onset_sec), detection_info

@@ -4,8 +4,10 @@ Many rodent EEG setups include low-rate activity/EMG/accelerometer channels
 recorded alongside high-rate EEG.  This module handles:
   1. Loading a different-rate activity channel from the same EDF file.
   2. Upsampling it to match the EEG sampling rate.
-  3. Computing a movement threshold.
-  4. Flagging detected events that co-occur with elevated activity.
+  3. Computing activity statistics (mean, std, z-score) for detected events.
+
+Activity metrics are stored as features for later use by the ML model.
+No classification is attempted — the model learns what matters.
 """
 
 from __future__ import annotations
@@ -64,72 +66,68 @@ def load_activity_channel(
     return upsampled, original_fs
 
 
-def compute_movement_threshold(
+def compute_activity_stats(
     activity: np.ndarray,
-    percentile: float = 85.0,
-) -> float:
-    """Compute a threshold for movement detection.
-
-    Parameters
-    ----------
-    activity : np.ndarray
-        Activity channel data (upsampled to EEG rate).
-    percentile : float
-        Percentile to use as threshold (default 85th).
+) -> tuple[float, float]:
+    """Compute global mean and std of |activity| for z-score normalisation.
 
     Returns
     -------
-    float
-        Threshold value above which activity is considered movement.
+    tuple[float, float]
+        (global_mean, global_std)
     """
-    # Use absolute values for activity (handles bipolar signals)
-    return float(np.percentile(np.abs(activity), percentile))
+    abs_act = np.abs(activity)
+    mean = float(np.mean(abs_act))
+    std = float(np.std(abs_act))
+    return (max(mean, 1e-10), max(std, 1e-10))
 
 
-def flag_movement_artifacts(
+def flag_events_activity(
     events: list[DetectedEvent],
     activity: np.ndarray,
     fs: float,
-    threshold: float,
     pad_sec: float = 2.0,
 ) -> list[DetectedEvent]:
-    """Flag events that co-occur with elevated activity channel values.
+    """Compute activity z-score for each event and store as a feature.
 
-    Sets ``movement_flag = True`` on events where the mean absolute activity
-    during the event (plus padding) exceeds the threshold.  Events are
-    flagged, not removed — the user decides how to handle them.
+    For each event, computes the mean |activity| during the event window
+    (± pad), then converts to a z-score relative to the global activity
+    distribution.  Higher z-scores indicate more movement during the event.
+
+    Stored features per event:
+    - ``activity_zscore``: how many SDs above mean the activity is
+    - ``mean_activity``: raw mean |activity| during event ± pad
 
     Parameters
     ----------
     events : list[DetectedEvent]
-        Detected events to check.
+        Detected events to analyse.
     activity : np.ndarray
-        Activity channel data upsampled to EEG rate.
+        Activity channel data (at its native sampling rate).
     fs : float
         Sampling rate of the activity array.
-    threshold : float
-        Movement threshold (from compute_movement_threshold).
     pad_sec : float
-        Seconds of padding around event boundaries to check.
+        Padding around event boundaries for activity measurement.
 
     Returns
     -------
     list[DetectedEvent]
-        Same events with movement_flag updated in-place.
+        Same events with features updated in-place.
     """
+    global_mean, global_std = compute_activity_stats(activity)
     n_samples = len(activity)
 
     for event in events:
         start_idx = max(0, int((event.onset_sec - pad_sec) * fs))
         end_idx = min(n_samples, int((event.offset_sec + pad_sec) * fs))
 
-        if end_idx <= start_idx:
-            continue
+        if end_idx > start_idx:
+            mean_act = float(np.mean(np.abs(activity[start_idx:end_idx])))
+        else:
+            mean_act = 0.0
 
-        segment = np.abs(activity[start_idx:end_idx])
-        mean_activity = float(np.mean(segment))
-
-        if mean_activity > threshold:
-            event.movement_flag = True
+        zscore = (mean_act - global_mean) / global_std
+        event.features["activity_zscore"] = round(zscore, 2)
+        event.features["mean_activity"] = round(mean_act, 4)
 
     return events

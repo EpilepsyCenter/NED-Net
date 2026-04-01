@@ -77,6 +77,8 @@ class SpikeTrainSeizureDetector(DetectorBase):
         recording: EEGRecording,
         channel: int,
         params: SpikeTrainSeizureParams | None = None,
+        baseline_rms: float | None = None,
+        baseline_std: float | None = None,
     ) -> list[DetectedEvent]:
         if params is None:
             params = SpikeTrainSeizureParams()
@@ -88,7 +90,12 @@ class SpikeTrainSeizureDetector(DetectorBase):
         filtered = bandpass_filter(data, fs, params.bandpass_low, params.bandpass_high)
 
         # Step 2: compute baseline (mean, std)
-        bl_mean, bl_std = self._compute_baseline(filtered, fs, params)
+        if baseline_rms is not None:
+            # Precomputed baseline (from chunked pipeline)
+            bl_mean = baseline_rms
+            bl_std = baseline_std if baseline_std is not None else baseline_rms * 0.5
+        else:
+            bl_mean, bl_std = self._compute_baseline(filtered, fs, params)
         # baseline_amp is the reference amplitude for relative thresholds
         # (amplitude_x, boundary refinement, classification)
         baseline_amp = bl_mean

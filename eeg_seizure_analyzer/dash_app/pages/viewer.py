@@ -582,9 +582,11 @@ def update_viewer(
         "#58a6ff", "#3fb950", "#d29922", "#f85149", "#bc8cff", "#f778ba",
     ]
 
-    # Seizure event overlays (rectangles)
-    if show_events and state.seizure_events:
-        for event in state.seizure_events:
+    # Seizure event overlays (rectangles) — use filtered set from detected_events
+    _sz_events = [e for e in (state.detected_events or [])
+                  if e.event_type == "seizure"]
+    if show_events and _sz_events:
+        for event in _sz_events:
             if event.offset_sec < start_sec or event.onset_sec > end_sec:
                 continue
             if event.channel not in channel_offsets:
