@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import base64
 import os
 import sys
-import tempfile
 
 import pandas as pd
 from dash import html, dcc, callback, Input, Output, State, no_update, ctx
@@ -131,52 +129,27 @@ def _upload_layout() -> html.Div:
                        "marginBottom": "24px"},
             ),
 
-            # Upload area
-            dcc.Upload(
-                id="upload-edf",
-                children=html.Div(
-                    className="upload-area",
-                    children=[
-                        html.Div("\u21E7", className="upload-icon"),
-                        html.Div([
-                            html.Strong("Drop a file here"),
-                            html.Br(),
-                            "or click to browse",
-                        ], className="upload-text"),
-                    ],
+            # Path input with Browse button
+            dbc.InputGroup([
+                dbc.Input(
+                    id="upload-path-input",
+                    placeholder="/path/to/recording.edf",
+                    type="text",
                 ),
-                multiple=False,
-            ),
+                dbc.Button(
+                    "Browse",
+                    id="upload-browse-btn",
+                    className="btn-ned-secondary",
+                ),
+                dbc.Button(
+                    "Load",
+                    id="upload-path-btn",
+                    className="btn-ned-primary",
+                ),
+            ]),
 
-            # Or load from path
-            html.Div(
-                style={"marginTop": "24px"},
-                children=[
-                    dbc.Accordion(
-                        [
-                            dbc.AccordionItem(
-                                title="Load from file path",
-                                children=[
-                                    dbc.InputGroup([
-                                        dbc.Input(
-                                            id="upload-path-input",
-                                            placeholder="/path/to/recording.edf",
-                                            type="text",
-                                        ),
-                                        dbc.Button(
-                                            "Load",
-                                            id="upload-path-btn",
-                                            className="btn-ned-primary",
-                                        ),
-                                    ]),
-                                ],
-                            ),
-                        ],
-                        start_collapsed=True,
-                        flush=True,
-                    ),
-                ],
-            ),
+            # Hidden store for browse result
+            dcc.Store(id="upload-browse-result"),
 
             # Status area
             html.Div(id="upload-status", style={"marginTop": "16px"}),
@@ -646,6 +619,7 @@ def _try_load_saved_spikes(state: server_state.SessionState):
         return None
 
 
+
 def _discover_video(state: server_state.SessionState):
     """Look for an MP4 video file alongside the recording.
 
@@ -681,71 +655,60 @@ def _discover_video(state: server_state.SessionState):
 
 
 @callback(
-    Output("upload-status", "children"),
-    Output("tab-refresh", "data", allow_duplicate=True),
-    Input("upload-edf", "contents"),
-    State("upload-edf", "filename"),
-    State("session-id", "data"),
-    State("tab-refresh", "data"),
+    Output("upload-browse-result", "data"),
+    Input("upload-browse-btn", "n_clicks"),
     prevent_initial_call=True,
 )
-def on_file_upload(contents, filename, sid, refresh):
-    """Handle file upload: decode, scan channels, store in state."""
-    if contents is None:
-        return no_update, no_update
+def on_browse(n_clicks):
+    """Open a native file dialog and return the selected path.
 
+    tkinter must run in its own process on macOS (main-thread
+    requirement), so we spawn a short-lived subprocess.
+    """
+    if not n_clicks:
+        return no_update
     try:
-        # Decode base64
-        content_type, content_string = contents.split(",")
-        file_bytes = base64.b64decode(content_string)
-
-        state = server_state.get_session(sid)
-
-        if filename.lower().endswith(".edf"):
-            # Scan channels
-            from eeg_seizure_analyzer.io.edf_reader import scan_edf_channels
-
-            with tempfile.NamedTemporaryFile(suffix=".edf", delete=False) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
-
-            try:
-                channel_info = scan_edf_channels(tmp_path)
-            finally:
-                os.unlink(tmp_path)
-
-            state.all_channels_info = channel_info
-            state.extra["upload_file_bytes"] = file_bytes
-            state.extra["upload_filename"] = filename
-
-            # Re-render to show channel selection
-            return None, (refresh or 0) + 1
-
-        elif filename.lower().endswith(".adicht"):
-            from eeg_seizure_analyzer.io.adicht_reader import read_adicht
-
-            with tempfile.NamedTemporaryFile(suffix=".adicht", delete=False) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
-            try:
-                recording = read_adicht(tmp_path)
-                recording.source_path = filename
-            finally:
-                os.unlink(tmp_path)
-
-            state.recording = recording
-            _discover_video(state)
-            return None, (refresh or 0) + 1
-
-        else:
-            return alert(f"Unsupported file type: {filename}", "danger"), no_update
-
-    except Exception as e:
-        return alert(f"Error: {e}", "danger"), no_update
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-c", "\n".join([
+                "import tkinter as tk",
+                "from tkinter import filedialog",
+                "root = tk.Tk()",
+                "root.withdraw()",
+                'root.attributes("-topmost", True)',
+                "path = filedialog.askopenfilename(",
+                '    title="Select EEG recording",',
+                "    filetypes=[",
+                '        ("EDF files", "*.edf"),',
+                '        ("ADICHT files", "*.adicht"),',
+                '        ("All supported", "*.edf *.adicht"),',
+                "    ],",
+                ")",
+                "root.destroy()",
+                "print(path)",
+            ])],
+            capture_output=True, text=True, timeout=120,
+        )
+        path = result.stdout.strip()
+        return path or None
+    except Exception:
+        return None
 
 
 @callback(
-    Output("upload-status", "children", allow_duplicate=True),
+    Output("upload-path-input", "value"),
+    Input("upload-browse-result", "data"),
+    prevent_initial_call=True,
+)
+def on_browse_result(path):
+    """Fill the path input with the selected file."""
+    if not path:
+        return no_update
+    return path
+
+
+@callback(
+    Output("upload-status", "children"),
     Output("tab-refresh", "data", allow_duplicate=True),
     Input("upload-path-btn", "n_clicks"),
     State("upload-path-input", "value"),
@@ -758,6 +721,7 @@ def on_path_load(n_clicks, path, sid, refresh):
     if not n_clicks or not path:
         return no_update, no_update
 
+    path = path.strip()
     if not os.path.isfile(path):
         return alert(f"File not found: {path}", "danger"), no_update
 
@@ -815,9 +779,9 @@ def on_load_channels(n_clicks, selected_channels, sid, refresh):
     state.extra.pop("sz_selected_event_key", None)
 
     try:
-        file_bytes = state.extra.get("upload_file_bytes")
         source_path = state.extra.get("upload_source_path")
-        filename = state.extra.get("upload_filename", "unknown.edf")
+        if not source_path or not os.path.isfile(source_path):
+            return alert("No file data available.", "danger"), no_update
 
         from eeg_seizure_analyzer.io.edf_reader import read_edf, read_edf_paired
         from eeg_seizure_analyzer.io.edf_reader import auto_pair_channels
@@ -828,36 +792,18 @@ def on_load_channels(n_clicks, selected_channels, sid, refresh):
         eeg_indices, act_indices, pairings = auto_pair_channels(channel_info)
         has_pairs = any(p.activity_index is not None for p in pairings)
 
-        # Get or create temp file
-        if file_bytes is not None:
-            with tempfile.NamedTemporaryFile(suffix=".edf", delete=False) as tmp:
-                tmp.write(file_bytes)
-                load_path = tmp.name
-            cleanup = True
-        elif source_path:
-            load_path = source_path
-            cleanup = False
+        if has_pairs:
+            sel_eeg = [i for i in selected_channels if i in eeg_indices]
+            sel_act = act_indices
+            eeg_rec, act_rec = read_edf_paired(source_path, sel_eeg, sel_act)
+            eeg_rec.source_path = source_path
+            state.recording = eeg_rec
+            state.activity_recordings = {"paired": act_rec}
+            state.channel_pairings = pairings
         else:
-            return alert("No file data available.", "danger"), no_update
-
-        try:
-            if has_pairs:
-                sel_eeg = [i for i in selected_channels if i in eeg_indices]
-                sel_act = act_indices
-                eeg_rec, act_rec = read_edf_paired(load_path, sel_eeg, sel_act)
-                eeg_rec.source_path = source_path or filename
-                state.recording = eeg_rec
-                state.activity_recordings = {"paired": act_rec}
-                state.channel_pairings = pairings
-            else:
-                recording = read_edf(load_path, channels=selected_channels)
-                recording.source_path = source_path or filename
-                state.recording = recording
-        finally:
-            if cleanup:
-                os.unlink(load_path)
-
-        state.extra.pop("upload_file_bytes", None)
+            recording = read_edf(source_path, channels=selected_channels)
+            recording.source_path = source_path
+            state.recording = recording
 
         # Discover associated video file
         _discover_video(state)
@@ -893,7 +839,7 @@ def on_back(n_clicks, sid, refresh):
         return no_update
     state = server_state.get_session(sid)
     state.all_channels_info = []
-    state.extra.pop("upload_file_bytes", None)
+
     state.extra.pop("upload_source_path", None)
     return (refresh or 0) + 1
 
@@ -941,7 +887,7 @@ def on_load_new_file(n_clicks, sid, refresh):
     state.detected_events = []
     state.st_detection_info = {}
     state.sp_detection_info = {}
-    state.extra.pop("upload_file_bytes", None)
+
     state.extra.pop("upload_source_path", None)
     state.extra.pop("upload_filename", None)
     state.extra.pop("tr_annotations", None)

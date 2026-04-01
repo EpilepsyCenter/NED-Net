@@ -13,6 +13,7 @@ from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
     empty_state,
+    metric_card,
     no_recording_placeholder,
 )
 from eeg_seizure_analyzer.io.annotation_store import (
@@ -262,6 +263,32 @@ def _minmax_downsample(
 
 
 # ── Review Mode Plot ──────────────────────────────────────────────────
+
+
+def _build_spike_properties(rec, event) -> dbc.Row:
+    """Build the spike property info boxes for the current event."""
+    if event is None:
+        return dbc.Row(className="g-2 mb-2")
+    ch = event.channel
+    ch_name = rec.channel_names[ch] if ch < len(rec.channel_names) else f"Ch{ch}"
+    feat = event.features or {}
+    amp = feat.get("amplitude")
+    xbl = feat.get("amplitude_x_baseline")
+    dur_ms = feat.get("duration_ms")
+    sharp = feat.get("sharpness")
+    return dbc.Row([
+        dbc.Col(metric_card("Channel", ch_name), width=2),
+        dbc.Col(metric_card("Amplitude",
+                            f"{amp:.0f}" if amp is not None else "\u2014"), width=2),
+        dbc.Col(metric_card("x Baseline",
+                            f"{xbl:.1f}" if xbl is not None else "\u2014"), width=2),
+        dbc.Col(metric_card("Duration",
+                            f"{dur_ms:.1f} ms" if dur_ms is not None else "\u2014"), width=2),
+        dbc.Col(metric_card("Sharpness",
+                            f"{sharp:.1f}" if sharp is not None else "\u2014"), width=2),
+        dbc.Col(metric_card("Confidence",
+                            f"{event.detector_confidence:.2f}"), width=2),
+    ], className="g-2 mb-2")
 
 
 def _build_review_figure(rec, event: AnnotatedEvent, state,
@@ -639,10 +666,10 @@ def layout(sid: str | None) -> html.Div:
             dcc.Store(id="trs-keyboard-store", data={"key": "", "ts": 0}),
             html.Div(id="trs-keyboard-listener", style={"display": "none"}),
 
-            # Header
+            # Header + Mode toggle (prominent)
             html.Div(
                 style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "20px"},
+                       "marginBottom": "16px"},
                 children=[
                     html.H4("Interictal Spike Annotation", style={"margin": "0"}),
                     html.Span(
@@ -650,6 +677,22 @@ def layout(sid: str | None) -> html.Div:
                         style={"fontSize": "0.78rem", "color": "#8b949e",
                                "border": "1px solid #2d333b", "borderRadius": "12px",
                                "padding": "2px 10px"},
+                    ),
+                    html.Div(style={"flex": "1"}),
+                    dbc.RadioItems(
+                        id="trs-mode-toggle",
+                        options=[
+                            {"label": "\U0001F50D Review Mode", "value": "review"},
+                            {"label": "\U0001F4C4 Browse Mode", "value": "browse"},
+                        ],
+                        value=mode,
+                        inline=True,
+                        className="btn-group",
+                        inputClassName="btn-check",
+                        labelClassName="btn btn-outline-secondary",
+                        labelCheckedClassName="btn-ned-primary",
+                        labelStyle={"fontSize": "0.92rem", "fontWeight": "600",
+                                    "padding": "6px 18px"},
                     ),
                 ],
             ),
@@ -829,70 +872,6 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
             ], className="g-2 mb-3"),
 
-            # Progress bar with per-channel counts
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Div(
-                        style={"display": "flex", "justifyContent": "space-between",
-                               "marginBottom": "4px"},
-                        children=[
-                            html.Span(
-                                f"{counts_filtered['confirmed']} confirmed, "
-                                f"{counts_filtered['rejected']} rejected, "
-                                f"{counts_filtered['pending']} pending"
-                                + (f" (of {counts['total']} total)"
-                                   if trs_filter_on else ""),
-                                style={"fontSize": "0.78rem", "color": "#8b949e"}),
-                            html.Span(f"{progress_pct}%",
-                                      style={"fontSize": "0.78rem", "color": "#8b949e"}),
-                        ],
-                    ),
-                    dbc.Progress(
-                        value=progress_pct,
-                        style={"height": "6px", "backgroundColor": "#2d333b"},
-                        color="success" if progress_pct >= 80 else (
-                            "warning" if progress_pct >= 40 else "info"
-                        ),
-                    ),
-                    # Per-channel counts
-                    html.Div(
-                        style={"display": "flex", "gap": "16px", "marginTop": "6px",
-                               "flexWrap": "wrap"},
-                        children=[
-                            html.Span(
-                                f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
-                                style={"fontSize": "0.72rem", "color": "#8b949e",
-                                       "border": "1px solid #2d333b",
-                                       "borderRadius": "8px", "padding": "1px 8px"},
-                            )
-                            for ch_name, cc in ch_counts.items()
-                        ],
-                    ),
-                ],
-            ),
-
-            # Mode toggle
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    dbc.RadioItems(
-                        id="trs-mode-toggle",
-                        options=[
-                            {"label": "Review Mode", "value": "review"},
-                            {"label": "Browse Mode", "value": "browse"},
-                        ],
-                        value=mode,
-                        inline=True,
-                        className="btn-group",
-                        inputClassName="btn-check",
-                        labelClassName="btn btn-outline-secondary",
-                        labelCheckedClassName="btn-ned-primary",
-                        labelStyle={"fontSize": "0.85rem", "fontWeight": "500"},
-                    ),
-                ],
-            ),
-
             # ── Review Mode ──────────────────────────────────────────
             html.Div(
                 id="trs-review-mode",
@@ -926,6 +905,12 @@ def layout(sid: str | None) -> html.Div:
                                 className="btn-ned-secondary",
                             ),
                         ],
+                    ),
+
+                    # Spike property info boxes (updated by callback)
+                    html.Div(
+                        id="trs-event-properties",
+                        children=_build_spike_properties(rec, current_event),
                     ),
 
                     # Status badge + Y-range controls
@@ -1266,10 +1251,16 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
-                    # Browse EEG plot
+                    # Browse EEG plot — pre-render if in browse mode
                     dcc.Loading(
                         dcc.Graph(
                             id="trs-browse-graph",
+                            figure=_build_browse_figure(
+                                rec, _filter_by_channel(annotations, channel_filter),
+                                state,
+                                start_sec=float(browse_start),
+                                window_sec=float(browse_window),
+                            ) if mode == "browse" else go.Figure(),
                             config={"scrollZoom": True, "displayModeBar": True},
                             style={"borderRadius": "8px"},
                         ),
@@ -1278,6 +1269,50 @@ def layout(sid: str | None) -> html.Div:
 
                     # Status message
                     html.Div(id="trs-browse-status"),
+                ],
+            ),
+
+            # ── Annotation Counts (at end of page) ─────────────────────
+            html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0 12px 0"}),
+            html.Div(
+                style={"marginBottom": "16px"},
+                children=[
+                    html.Div(
+                        style={"display": "flex", "justifyContent": "space-between",
+                               "marginBottom": "4px"},
+                        children=[
+                            html.Span(
+                                f"{counts_filtered['confirmed']} confirmed, "
+                                f"{counts_filtered['rejected']} rejected, "
+                                f"{counts_filtered['pending']} pending"
+                                + (f" (of {counts['total']} total)"
+                                   if trs_filter_on else ""),
+                                style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                            html.Span(f"{progress_pct}%",
+                                      style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        ],
+                    ),
+                    dbc.Progress(
+                        value=progress_pct,
+                        style={"height": "6px", "backgroundColor": "#2d333b"},
+                        color="success" if progress_pct >= 80 else (
+                            "warning" if progress_pct >= 40 else "info"
+                        ),
+                    ),
+                    # Per-channel counts
+                    html.Div(
+                        style={"display": "flex", "gap": "16px", "marginTop": "6px",
+                               "flexWrap": "wrap"},
+                        children=[
+                            html.Span(
+                                f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
+                                style={"fontSize": "0.72rem", "color": "#8b949e",
+                                       "border": "1px solid #2d333b",
+                                       "borderRadius": "8px", "padding": "1px 8px"},
+                            )
+                            for ch_name, cc in ch_counts.items()
+                        ],
+                    ),
                 ],
             ),
         ],
@@ -1379,6 +1414,7 @@ def trs_save_channel_filter(val, sid):
     Output("trs-onset-input", "value"),
     Output("trs-offset-input", "value"),
     Output("trs-duration-display", "children"),
+    Output("trs-event-properties", "children"),
     Input("trs-mode-toggle", "value"),
     Input("trs-channel-filter", "value"),
     Input("trs-filter-toggle", "value"),
@@ -1425,7 +1461,7 @@ def trs_update_review(mode, ch_filter, filt_on,
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
     _no = no_update
     if mode != "review":
-        return _no, _no, _no, _no, _no, _no, _no
+        return _no, _no, _no, _no, _no, _no, _no, _no
 
     state = server_state.get_session(sid)
     if state.recording is None:
@@ -1490,7 +1526,7 @@ def trs_update_review(mode, ch_filter, filt_on,
         fig = go.Figure()
         apply_fig_theme(fig)
         fig.update_layout(height=400)
-        return fig, "No spikes to review", html.Span(), "", 0, 0, ""
+        return fig, "No spikes to review", html.Span(), "", 0, 0, "", dbc.Row()
 
     current_idx = state.extra.get("trs_current_idx", 0)
 
@@ -1607,7 +1643,8 @@ def trs_update_review(mode, ch_filter, filt_on,
     ev_offset = round(event.offset_sec, 3)
     ev_dur = f"({(event.offset_sec - event.onset_sec) * 1000:.1f}ms)"
 
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur
+    props = _build_spike_properties(rec, event)
+    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, props
 
 
 def _find_next_pending(filtered: list[AnnotatedEvent], current_idx: int):

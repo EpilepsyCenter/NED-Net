@@ -14,6 +14,7 @@ from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
     empty_state,
+    metric_card,
     no_recording_placeholder,
 )
 from eeg_seizure_analyzer.io.annotation_store import (
@@ -89,12 +90,20 @@ def _filter_by_channel(annotations: list[AnnotatedEvent],
 
 def _apply_annotation_filters(annotations: list[AnnotatedEvent], *,
                               min_conf=0, min_dur=0, min_lbl=0,
-                              max_conf=None, max_dur=None, max_lbl=None):
-    """Apply confidence/duration/local-BL min-max filters to annotation list."""
+                              max_conf=None, max_dur=None, max_lbl=None,
+                              min_spikes=0, max_spikes=None,
+                              min_amp=0, max_amp=None,
+                              min_top_amp=0, max_top_amp=None,
+                              min_freq=0, max_freq=None):
+    """Apply confidence/duration/local-BL/spike min-max filters to annotation list."""
     filtered = list(annotations)
     min_conf = float(min_conf or 0)
     min_dur = float(min_dur or 0)
     min_lbl = float(min_lbl or 0)
+    min_spikes = int(min_spikes or 0)
+    min_amp = float(min_amp or 0)
+    min_top_amp = float(min_top_amp or 0)
+    min_freq = float(min_freq or 0)
 
     def _fmax(v):
         if v is None or v == "":
@@ -103,6 +112,10 @@ def _apply_annotation_filters(annotations: list[AnnotatedEvent], *,
     max_conf = _fmax(max_conf)
     max_dur = _fmax(max_dur)
     max_lbl = _fmax(max_lbl)
+    max_spikes = _fmax(max_spikes)
+    max_amp = _fmax(max_amp)
+    max_top_amp = _fmax(max_top_amp)
+    max_freq = _fmax(max_freq)
 
     if min_conf > 0:
         filtered = [a for a in filtered if a.detector_confidence >= min_conf]
@@ -120,6 +133,40 @@ def _apply_annotation_filters(annotations: list[AnnotatedEvent], *,
     if max_lbl is not None:
         filtered = [a for a in filtered
                     if (a.quality_metrics or {}).get("local_baseline_ratio", 0) <= max_lbl]
+    # --- Spikes ---
+    if min_spikes > 0:
+        filtered = [a for a in filtered
+                    if (a.features or {}).get("n_spikes", 0) is not None
+                    and (a.features or {}).get("n_spikes", 0) >= min_spikes]
+    if max_spikes is not None:
+        filtered = [a for a in filtered
+                    if (a.features or {}).get("n_spikes") is None
+                    or (a.features or {}).get("n_spikes", 0) <= max_spikes]
+    # --- Amp (xBL) ---
+    if min_amp > 0:
+        filtered = [a for a in filtered
+                    if (a.features or {}).get("max_amplitude_x_baseline") is not None
+                    and (a.features or {}).get("max_amplitude_x_baseline", 0) >= min_amp]
+    if max_amp is not None:
+        filtered = [a for a in filtered
+                    if (a.features or {}).get("max_amplitude_x_baseline") is None
+                    or (a.features or {}).get("max_amplitude_x_baseline", 0) <= max_amp]
+    # --- Top Amp ---
+    if min_top_amp > 0:
+        filtered = [a for a in filtered
+                    if (a.quality_metrics or {}).get("top_spike_amplitude_x", 0) >= min_top_amp]
+    if max_top_amp is not None:
+        filtered = [a for a in filtered
+                    if (a.quality_metrics or {}).get("top_spike_amplitude_x", 0) <= max_top_amp]
+    # --- Freq ---
+    if min_freq > 0:
+        filtered = [a for a in filtered
+                    if (a.features or {}).get("mean_spike_frequency_hz") is not None
+                    and (a.features or {}).get("mean_spike_frequency_hz", 0) >= min_freq]
+    if max_freq is not None:
+        filtered = [a for a in filtered
+                    if (a.features or {}).get("mean_spike_frequency_hz") is None
+                    or (a.features or {}).get("mean_spike_frequency_hz", 0) <= max_freq]
     return filtered
 
 
@@ -299,6 +346,30 @@ def _event_badge(event) -> html.Span:
         ))
     return html.Span(children, style={"display": "flex", "gap": "4px",
                                        "alignItems": "center"})
+
+
+def _build_event_properties(rec, event) -> dbc.Row:
+    """Build the seizure property info boxes for the current event."""
+    if event is None:
+        return dbc.Row(className="g-2 mb-2")
+    ch = event.channel
+    ch_name = rec.channel_names[ch] if ch < len(rec.channel_names) else f"Ch{ch}"
+    feat = event.features or {}
+    qm = event.quality_metrics or {}
+    n_spikes = feat.get("n_spikes")
+    return dbc.Row([
+        dbc.Col(metric_card("Channel", ch_name), width=2),
+        dbc.Col(metric_card("Duration",
+                            f"{event.offset_sec - event.onset_sec:.2f}s"), width=2),
+        dbc.Col(metric_card("Spikes",
+                            str(n_spikes) if n_spikes is not None else "\u2014"), width=2),
+        dbc.Col(metric_card("Confidence",
+                            f"{event.detector_confidence:.2f}"), width=2),
+        dbc.Col(metric_card("Local BL",
+                            f"{qm.get('local_baseline_ratio', 0):.1f}"), width=2),
+        dbc.Col(metric_card("Top Amp",
+                            f"{qm.get('top_spike_amplitude_x', 0):.1f}"), width=2),
+    ], className="g-2 mb-2")
 
 
 def _minmax_downsample(
@@ -744,6 +815,15 @@ def layout(sid: str | None) -> html.Div:
     tr_max_conf = state.extra.get("tr_max_conf", sz_fv.get("max_conf", None))
     tr_max_dur = state.extra.get("tr_max_dur", sz_fv.get("max_dur", None))
     tr_max_lbl = state.extra.get("tr_max_lbl", sz_fv.get("max_lbl", None))
+    # Additional filters (matching seizure detection tab)
+    tr_min_spikes = state.extra.get("tr_min_spikes", sz_fv.get("min_spikes", 0))
+    tr_max_spikes = state.extra.get("tr_max_spikes", sz_fv.get("max_spikes", None))
+    tr_min_amp = state.extra.get("tr_min_amp", sz_fv.get("min_amp", 0))
+    tr_max_amp = state.extra.get("tr_max_amp", sz_fv.get("max_amp", None))
+    tr_min_top_amp = state.extra.get("tr_min_top_amp", sz_fv.get("min_top_amp", 0))
+    tr_max_top_amp = state.extra.get("tr_max_top_amp", sz_fv.get("max_top_amp", None))
+    tr_min_freq = state.extra.get("tr_min_freq", sz_fv.get("min_freq", 0))
+    tr_max_freq = state.extra.get("tr_max_freq", sz_fv.get("max_freq", None))
 
     # Y-range defaults (mirror viewer defaults)
     viewer_saved = state.extra.get("viewer_settings", {})
@@ -765,7 +845,11 @@ def layout(sid: str | None) -> html.Div:
     if tr_filter_on:
         filtered = _apply_annotation_filters(
             filtered, min_conf=tr_min_conf, min_dur=tr_min_dur, min_lbl=tr_min_lbl,
-            max_conf=tr_max_conf, max_dur=tr_max_dur, max_lbl=tr_max_lbl)
+            max_conf=tr_max_conf, max_dur=tr_max_dur, max_lbl=tr_max_lbl,
+            min_spikes=tr_min_spikes, max_spikes=tr_max_spikes,
+            min_amp=tr_min_amp, max_amp=tr_max_amp,
+            min_top_amp=tr_min_top_amp, max_top_amp=tr_max_top_amp,
+            min_freq=tr_min_freq, max_freq=tr_max_freq)
     counts = _progress_counts(annotations)
     counts_filtered = _progress_counts(filtered) if tr_filter_on else counts
 
@@ -824,10 +908,10 @@ def layout(sid: str | None) -> html.Div:
             dcc.Store(id="tr-video-seek", data=0),
             html.Div(id="tr-keyboard-listener", style={"display": "none"}),
 
-            # Header
+            # Header + Mode toggle (prominent)
             html.Div(
                 style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "20px"},
+                       "marginBottom": "16px"},
                 children=[
                     html.H4("Seizure Annotation", style={"margin": "0"}),
                     html.Span(
@@ -836,10 +920,26 @@ def layout(sid: str | None) -> html.Div:
                                "border": "1px solid #2d333b", "borderRadius": "12px",
                                "padding": "2px 10px"},
                     ),
+                    html.Div(style={"flex": "1"}),
+                    dbc.RadioItems(
+                        id="tr-mode-toggle",
+                        options=[
+                            {"label": "\U0001F50D Review Mode", "value": "review"},
+                            {"label": "\U0001F4C4 Browse Mode", "value": "browse"},
+                        ],
+                        value=mode,
+                        inline=True,
+                        className="btn-group",
+                        inputClassName="btn-check",
+                        labelClassName="btn btn-outline-secondary",
+                        labelCheckedClassName="btn-ned-primary",
+                        labelStyle={"fontSize": "0.92rem", "fontWeight": "600",
+                                    "padding": "6px 18px"},
+                    ),
                 ],
             ),
 
-            # Metadata row
+            # Metadata row + filters
             dbc.Row([
                 dbc.Col([
                     html.Label("Annotator",
@@ -875,7 +975,7 @@ def layout(sid: str | None) -> html.Div:
                         style={"fontSize": "0.82rem"},
                     ),
                 ], width=2),
-                # Filters (mirror key seizure tab filters)
+                # Filter toggle
                 dbc.Col([
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "8px", "marginTop": "20px"},
@@ -886,6 +986,18 @@ def layout(sid: str | None) -> html.Div:
                                            style={"fontSize": "0.78rem", "color": "#8b949e"}),
                              ]),
                 ], width=1),
+                # Hidden: browse annotate channel (used by browse callback)
+                html.Div(
+                    dcc.Dropdown(id="tr-browse-annotate-channel",
+                                 options=ch_options,
+                                 value=0 if ch_options else None,
+                                 clearable=False),
+                    style={"display": "none"},
+                ),
+            ], className="g-2 mb-2"),
+
+            # Filter row 1: Confidence, Duration, Local BL, Spikes
+            dbc.Row([
                 dbc.Col([
                     html.Label("Confidence",
                                style={"fontSize": "0.75rem", "color": "#8b949e"}),
@@ -943,79 +1055,87 @@ def layout(sid: str | None) -> html.Div:
                                          "fontSize": "0.78rem"}),
                     ]),
                 ], width=2),
-                # Hidden: browse annotate channel (moved here, used by browse callback)
-                html.Div(
-                    dcc.Dropdown(id="tr-browse-annotate-channel",
-                                 options=ch_options,
-                                 value=0 if ch_options else None,
-                                 clearable=False),
-                    style={"display": "none"},
-                ),
+                dbc.Col([
+                    html.Label("Spikes",
+                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                    html.Div(style={"display": "flex", "alignItems": "center",
+                                    "gap": "3px"}, children=[
+                        dcc.Input(id="tr-min-spikes", type="number", min=0, max=100,
+                                  step=1, value=tr_min_spikes, placeholder="min",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                        html.Span("–", style={"color": "#8b949e",
+                                              "fontSize": "0.8rem"}),
+                        dcc.Input(id="tr-max-spikes", type="number", min=0, max=100,
+                                  step=1, value=tr_max_spikes, placeholder="max",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                    ]),
+                ], width=2),
+                dbc.Col([
+                    html.Label("Amp (xBL)",
+                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                    html.Div(style={"display": "flex", "alignItems": "center",
+                                    "gap": "3px"}, children=[
+                        dcc.Input(id="tr-min-amp", type="number", min=0, max=50,
+                                  step=0.5, value=tr_min_amp, placeholder="min",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                        html.Span("–", style={"color": "#8b949e",
+                                              "fontSize": "0.8rem"}),
+                        dcc.Input(id="tr-max-amp", type="number", min=0, max=50,
+                                  step=0.5, value=tr_max_amp, placeholder="max",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                    ]),
+                ], width=2),
+                dbc.Col([
+                    html.Label("Top Amp",
+                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                    html.Div(style={"display": "flex", "alignItems": "center",
+                                    "gap": "3px"}, children=[
+                        dcc.Input(id="tr-min-top-amp", type="number", min=0, max=20,
+                                  step=0.5, value=tr_min_top_amp, placeholder="min",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                        html.Span("–", style={"color": "#8b949e",
+                                              "fontSize": "0.8rem"}),
+                        dcc.Input(id="tr-max-top-amp", type="number", min=0, max=20,
+                                  step=0.5, value=tr_max_top_amp, placeholder="max",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                    ]),
+                ], width=2),
+            ], className="g-2 mb-2"),
+
+            # Filter row 2: Freq
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Freq (Hz)",
+                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                    html.Div(style={"display": "flex", "alignItems": "center",
+                                    "gap": "3px"}, children=[
+                        dcc.Input(id="tr-min-freq", type="number", min=0, max=50,
+                                  step=0.5, value=tr_min_freq, placeholder="min",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                        html.Span("–", style={"color": "#8b949e",
+                                              "fontSize": "0.8rem"}),
+                        dcc.Input(id="tr-max-freq", type="number", min=0, max=50,
+                                  step=0.5, value=tr_max_freq, placeholder="max",
+                                  debounce=True, className="form-control",
+                                  style={"width": "50%", "height": "28px",
+                                         "fontSize": "0.78rem"}),
+                    ]),
+                ], width=2),
             ], className="g-2 mb-3"),
-
-            # Progress bar with per-channel counts
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Div(
-                        style={"display": "flex", "justifyContent": "space-between",
-                               "marginBottom": "4px"},
-                        children=[
-                            html.Span(
-                                f"{counts_filtered['confirmed']} confirmed, "
-                                f"{counts_filtered['rejected']} rejected, "
-                                f"{counts_filtered['pending']} pending"
-                                + (f" (of {counts['total']} total)"
-                                   if tr_filter_on else ""),
-                                style={"fontSize": "0.78rem", "color": "#8b949e"}),
-                            html.Span(f"{progress_pct}%",
-                                      style={"fontSize": "0.78rem", "color": "#8b949e"}),
-                        ],
-                    ),
-                    dbc.Progress(
-                        value=progress_pct,
-                        style={"height": "6px", "backgroundColor": "#2d333b"},
-                        color="success" if progress_pct >= 80 else (
-                            "warning" if progress_pct >= 40 else "info"
-                        ),
-                    ),
-                    # Per-channel counts
-                    html.Div(
-                        style={"display": "flex", "gap": "16px", "marginTop": "6px",
-                               "flexWrap": "wrap"},
-                        children=[
-                            html.Span(
-                                f"{ch_name}: {cc['confirmed']}✓ {cc['rejected']}✗ {cc['pending']}?",
-                                style={"fontSize": "0.72rem", "color": "#8b949e",
-                                       "border": "1px solid #2d333b",
-                                       "borderRadius": "8px", "padding": "1px 8px"},
-                            )
-                            for ch_name, cc in ch_counts.items()
-                        ],
-                    ),
-                ],
-            ),
-
-            # Mode toggle
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    dbc.RadioItems(
-                        id="tr-mode-toggle",
-                        options=[
-                            {"label": "Review Mode", "value": "review"},
-                            {"label": "Browse Mode", "value": "browse"},
-                        ],
-                        value=mode,
-                        inline=True,
-                        className="btn-group",
-                        inputClassName="btn-check",
-                        labelClassName="btn btn-outline-secondary",
-                        labelCheckedClassName="btn-ned-primary",
-                        labelStyle={"fontSize": "0.85rem", "fontWeight": "500"},
-                    ),
-                ],
-            ),
 
             # ── Review Mode ──────────────────────────────────────────
             html.Div(
@@ -1050,6 +1170,12 @@ def layout(sid: str | None) -> html.Div:
                                 className="btn-ned-secondary",
                             ),
                         ],
+                    ),
+
+                    # Seizure property info boxes (updated by callback)
+                    html.Div(
+                        id="tr-event-properties",
+                        children=_build_event_properties(rec, current_event),
                     ),
 
                     # Status badge + Y-range controls
@@ -1409,10 +1535,16 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
-                    # Browse EEG plot
+                    # Browse EEG plot — pre-render if in browse mode
                     dcc.Loading(
                         dcc.Graph(
                             id="tr-browse-graph",
+                            figure=_build_browse_figure(
+                                rec, _filter_by_channel(annotations, channel_filter),
+                                state,
+                                start_sec=float(browse_start),
+                                window_sec=float(browse_window),
+                            ) if mode == "browse" else go.Figure(),
                             config={"scrollZoom": True, "displayModeBar": True},
                             style={"borderRadius": "8px"},
                         ),
@@ -1421,6 +1553,50 @@ def layout(sid: str | None) -> html.Div:
 
                     # Status message
                     html.Div(id="tr-browse-status"),
+                ],
+            ),
+
+            # ── Annotation Counts (at end of page) ─────────────────────
+            html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0 12px 0"}),
+            html.Div(
+                style={"marginBottom": "16px"},
+                children=[
+                    html.Div(
+                        style={"display": "flex", "justifyContent": "space-between",
+                               "marginBottom": "4px"},
+                        children=[
+                            html.Span(
+                                f"{counts_filtered['confirmed']} confirmed, "
+                                f"{counts_filtered['rejected']} rejected, "
+                                f"{counts_filtered['pending']} pending"
+                                + (f" (of {counts['total']} total)"
+                                   if tr_filter_on else ""),
+                                style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                            html.Span(f"{progress_pct}%",
+                                      style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        ],
+                    ),
+                    dbc.Progress(
+                        value=progress_pct,
+                        style={"height": "6px", "backgroundColor": "#2d333b"},
+                        color="success" if progress_pct >= 80 else (
+                            "warning" if progress_pct >= 40 else "info"
+                        ),
+                    ),
+                    # Per-channel counts
+                    html.Div(
+                        style={"display": "flex", "gap": "16px", "marginTop": "6px",
+                               "flexWrap": "wrap"},
+                        children=[
+                            html.Span(
+                                f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
+                                style={"fontSize": "0.72rem", "color": "#8b949e",
+                                       "border": "1px solid #2d333b",
+                                       "borderRadius": "8px", "padding": "1px 8px"},
+                            )
+                            for ch_name, cc in ch_counts.items()
+                        ],
+                    ),
                 ],
             ),
         ],
@@ -1525,6 +1701,7 @@ def save_channel_filter(val, sid):
     Output("tr-duration-display", "children"),
     Output("tr-video-seek", "data"),
     Output("tr-convulsive-toggle", "value"),
+    Output("tr-event-properties", "children"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-filter-toggle", "value"),
@@ -1534,6 +1711,14 @@ def save_channel_filter(val, sid):
     Input("tr-max-conf", "value"),
     Input("tr-max-dur", "value"),
     Input("tr-max-lbl", "value"),
+    Input("tr-min-spikes", "value"),
+    Input("tr-max-spikes", "value"),
+    Input("tr-min-amp", "value"),
+    Input("tr-max-amp", "value"),
+    Input("tr-min-top-amp", "value"),
+    Input("tr-max-top-amp", "value"),
+    Input("tr-min-freq", "value"),
+    Input("tr-max-freq", "value"),
     Input("tr-prev-btn", "n_clicks"),
     Input("tr-next-btn", "n_clicks"),
     Input("tr-jump-to", "value"),
@@ -1555,6 +1740,8 @@ def save_channel_filter(val, sid):
 )
 def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
                   max_conf, max_dur, max_lbl,
+                  min_spikes, max_spikes, min_amp, max_amp,
+                  min_top_amp, max_top_amp, min_freq, max_freq,
                   prev_clicks, next_clicks, jump_to,
                   confirm_clicks, reject_clicks, skip_clicks,
                   kb_data, tr_yrange, tr_act_ymin, tr_act_ymax,
@@ -1564,7 +1751,7 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
     _no = no_update
     if mode != "review":
-        return _no, _no, _no, _no, _no, _no, _no, _no, _no
+        return _no, _no, _no, _no, _no, _no, _no, _no, _no, _no
 
     state = server_state.get_session(sid)
     if state.recording is None:
@@ -1590,7 +1777,9 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     # For all other triggers (buttons, keyboard) read from saved state so that
     # Dash's initial-value-on-unmounted-component quirk cannot reset filters.
     _filter_triggers = {"tr-filter-toggle", "tr-min-conf", "tr-min-dur",
-                        "tr-min-lbl", "tr-max-conf", "tr-max-dur", "tr-max-lbl"}
+                        "tr-min-lbl", "tr-max-conf", "tr-max-dur", "tr-max-lbl",
+                        "tr-min-spikes", "tr-max-spikes", "tr-min-amp", "tr-max-amp",
+                        "tr-min-top-amp", "tr-max-top-amp", "tr-min-freq", "tr-max-freq"}
     if trigger in _filter_triggers:
         state.extra["tr_filter_on"] = bool(filt_on)
         if min_conf is not None:
@@ -1599,10 +1788,22 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
             state.extra["tr_min_dur"] = min_dur
         if min_lbl is not None:
             state.extra["tr_min_lbl"] = min_lbl
+        if min_spikes is not None:
+            state.extra["tr_min_spikes"] = min_spikes
+        if min_amp is not None:
+            state.extra["tr_min_amp"] = min_amp
+        if min_top_amp is not None:
+            state.extra["tr_min_top_amp"] = min_top_amp
+        if min_freq is not None:
+            state.extra["tr_min_freq"] = min_freq
         # max values: None means "no limit" — always persist
         state.extra["tr_max_conf"] = max_conf
         state.extra["tr_max_dur"] = max_dur
         state.extra["tr_max_lbl"] = max_lbl
+        state.extra["tr_max_spikes"] = max_spikes
+        state.extra["tr_max_amp"] = max_amp
+        state.extra["tr_max_top_amp"] = max_top_amp
+        state.extra["tr_max_freq"] = max_freq
     else:
         # Use saved (reliable) filter values
         filt_on = state.extra.get("tr_filter_on", True)
@@ -1612,6 +1813,14 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
         max_conf = state.extra.get("tr_max_conf", None)
         max_dur = state.extra.get("tr_max_dur", None)
         max_lbl = state.extra.get("tr_max_lbl", None)
+        min_spikes = state.extra.get("tr_min_spikes", 0)
+        max_spikes = state.extra.get("tr_max_spikes", None)
+        min_amp = state.extra.get("tr_min_amp", 0)
+        max_amp = state.extra.get("tr_max_amp", None)
+        min_top_amp = state.extra.get("tr_min_top_amp", 0)
+        max_top_amp = state.extra.get("tr_max_top_amp", None)
+        min_freq = state.extra.get("tr_min_freq", 0)
+        max_freq = state.extra.get("tr_max_freq", None)
 
     rec = state.recording
     annotations = _get_annotations(state)
@@ -1619,13 +1828,17 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     if filt_on:
         filtered = _apply_annotation_filters(
             filtered, min_conf=min_conf, min_dur=min_dur, min_lbl=min_lbl,
-            max_conf=max_conf, max_dur=max_dur, max_lbl=max_lbl)
+            max_conf=max_conf, max_dur=max_dur, max_lbl=max_lbl,
+            min_spikes=min_spikes, max_spikes=max_spikes,
+            min_amp=min_amp, max_amp=max_amp,
+            min_top_amp=min_top_amp, max_top_amp=max_top_amp,
+            min_freq=min_freq, max_freq=max_freq)
 
     if not filtered:
         fig = go.Figure()
         apply_fig_theme(fig)
         fig.update_layout(height=400)
-        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False
+        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False, dbc.Row()
 
     current_idx = state.extra.get("tr_current_idx", 0)
 
@@ -1776,7 +1989,8 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
 
     video_seek = max(0, ev_onset - 10)
     is_convulsive = bool((event.features or {}).get("convulsive", False))
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive
+    props = _build_event_properties(rec, event)
+    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive, props
 
 
 # Clientside callback: seek the training video when event changes
@@ -2028,6 +2242,14 @@ def browse_channel_all_none(all_clicks, none_clicks, sid):
     Input("tr-max-conf", "value"),
     Input("tr-max-dur", "value"),
     Input("tr-max-lbl", "value"),
+    Input("tr-min-spikes", "value"),
+    Input("tr-max-spikes", "value"),
+    Input("tr-min-amp", "value"),
+    Input("tr-max-amp", "value"),
+    Input("tr-min-top-amp", "value"),
+    Input("tr-max-top-amp", "value"),
+    Input("tr-min-freq", "value"),
+    Input("tr-max-freq", "value"),
     Input("tr-annotations-version", "data"),
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -2036,6 +2258,8 @@ def update_browse_graph(mode, start_val, window_val, add_active, remove_active,
                         ch_filter, selected_channels,
                         filt_on, min_conf, min_dur, min_lbl,
                         max_conf, max_dur, max_lbl,
+                        min_spikes, max_spikes, min_amp, max_amp,
+                        min_top_amp, max_top_amp, min_freq, max_freq,
                         ann_version, sid):
     """Render the browse mode EEG plot with annotation overlays."""
     if mode != "browse":
@@ -2052,7 +2276,9 @@ def update_browse_graph(mode, start_val, window_val, add_active, remove_active,
     # Dash sending stale Input values after layout re-render)
     trigger = ctx.triggered_id
     _filter_triggers = {"tr-filter-toggle", "tr-min-conf", "tr-min-dur",
-                        "tr-min-lbl", "tr-max-conf", "tr-max-dur", "tr-max-lbl"}
+                        "tr-min-lbl", "tr-max-conf", "tr-max-dur", "tr-max-lbl",
+                        "tr-min-spikes", "tr-max-spikes", "tr-min-amp", "tr-max-amp",
+                        "tr-min-top-amp", "tr-max-top-amp", "tr-min-freq", "tr-max-freq"}
     if trigger in _filter_triggers:
         state.extra["tr_filter_on"] = bool(filt_on)
         if min_conf is not None:
@@ -2061,17 +2287,21 @@ def update_browse_graph(mode, start_val, window_val, add_active, remove_active,
             state.extra["tr_min_dur"] = min_dur
         if min_lbl is not None:
             state.extra["tr_min_lbl"] = min_lbl
+        if min_spikes is not None:
+            state.extra["tr_min_spikes"] = min_spikes
+        if min_amp is not None:
+            state.extra["tr_min_amp"] = min_amp
+        if min_top_amp is not None:
+            state.extra["tr_min_top_amp"] = min_top_amp
+        if min_freq is not None:
+            state.extra["tr_min_freq"] = min_freq
         state.extra["tr_max_conf"] = max_conf
         state.extra["tr_max_dur"] = max_dur
         state.extra["tr_max_lbl"] = max_lbl
-    else:
-        filt_on = state.extra.get("tr_filter_on", True)
-        min_conf = state.extra.get("tr_min_conf", 0)
-        min_dur = state.extra.get("tr_min_dur", 0)
-        min_lbl = state.extra.get("tr_min_lbl", 0)
-        max_conf = state.extra.get("tr_max_conf", None)
-        max_dur = state.extra.get("tr_max_dur", None)
-        max_lbl = state.extra.get("tr_max_lbl", None)
+        state.extra["tr_max_spikes"] = max_spikes
+        state.extra["tr_max_amp"] = max_amp
+        state.extra["tr_max_top_amp"] = max_top_amp
+        state.extra["tr_max_freq"] = max_freq
 
     rec = state.recording
     annotations = _get_annotations(state)

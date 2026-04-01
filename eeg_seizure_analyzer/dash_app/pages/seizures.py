@@ -131,7 +131,7 @@ def layout(sid: str | None) -> html.Div:
     # Persisted dropdown values
     persisted_bl_method = state.extra.get("sz_bl_method", "percentile")
     persisted_bnd_method = state.extra.get("sz_bnd_method", "signal")
-    persisted_classify = state.extra.get("sz_classify_subtypes", False)
+    persisted_classify = False  # subtype classification removed
     if overrides:
         persisted_bl_method = overrides.get("sz-bl-method", persisted_bl_method)
         persisted_bnd_method = overrides.get("sz-bnd-method", persisted_bnd_method)
@@ -169,6 +169,7 @@ def layout(sid: str | None) -> html.Div:
             rec, filtered, persisted_classify,
             selected_event_key=selected_event_key,
             all_channels=persisted_channels,
+            n_total=len(state.seizure_events),
         )
 
     return html.Div(
@@ -218,8 +219,17 @@ def layout(sid: str | None) -> html.Div:
 
             dbc.Row([
                 dbc.Col([_boundary_params(_val, persisted_bnd_method)], width=6),
-                dbc.Col([_subtype_params(_val, persisted_classify)], width=6),
             ], className="g-3 mb-3"),
+
+            # Hidden: subtype params (kept for callback compatibility —
+            # the detect callback still reads these param-slider States)
+            html.Div(
+                children=[
+                    dbc.Checkbox(id="sz-classify-subtypes", value=False),
+                    _subtype_params(_val, classify_on=False),
+                ],
+                style={"display": "none"},
+            ),
 
             # Action buttons
             html.Div(
@@ -354,20 +364,11 @@ def _confidence_filter_controls(visible: bool, rec=None, fv=None,
                         style={"fontSize": "0.8rem"},
                     ),
                 ], width=2),
-                dbc.Col([
-                    html.Label("Severity", style={"fontSize": "0.75rem", "color": "#8b949e"}),
-                    dcc.Dropdown(
-                        id="sz-filter-severity",
-                        options=[
-                            {"label": "All", "value": ""},
-                            {"label": "Mild", "value": "mild"},
-                            {"label": "Moderate", "value": "moderate"},
-                            {"label": "Severe", "value": "severe"},
-                        ],
-                        value=fv.get("severity", ""), clearable=False,
-                        style={"fontSize": "0.8rem"},
-                    ),
-                ], width=2),
+                # Hidden: severity filter (kept for callback compatibility)
+                html.Div(
+                    dcc.Dropdown(id="sz-filter-severity", value="", clearable=False),
+                    style={"display": "none"},
+                ),
             ], className="g-2"),
             # Hidden filters — kept for callback compatibility / future use
             html.Div(style={"display": "none"}, children=[
@@ -896,10 +897,11 @@ def run_detection(
         # Update detected_events so viewer shadows reflect the filtered set
         state.detected_events = filtered + state.spike_events
         selected_ek = state.extra.get("sz_selected_event_key")
+        n_total = len(state.seizure_events)
         results = _build_results(rec, filtered, classify_subtypes,
                                  selected_event_key=selected_ek,
-                                 all_channels=selected_channels)
-        n_total = len(state.seizure_events)
+                                 all_channels=selected_channels,
+                                 n_total=n_total)
         n_shown = len(filtered)
         status = alert(f"Showing {n_shown} of {n_total} seizure(s) after filtering.", "info")
         return status, results, show_style, block_style, insp_block
@@ -1152,7 +1154,8 @@ def run_detection(
         # Update detected_events with filtered set so viewer shows only these
         state.detected_events = filtered + state.spike_events
         results = _build_results(rec, filtered, classify_subtypes,
-                                 all_channels=selected_channels)
+                                 all_channels=selected_channels,
+                                 n_total=len(seizures))
         n_ch = len(selected_channels)
 
         return (
@@ -1327,46 +1330,33 @@ def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid
 
 
 def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
-                    all_channels=None):
-    """Build the results display (metrics + table)."""
+                    all_channels=None, n_total=None):
+    """Build the results display (summary line + table)."""
     if not seizures:
         return empty_state("\u2714", "No Seizures Found",
                            "No seizure events match the current parameters / filters.")
 
-    from eeg_seizure_analyzer.detection.burden import compute_burden
-
-    # Compute per-channel metrics — show ALL selected channels
-    channels_with_results = set(e.channel for e in seizures)
-    if all_channels is None:
-        all_channels = sorted(channels_with_results)
-    else:
-        all_channels = sorted(all_channels)
-
-    metric_rows = []
-    for ch in all_channels:
-        ch_name = rec.channel_names[ch] if ch < len(rec.channel_names) else f"Ch{ch}"
-        if ch in channels_with_results:
-            burden = compute_burden(seizures, rec.duration_sec, channel=ch)
-            metric_rows.append(
-                dbc.Row([
-                    dbc.Col(metric_card(ch_name, str(burden.n_seizures), accent=True), width=2),
-                    dbc.Col(metric_card("Total Time", f"{burden.total_seizure_time_sec:.1f}s"), width=2),
-                    dbc.Col(metric_card("Per Hour", f"{burden.seizure_frequency_per_hour:.2f}"), width=2),
-                    dbc.Col(metric_card("% Time", f"{burden.percent_time_in_seizure:.2f}%"), width=2),
-                    dbc.Col(metric_card("Mean Dur", f"{burden.mean_duration_sec:.1f}s"), width=2),
-                ], className="g-3 mb-2")
-            )
-        else:
-            metric_rows.append(
-                dbc.Row([
-                    dbc.Col(metric_card(ch_name, "0", accent=False), width=2),
-                    dbc.Col(metric_card("Total Time", "-"), width=2),
-                    dbc.Col(metric_card("Per Hour", "-"), width=2),
-                    dbc.Col(metric_card("% Time", "-"), width=2),
-                    dbc.Col(metric_card("Mean Dur", "-"), width=2),
-                ], className="g-3 mb-2")
-            )
-    metrics = html.Div(metric_rows)
+    n_shown = len(seizures)
+    n_all = n_total if n_total is not None else n_shown
+    summary = html.Div(
+        style={"display": "flex", "alignItems": "center", "gap": "16px",
+               "marginBottom": "12px", "padding": "8px 16px",
+               "background": "#161b22", "borderRadius": "8px",
+               "border": "1px solid #2d333b"},
+        children=[
+            html.Span(
+                f"Total detected: {n_all}",
+                style={"fontSize": "0.88rem", "fontWeight": "600",
+                       "color": "#c9d1d9"},
+            ),
+            html.Span("\u2022", style={"color": "#484f58"}),
+            html.Span(
+                f"Shown after filtering: {n_shown}",
+                style={"fontSize": "0.88rem", "fontWeight": "500",
+                       "color": "#58a6ff" if n_shown < n_all else "#c9d1d9"},
+            ),
+        ],
+    )
 
     # Table data with all quality metric columns
     # Include a hidden _event_key for stable event identification across filters
@@ -1404,10 +1394,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
             "Spec Ent": round(qm.get("spectral_entropy", 0), 1),
             "Peak Freq": round(qm.get("dominant_freq_hz", 0), 1),
             "\u03b8/\u03b4": round(qm.get("theta_delta_ratio", 0), 2),
-            "Severity": e.severity,
         }
-        if classify_on:
-            row["Type"] = feat.get("seizure_subtype", "\u2014")
         table_data.append(row)
         if selected_event_key and ek == selected_event_key:
             selected_rows = [row]
@@ -1429,7 +1416,6 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
          "headerTooltip": "Signal-to-local-baseline ratio (pre-ictal comparison)"},
         {"field": "Top Amp", "flex": 1, "minWidth": 60,
          "headerTooltip": "Top 10% spike amplitude (\u00d7baseline)"},
-        {"field": "Severity", "flex": 1, "minWidth": 65},
         # Hidden columns — kept for ML export / future use
         {"field": "LL (z)", "hide": True},
         {"field": "Energy (z)", "hide": True},
@@ -1438,9 +1424,6 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         {"field": "Peak Freq", "hide": True},
         {"field": "\u03b8/\u03b4", "hide": True},
     ]
-    if classify_on:
-        col_defs.append({"field": "Type", "flex": 1, "minWidth": 65})
-
     grid_props = {
         "animateRows": False,
         "rowSelection": {"mode": "singleRow"},
@@ -1471,7 +1454,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
     )
 
     return html.Div([
-        metrics,
+        summary,
         html.Div(
             style={"display": "flex", "alignItems": "center", "justifyContent": "space-between",
                    "marginBottom": "12px"},
@@ -1811,9 +1794,8 @@ def _render_inspector(rec, event, det_info, state, *,
         dbc.Col(metric_card("Channel", ch_name), width=2),
         dbc.Col(metric_card("Onset", f"{onset:.2f}s"), width=2),
         dbc.Col(metric_card("Duration", f"{event.duration_sec:.2f}s"), width=2),
-        dbc.Col(metric_card("Spikes", str(features.get("n_spikes", 0))), width=2),
+        dbc.Col(metric_card("Spikes", str(features.get("n_spikes", "\u2014"))), width=2),
         dbc.Col(metric_card("Confidence", f"{event.confidence:.2f}"), width=2),
-        dbc.Col(metric_card("Severity", event.severity), width=2),
     ], className="g-3 mb-3")
 
     # ── Video player (if available) ────────────────────────────────
