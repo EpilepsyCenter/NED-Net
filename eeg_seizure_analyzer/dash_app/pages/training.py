@@ -35,11 +35,19 @@ def _get_annotations(state) -> list[AnnotatedEvent]:
     if not raw:
         return []
     out: list[AnnotatedEvent] = []
+    seen: set[tuple[float, int, str]] = set()
     for item in raw:
         if isinstance(item, AnnotatedEvent):
-            out.append(item)
+            ann = item
         elif isinstance(item, dict):
-            out.append(AnnotatedEvent.from_dict(item))
+            ann = AnnotatedEvent.from_dict(item)
+        else:
+            continue
+        # Deduplicate by (onset_sec rounded, channel, source)
+        key = (round(ann.onset_sec, 4), ann.channel, ann.source)
+        if key not in seen:
+            seen.add(key)
+            out.append(ann)
     return out
 
 
@@ -168,6 +176,62 @@ def _apply_annotation_filters(annotations: list[AnnotatedEvent], *,
                     if (a.features or {}).get("mean_spike_frequency_hz") is None
                     or (a.features or {}).get("mean_spike_frequency_hz", 0) <= max_freq]
     return filtered
+
+
+def _recompute_activity_zscore(state, ann):
+    """Recompute activity z-score for an annotation after boundary change."""
+    act_rec = state.activity_recordings.get("paired")
+    pairings = state.channel_pairings or []
+    if act_rec is None or not pairings:
+        return
+
+    # Find the activity channel paired to this annotation's EEG channel
+    act_idx = None
+    for p in pairings:
+        if p.eeg_index == ann.channel and p.activity_index is not None:
+            act_idx = p.activity_index
+            break
+    if act_idx is None:
+        return
+
+    try:
+        import numpy as _np
+        act_data = act_rec.data[act_idx]
+        act_fs = act_rec.fs
+        pad_sec = 2.0
+
+        # Global stats for z-score
+        abs_act = _np.abs(act_data)
+        global_mean = float(_np.mean(abs_act))
+        global_std = float(_np.std(abs_act))
+        if global_std < 1e-12:
+            return
+
+        # Event window
+        start = max(0, int((ann.onset_sec - pad_sec) * act_fs))
+        end = min(len(act_data), int((ann.offset_sec + pad_sec) * act_fs))
+        if end <= start:
+            return
+
+        event_mean = float(_np.mean(_np.abs(act_data[start:end])))
+        z = (event_mean - global_mean) / global_std
+
+        if ann.features is None:
+            ann.features = {}
+        ann.features["activity_zscore"] = round(z, 2)
+        ann.features["mean_activity"] = round(event_mean, 4)
+
+        # Also update the matching seizure event in state
+        for ev in state.seizure_events:
+            if ev.channel == ann.channel and abs(ev.onset_sec - ann.onset_sec) < 0.01:
+                if ev.features is None:
+                    ev.features = {}
+                ev.features["activity_zscore"] = round(z, 2)
+                ev.features["mean_activity"] = round(event_mean, 4)
+                break
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 def _sync_boundary_to_seizure_events(state, channel: int,
@@ -321,6 +385,52 @@ def _label_badge(label: str) -> html.Span:
     )
 
 
+def _build_annotation_counts(counts, counts_filtered, progress_pct,
+                             ch_counts, filter_on):
+    """Build the annotation progress section at the bottom of the page."""
+    return html.Div(
+        style={"marginBottom": "16px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "justifyContent": "space-between",
+                       "marginBottom": "4px"},
+                children=[
+                    html.Span(
+                        f"{counts_filtered['confirmed']} confirmed, "
+                        f"{counts_filtered['rejected']} rejected, "
+                        f"{counts_filtered['pending']} pending"
+                        + (f" (of {counts['total']} total)"
+                           if filter_on else ""),
+                        style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                    html.Span(f"{progress_pct}%",
+                              style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                ],
+            ),
+            dbc.Progress(
+                value=progress_pct,
+                style={"height": "6px", "backgroundColor": "#2d333b"},
+                color="success" if progress_pct >= 80 else (
+                    "warning" if progress_pct >= 40 else "info"
+                ),
+            ),
+            # Per-channel counts
+            html.Div(
+                style={"display": "flex", "gap": "16px", "marginTop": "6px",
+                       "flexWrap": "wrap"},
+                children=[
+                    html.Span(
+                        f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
+                        style={"fontSize": "0.72rem", "color": "#8b949e",
+                               "border": "1px solid #2d333b",
+                               "borderRadius": "8px", "padding": "1px 8px"},
+                    )
+                    for ch_name, cc in ch_counts.items()
+                ],
+            ),
+        ],
+    )
+
+
 def _event_badge(event) -> html.Span:
     """Label badge + optional activity z-score indicator."""
     children = [_label_badge(event.label)]
@@ -435,6 +545,36 @@ def _training_video_player(state, sid, onset_sec):
             ),
         ],
     )
+
+
+def _initial_spectral_row(rec, current_event, state):
+    """Pre-render spectral plots for layout, or empty placeholders."""
+    if current_event and rec is not None:
+        try:
+            fig_spec, fig_bp = _build_spectral_plots(rec, current_event, state)
+        except Exception:
+            fig_spec, fig_bp = go.Figure(), go.Figure()
+    else:
+        fig_spec, fig_bp = go.Figure(), go.Figure()
+
+    return [
+        dbc.Col([
+            html.Div("Spectrogram",
+                     style={"fontSize": "0.82rem", "fontWeight": "600",
+                            "color": "#8b949e", "marginBottom": "4px",
+                            "marginTop": "16px"}),
+            dcc.Graph(id="tr-spectrogram", figure=fig_spec,
+                      config={"scrollZoom": True}),
+        ], width=6),
+        dbc.Col([
+            html.Div("Power Over Time",
+                     style={"fontSize": "0.82rem", "fontWeight": "600",
+                            "color": "#8b949e", "marginBottom": "4px",
+                            "marginTop": "16px"}),
+            dcc.Graph(id="tr-band-power", figure=fig_bp,
+                      config={"scrollZoom": True}),
+        ], width=6),
+    ]
 
 
 # ── Review Mode Plot ──────────────────────────────────────────────────
@@ -643,6 +783,114 @@ def _build_review_figure(rec, event: AnnotatedEvent, state,
     fig.update_layout(margin=dict(l=60, r=20, t=10, b=40))
 
     return fig
+
+
+def _build_spectral_plots(rec, event: AnnotatedEvent, state,
+                          bp_low=1.0, bp_high=50.0):
+    """Build spectrogram + band-power-over-time figures for training inspector.
+
+    Returns (fig_spectrogram, fig_band_power).
+    Mirrors the seizure inspector implementation exactly.
+    """
+    from scipy.signal import spectrogram as scipy_spectrogram, welch
+
+    context_sec = 10.0
+    ch = event.channel
+    onset, offset = event.onset_sec, event.offset_sec
+
+    win_start = max(0, onset - context_sec)
+    win_end = min(rec.duration_sec, offset + context_sec)
+
+    start_idx = int(win_start * rec.fs)
+    end_idx = min(int(win_end * rec.fs), rec.n_samples)
+    data = rec.data[ch, start_idx:end_idx].astype(np.float64)
+    data = bandpass_filter(data, rec.fs, bp_low, bp_high)
+
+    unit_label = rec.units[ch] if ch < len(rec.units) else ""
+
+    # ── Spectrogram ─────────────────────────────────────────────
+    nperseg = min(int(1.0 * rec.fs), len(data) // 4)
+    nperseg = max(nperseg, 64)
+    noverlap = int(nperseg * 0.9)
+
+    f_spec, t_spec, Sxx = scipy_spectrogram(
+        data, fs=rec.fs, nperseg=nperseg, noverlap=noverlap)
+    t_spec = t_spec + win_start
+
+    freq_mask = f_spec <= 100
+    f_spec = f_spec[freq_mask]
+    Sxx = Sxx[freq_mask, :]
+    Sxx_db = 10 * np.log10(Sxx + 1e-12)
+
+    fig_spec = go.Figure(go.Heatmap(
+        x=t_spec, y=f_spec, z=Sxx_db,
+        colorscale="Viridis",
+        colorbar=dict(title="dB", len=0.8),
+        hovertemplate="Time: %{x:.2f}s<br>Freq: %{y:.1f}Hz<br>Power: %{z:.1f}dB<extra></extra>",
+    ))
+    fig_spec.add_vline(x=onset, line=dict(color="#f85149", width=1.5, dash="dash"))
+    fig_spec.add_vline(x=offset, line=dict(color="#f85149", width=1.5, dash="dash"))
+    fig_spec.update_layout(
+        height=250, xaxis_title="Time (s)", yaxis_title="Frequency (Hz)",
+        showlegend=False, uirevision=f"tr_spec_{onset}_{ch}",
+    )
+    apply_fig_theme(fig_spec)
+    fig_spec.update_layout(margin=dict(l=60, r=20, t=30, b=40))
+
+    # ── Power Over Time (absolute, stacked area) ────────────────
+    bands = {
+        "Delta (0.5-4)": (0.5, 4, "#1f77b4"),
+        "Theta (4-8)": (4, 8, "#ff7f0e"),
+        "Alpha (8-13)": (8, 13, "#2ca02c"),
+        "Beta (13-30)": (13, 30, "#d62728"),
+        "Gamma-low (30-50)": (30, 50, "#9467bd"),
+        "Gamma-high (50-100)": (50, 100, "#8c564b"),
+    }
+
+    win_samples = int(2.0 * rec.fs)
+    step_samples = int(1.0 * rec.fs)
+    band_power_data = {name: [] for name in bands}
+    bp_times = []
+
+    for start_s in range(0, max(1, len(data) - win_samples), step_samples):
+        end_s = start_s + win_samples
+        segment = data[start_s:end_s]
+        bp_times.append(win_start + (start_s + win_samples / 2) / rec.fs)
+
+        f_welch, psd = welch(segment, fs=rec.fs,
+                             nperseg=min(win_samples, len(segment)))
+        for name, (flo, fhi, _) in bands.items():
+            mask = (f_welch >= flo) & (f_welch <= fhi)
+            bp = np.trapezoid(psd[mask], f_welch[mask]) if mask.sum() > 1 else 0.0
+            band_power_data[name].append(bp)
+
+    fig_bp = go.Figure()
+    for name, (_, _, color) in bands.items():
+        fig_bp.add_trace(go.Scatter(
+            x=bp_times, y=band_power_data[name],
+            name=name, mode="lines",
+            line=dict(color=color),
+            stackgroup="bands",
+        ))
+
+    fig_bp.add_vline(x=onset, line=dict(color="#f85149", width=1.5, dash="dash"))
+    fig_bp.add_vline(x=offset, line=dict(color="#f85149", width=1.5, dash="dash"))
+
+    power_unit = f"{unit_label}\u00b2/Hz" if unit_label else "Power"
+    fig_bp.update_layout(
+        height=250,
+        xaxis_title="Time (s)",
+        yaxis_title=f"Power ({power_unit})",
+        yaxis_rangemode="tozero",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+                    font=dict(size=10)),
+        uirevision=f"tr_bp_{onset}_{ch}",
+    )
+    apply_fig_theme(fig_bp)
+    fig_bp.update_layout(margin=dict(l=60, r=20, t=30, b=40))
+
+    return fig_spec, fig_bp
 
 
 # ── Browse Mode Plot ──────────────────────────────────────────────────
@@ -1350,6 +1598,12 @@ def layout(sid: str | None) -> html.Div:
                     _training_video_player(state, sid,
                                           current_event.onset_sec if current_event else 0),
 
+                    # Spectral plots (spectrogram + power over time)
+                    dbc.Row(
+                        id="tr-spectral-row",
+                        children=_initial_spectral_row(rec, current_event, state),
+                    ),
+
                     # Notes textarea
                     html.Div(
                         style={"marginBottom": "16px"},
@@ -1559,45 +1813,11 @@ def layout(sid: str | None) -> html.Div:
             # ── Annotation Counts (at end of page) ─────────────────────
             html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0 12px 0"}),
             html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Div(
-                        style={"display": "flex", "justifyContent": "space-between",
-                               "marginBottom": "4px"},
-                        children=[
-                            html.Span(
-                                f"{counts_filtered['confirmed']} confirmed, "
-                                f"{counts_filtered['rejected']} rejected, "
-                                f"{counts_filtered['pending']} pending"
-                                + (f" (of {counts['total']} total)"
-                                   if tr_filter_on else ""),
-                                style={"fontSize": "0.78rem", "color": "#8b949e"}),
-                            html.Span(f"{progress_pct}%",
-                                      style={"fontSize": "0.78rem", "color": "#8b949e"}),
-                        ],
-                    ),
-                    dbc.Progress(
-                        value=progress_pct,
-                        style={"height": "6px", "backgroundColor": "#2d333b"},
-                        color="success" if progress_pct >= 80 else (
-                            "warning" if progress_pct >= 40 else "info"
-                        ),
-                    ),
-                    # Per-channel counts
-                    html.Div(
-                        style={"display": "flex", "gap": "16px", "marginTop": "6px",
-                               "flexWrap": "wrap"},
-                        children=[
-                            html.Span(
-                                f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
-                                style={"fontSize": "0.72rem", "color": "#8b949e",
-                                       "border": "1px solid #2d333b",
-                                       "borderRadius": "8px", "padding": "1px 8px"},
-                            )
-                            for ch_name, cc in ch_counts.items()
-                        ],
-                    ),
-                ],
+                id="tr-annotation-counts",
+                children=_build_annotation_counts(
+                    counts, counts_filtered, progress_pct,
+                    ch_counts, tr_filter_on,
+                ),
             ),
         ],
     )
@@ -1702,6 +1922,9 @@ def save_channel_filter(val, sid):
     Output("tr-video-seek", "data"),
     Output("tr-convulsive-toggle", "value"),
     Output("tr-event-properties", "children"),
+    Output("tr-annotation-counts", "children"),
+    Output("tr-spectrogram", "figure"),
+    Output("tr-band-power", "figure"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-filter-toggle", "value"),
@@ -1749,13 +1972,14 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
                   onset_input, offset_input,
                   notes_val, sid):
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
+    _N_OUT = 13  # number of outputs
     _no = no_update
     if mode != "review":
-        return _no, _no, _no, _no, _no, _no, _no, _no, _no, _no
+        return (_no,) * _N_OUT
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False
+        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure()
 
     trigger = ctx.triggered_id
 
@@ -1838,7 +2062,10 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
         fig = go.Figure()
         apply_fig_theme(fig)
         fig.update_layout(height=400)
-        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False, dbc.Row()
+        empty_counts = _build_annotation_counts(
+            _progress_counts(annotations), _progress_counts([]),
+            0, {}, filt_on)
+        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), empty_counts, go.Figure(), go.Figure()
 
     current_idx = state.extra.get("tr_current_idx", 0)
 
@@ -1912,6 +2139,8 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
                                 ann.original_offset_sec = event.offset_sec
                             ann.onset_sec = new_on
                             ann.offset_sec = new_off
+                    # Recompute activity z-score for new boundaries
+                    _recompute_activity_zscore(state, ann)
                     # Propagate boundary changes to seizure_events (Seizure tab)
                     _sync_boundary_to_seizure_events(
                         state, ann.channel, event.onset_sec, ann.onset_sec, ann.offset_sec)
@@ -1921,7 +2150,12 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
             filtered = _filter_by_channel(annotations, ch_filter)
             if filt_on:
                 filtered = _apply_annotation_filters(
-                    filtered, min_conf=min_conf, min_dur=min_dur, min_lbl=min_lbl)
+                    filtered, min_conf=min_conf, min_dur=min_dur, min_lbl=min_lbl,
+                    max_conf=max_conf, max_dur=max_dur, max_lbl=max_lbl,
+                    min_spikes=min_spikes, max_spikes=max_spikes,
+                    min_amp=min_amp, max_amp=max_amp,
+                    min_top_amp=min_top_amp, max_top_amp=max_top_amp,
+                    min_freq=min_freq, max_freq=max_freq)
             # Auto-advance to next pending
             next_pending = _find_next_pending(filtered, current_idx)
             if next_pending is not None:
@@ -1990,7 +2224,30 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     video_seek = max(0, ev_onset - 10)
     is_convulsive = bool((event.features or {}).get("convulsive", False))
     props = _build_event_properties(rec, event)
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive, props
+
+    # Recompute annotation counts
+    _all_counts = _progress_counts(annotations)
+    _filt_counts = _progress_counts(filtered)
+    _total = _all_counts["total"]
+    _reviewed = _filt_counts["confirmed"] + _filt_counts["rejected"]
+    _pct = int(100 * _reviewed / len(filtered)) if filtered else 0
+    _ch_counts = {}
+    for _a in filtered:
+        _chn = rec.channel_names[_a.channel] if _a.channel < len(rec.channel_names) else f"Ch{_a.channel}"
+        if _chn not in _ch_counts:
+            _ch_counts[_chn] = {"confirmed": 0, "rejected": 0, "pending": 0}
+        _lbl = _a.label if _a.label in ("confirmed", "rejected") else "pending"
+        _ch_counts[_chn][_lbl] += 1
+    ann_counts = _build_annotation_counts(
+        _all_counts, _filt_counts, _pct, _ch_counts, filt_on)
+
+    # Build spectral plots
+    try:
+        fig_spec, fig_bp = _build_spectral_plots(rec, event, state)
+    except Exception:
+        fig_spec, fig_bp = go.Figure(), go.Figure()
+
+    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp
 
 
 # Clientside callback: seek the training video when event changes
@@ -2030,6 +2287,8 @@ def _find_next_pending(filtered: list[AnnotatedEvent], current_idx: int):
     Output("tr-onset-input", "value", allow_duplicate=True),
     Output("tr-offset-input", "value", allow_duplicate=True),
     Output("tr-duration-display", "children", allow_duplicate=True),
+    Output("tr-event-status", "children", allow_duplicate=True),
+    Output("tr-event-properties", "children", allow_duplicate=True),
     Input("tr-review-graph", "relayoutData"),
     State("tr-channel-filter", "value"),
     State("session-id", "data"),
@@ -2037,12 +2296,13 @@ def _find_next_pending(filtered: list[AnnotatedEvent], current_idx: int):
 )
 def handle_boundary_adjustment(relayout_data, ch_filter, sid):
     """Update annotation boundaries when shapes are dragged."""
+    _n_out = 6
     if not relayout_data:
-        return no_update, no_update, no_update, no_update
+        return (no_update,) * _n_out
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return no_update, no_update, no_update, no_update
+        return (no_update,) * _n_out
 
     annotations = _get_annotations(state)
     # Apply SAME filters as update_review so current_idx matches
@@ -2057,9 +2317,10 @@ def handle_boundary_adjustment(relayout_data, ch_filter, sid):
     current_idx = state.extra.get("tr_current_idx", 0)
 
     if not filtered or current_idx >= len(filtered):
-        return no_update, no_update, no_update, no_update
+        return (no_update,) * _n_out
 
     event = filtered[current_idx]
+    rec = state.recording
 
     # Parse shape edits from relayoutData.
     # The highlight rect is shapes[0]; x0=onset, x1=offset.
@@ -2085,7 +2346,7 @@ def handle_boundary_adjustment(relayout_data, ch_filter, sid):
                 break
 
     if new_onset is None and new_offset is None:
-        return no_update, no_update, no_update, no_update
+        return (no_update,) * _n_out
 
     # Update the matching annotation in the full list
     for ann in annotations:
@@ -2107,17 +2368,24 @@ def handle_boundary_adjustment(relayout_data, ch_filter, sid):
 
             ann.annotated_at = datetime.now(timezone.utc).isoformat()
 
+            # Recompute activity z-score for new boundaries
+            _recompute_activity_zscore(state, ann)
+
             # Return updated values for onset/offset inputs
             _auto_save(state, annotations)
             dur = f"({ann.offset_sec - ann.onset_sec:.2f}s)"
+            badge = _event_badge(ann)
+            props = _build_event_properties(rec, ann)
             return (
                 alert("Boundaries updated", "success"),
                 round(ann.onset_sec, 3),
                 round(ann.offset_sec, 3),
                 dur,
+                badge,
+                props,
             )
 
-    return no_update, no_update, no_update, no_update
+    return (no_update,) * _n_out
 
 
 # ── Notes Save ────────────────────────────────────────────────────────

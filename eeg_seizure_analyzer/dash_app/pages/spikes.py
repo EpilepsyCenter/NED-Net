@@ -660,6 +660,20 @@ def run_spike_detection(
     if trigger != "sp-detect-btn":
         return no_update, no_update, no_update, no_update, no_update, no_update, no_update
 
+    # Warn if Animal IDs not assigned
+    ch_ids = state.extra.get("channel_animal_ids", {})
+    sel_channels = selected_channels or list(range(rec.n_channels))
+    missing_ids = [ch for ch in sel_channels if ch not in ch_ids or not ch_ids[ch]]
+    if missing_ids:
+        return (
+            alert(
+                f"Animal IDs not assigned for channel(s): {missing_ids}. "
+                "Go to the Load tab and fill in the Animal ID column before detecting.",
+                "warning",
+            ),
+            no_update, no_update, no_update, no_update, no_update, no_update,
+        )
+
     try:
         from eeg_seizure_analyzer.detection.spike import SpikeDetector
         from eeg_seizure_analyzer.io.persistence import save_spike_detections
@@ -709,6 +723,13 @@ def run_spike_detection(
                 all_spikes.extend(ch_spikes)
                 if hasattr(detector, "_last_detection_info"):
                     detection_info[ch] = dict(detector._last_detection_info)
+
+        # Assign animal IDs from channel mapping
+        ch_ids = state.extra.get("channel_animal_ids", {})
+        for ev in all_spikes:
+            aid = ch_ids.get(ev.channel, "")
+            if aid:
+                ev.animal_id = aid
 
         state.spike_events = all_spikes
         state.sp_detection_info = detection_info

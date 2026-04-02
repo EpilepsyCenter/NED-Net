@@ -238,6 +238,17 @@ def layout(sid: str | None) -> html.Div:
                 children=[
                     dbc.Button("Detect Seizures", id="sz-detect-btn",
                                className="btn-ned-primary"),
+                    dbc.Button(
+                        "\U0001F4C1 Detect All Files",
+                        id="sz-detect-all-btn",
+                        style={"display": "inline-block"
+                               if state.extra.get("project_files")
+                               else "none",
+                               "backgroundColor": "#238636",
+                               "borderColor": "#238636",
+                               "color": "#ffffff",
+                               "fontWeight": "600"},
+                    ),
                     dbc.Button("Clear Results", id="sz-clear-btn",
                                className="btn-ned-danger",
                                style={"display": "inline-block" if has_results else "none"}),
@@ -257,6 +268,12 @@ def layout(sid: str | None) -> html.Div:
                                       "display": "inline-block" if has_results else "none"}),
                 ],
             ),
+
+            # Detect All progress area
+            html.Div(id="sz-detect-all-status", style={"marginBottom": "8px"}),
+            # Hidden interval + store for polling Detect All progress
+            dcc.Interval(id="sz-detect-all-poll", interval=800, disabled=True),
+            dcc.Store(id="sz-detect-all-running", data=False),
 
             html.Div(id="sz-settings-status", style={"marginBottom": "8px"}),
 
@@ -923,6 +940,19 @@ def run_detection(
             no_update, no_update, no_update, no_update,
         )
 
+    # Warn if Animal IDs not assigned
+    ch_ids = state.extra.get("channel_animal_ids", {})
+    missing_ids = [ch for ch in selected_channels if ch not in ch_ids or not ch_ids[ch]]
+    if missing_ids:
+        return (
+            alert(
+                f"Animal IDs not assigned for channel(s): {missing_ids}. "
+                "Go to the Load tab and fill in the Animal ID column before detecting.",
+                "warning",
+            ),
+            no_update, no_update, no_update, no_update,
+        )
+
     try:
         from eeg_seizure_analyzer.detection.spike_train_seizure import (
             SpikeTrainSeizureDetector,
@@ -1068,6 +1098,13 @@ def run_detection(
         seizures.sort(key=lambda e: (e.channel, e.onset_sec))
         for i, ev in enumerate(seizures, start=1):
             ev.event_id = i
+
+        # Assign animal IDs from channel mapping
+        ch_ids = state.extra.get("channel_animal_ids", {})
+        for ev in seizures:
+            aid = ch_ids.get(ev.channel, "")
+            if aid:
+                ev.animal_id = aid
 
         # ── Activity channel z-score ──────────────────────────────
         # If paired activity channels exist, compute activity z-score
@@ -1473,6 +1510,359 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         ),
         table,
     ])
+
+
+# ── Detect All Files — threaded with progress polling ─────────────
+
+import json as _json
+import threading
+from pathlib import Path as _Path
+
+_DETECT_ALL_PROGRESS_DIR = _Path.home() / ".eeg_seizure_analyzer" / "cache"
+
+
+def _progress_path(sid: str) -> _Path:
+    """Return the progress file path for a session."""
+    _DETECT_ALL_PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    return _DETECT_ALL_PROGRESS_DIR / f"detect_all_{sid}.json"
+
+
+def _write_progress(sid: str, current: int, total: int,
+                    current_file: str, events_so_far: int,
+                    done: bool = False, error_msg: str = ""):
+    """Write progress info to a JSON file for polling."""
+    _json.dump(
+        {"current": current, "total": total, "file": current_file,
+         "events": events_so_far, "done": done, "error": error_msg},
+        open(_progress_path(sid), "w"),
+    )
+
+
+def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
+    """Run detection on all project files in a background thread."""
+    from eeg_seizure_analyzer.detection.spike_train_seizure import (
+        SpikeTrainSeizureDetector,
+    )
+    from eeg_seizure_analyzer.detection.confidence import (
+        compute_event_quality,
+        compute_confidence_score,
+        compute_local_baseline_ratio,
+        compute_top_spike_amplitude,
+    )
+    from eeg_seizure_analyzer.io.edf_reader import (
+        scan_edf_channels, read_edf, read_edf_paired, auto_pair_channels,
+    )
+    from eeg_seizure_analyzer.io.persistence import save_detections
+    from eeg_seizure_analyzer.io.channel_ids import load_channel_ids
+    from eeg_seizure_analyzer.io.annotation_store import (
+        detections_to_annotations, merge_annotations,
+        load_annotations, save_annotations,
+    )
+
+    def _p(key):
+        return sz_params.get(key, _SZ_DEFAULTS.get(key))
+
+    params = SpikeTrainSeizureParams(
+        bandpass_low=float(_p("sz-bp-low")),
+        bandpass_high=float(_p("sz-bp-high")),
+        spike_amplitude_x_baseline=float(_p("sz-spike-amp")),
+        spike_min_amplitude_uv=float(_p("sz-spike-min-uv")),
+        spike_prominence_x_baseline=float(_p("sz-spike-prom")),
+        spike_max_width_ms=float(_p("sz-spike-maxw")),
+        spike_min_width_ms=float(_p("sz-spike-minw")),
+        spike_refractory_ms=float(_p("sz-spike-refr")),
+        max_interspike_interval_ms=float(_p("sz-max-isi")),
+        min_train_spikes=int(_p("sz-min-spikes")),
+        min_train_duration_sec=float(_p("sz-min-dur")),
+        min_interevent_interval_sec=float(_p("sz-min-iei")),
+        baseline_method=sz_params.get("sz-bl-method", "percentile"),
+        baseline_percentile=int(_p("sz-bl-pct")),
+        baseline_rms_window_sec=float(_p("sz-bl-rms")),
+        boundary_method=sz_params.get("sz-bnd-method", "rms"),
+        boundary_rms_window_ms=float(_p("sz-bnd-rms-win")),
+        boundary_rms_threshold_x=float(_p("sz-bnd-rms-thr")),
+        boundary_max_trim_sec=float(_p("sz-bnd-max-trim")),
+        boundary_window_sec=float(_p("sz-bnd-window")),
+        boundary_min_rate_hz=float(_p("sz-bnd-rate")),
+        boundary_min_amplitude_x=float(_p("sz-bnd-amp-x")),
+        hvsw_min_amplitude_x=float(_p("sz-hvsw-amp")),
+        hvsw_min_frequency_hz=float(_p("sz-hvsw-freq")),
+        hvsw_min_duration_sec=float(_p("sz-hvsw-dur")),
+        hvsw_max_evolution=float(_p("sz-hvsw-max-ev")),
+        hpd_min_amplitude_x=float(_p("sz-hpd-amp")),
+        hpd_min_frequency_hz=float(_p("sz-hpd-freq")),
+        hpd_min_duration_sec=float(_p("sz-hpd-dur")),
+        convulsive_min_duration_sec=float(_p("sz-conv-dur")),
+        convulsive_min_amplitude_x=float(_p("sz-conv-amp")),
+        convulsive_postictal_suppression_sec=float(_p("sz-conv-postictal")),
+    )
+
+    bp_low = float(_p("sz-bp-low"))
+    bp_high = float(_p("sz-bp-high"))
+
+    detector = SpikeTrainSeizureDetector()
+    total_events = 0
+    errors = []
+    n_total = len(project_files)
+
+    for i, pf in enumerate(project_files):
+        edf_path = pf["edf_path"]
+        fname = pf["filename"]
+        _write_progress(sid, i, n_total, fname, total_events)
+        try:
+            channel_info = scan_edf_channels(edf_path)
+            eeg_indices, act_indices, pairings = auto_pair_channels(channel_info)
+            has_pairs = any(p.activity_index is not None for p in pairings)
+
+            if has_pairs:
+                rec, act_rec = read_edf_paired(edf_path, list(eeg_indices), act_indices)
+            else:
+                rates = sorted(set(ch["fs"] for ch in channel_info))
+                default_ch = [
+                    ch["index"] for ch in channel_info
+                    if "biopot" in ch.get("label", "").lower()
+                    or ch["fs"] == max(rates)
+                ]
+                if not default_ch:
+                    default_ch = [ch["index"] for ch in channel_info]
+                rec = read_edf(edf_path, channels=default_ch)
+                act_rec = None
+            rec.source_path = edf_path
+
+            ch_ids = load_channel_ids(edf_path) or {}
+            selected_channels = list(range(rec.n_channels))
+
+            seizures = []
+            detection_info = {}
+
+            use_chunked = rec.duration_sec > 1800 and edf_path.lower().endswith(".edf")
+            if use_chunked:
+                from eeg_seizure_analyzer.detection.base import detect_chunked
+                seizures, detection_info = detect_chunked(
+                    detector, path=edf_path,
+                    channels=selected_channels,
+                    chunk_duration_sec=1800.0, overlap_sec=30.0,
+                    params=params,
+                )
+            else:
+                for ch in selected_channels:
+                    ch_events = detector.detect(rec, ch, params=params)
+                    seizures.extend(ch_events)
+                    if hasattr(detector, "_last_detection_info"):
+                        detection_info[ch] = detector._last_detection_info.copy()
+
+            for event in seizures:
+                bl_rms_val = detection_info.get(event.channel, {}).get("baseline_mean")
+                try:
+                    qm = compute_event_quality(rec, event, baseline_rms=bl_rms_val,
+                                               bandpass_low=bp_low, bandpass_high=bp_high)
+                    lbr = compute_local_baseline_ratio(rec, event,
+                                                       bandpass_low=bp_low, bandpass_high=bp_high)
+                    qm["local_baseline_ratio"] = round(lbr, 2)
+                    qm["top_spike_amplitude_x"] = round(compute_top_spike_amplitude(event), 2)
+                    event.quality_metrics = qm
+                    event.confidence = compute_confidence_score(qm)
+                except Exception:
+                    event.quality_metrics = {}
+                    event.confidence = 0.0
+
+            seizures.sort(key=lambda e: (e.channel, e.onset_sec))
+            for idx, ev in enumerate(seizures, start=1):
+                ev.event_id = idx
+                ev.animal_id = ch_ids.get(ev.channel, "")
+
+            if act_rec is not None and pairings and seizures:
+                try:
+                    from eeg_seizure_analyzer.processing.activity import flag_events_activity
+                    eeg_to_act = {}
+                    for p in pairings:
+                        if p.activity_index is not None:
+                            eeg_to_act[p.eeg_index] = p.activity_index
+                    for act_idx in set(eeg_to_act.values()):
+                        act_data = act_rec.data[act_idx]
+                        act_fs = act_rec.fs
+                        ch_events = [ev for ev in seizures if eeg_to_act.get(ev.channel) == act_idx]
+                        if ch_events:
+                            flag_events_activity(ch_events, act_data, act_fs)
+                except Exception:
+                    pass
+
+            if edf_path.lower().endswith(".edf"):
+                save_detections(
+                    edf_path=edf_path,
+                    events=seizures,
+                    detection_info=detection_info,
+                    params_dict=sz_params,
+                    detector_name="SpikeTrainSeizureDetector",
+                    channels=selected_channels,
+                )
+
+            try:
+                new_anns = detections_to_annotations(seizures, edf_path)
+                existing = load_annotations(edf_path)
+                if existing:
+                    merged = merge_annotations(existing, new_anns, tolerance_sec=1.0)
+                else:
+                    merged = new_anns
+                save_annotations(edf_path, merged)
+            except Exception:
+                pass
+
+            total_events += len(seizures)
+            pf["has_detections"] = True
+
+        except Exception as e:
+            errors.append(f"{fname}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Write final progress
+    err_msg = ""
+    if errors:
+        err_msg = "; ".join(errors[:3])
+    _write_progress(sid, n_total, n_total, "", total_events,
+                    done=True, error_msg=err_msg)
+
+    # Reload the active file into session state
+    try:
+        state = server_state.get_session(sid)
+        original_idx = state.extra.get("project_active_idx", 0)
+        state.recording = None
+        state.seizure_events = []
+        state.spike_events = []
+        state.detected_events = []
+        state.st_detection_info = {}
+        state.sp_detection_info = {}
+        from eeg_seizure_analyzer.dash_app.pages.upload import _load_edf_into_state
+        _load_edf_into_state(state, project_files[original_idx]["edf_path"])
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+
+@callback(
+    Output("sz-detect-all-running", "data"),
+    Output("sz-detect-all-poll", "disabled"),
+    Output("sz-detect-all-status", "children", allow_duplicate=True),
+    Output("sz-detect-all-btn", "disabled"),
+    Input("sz-detect-all-btn", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def start_detect_all(n_clicks, sid):
+    """Launch the background detection thread and start polling."""
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update
+
+    state = server_state.get_session(sid)
+    project_files = state.extra.get("project_files", [])
+    if not project_files:
+        return False, True, alert("No project loaded.", "warning"), False
+
+    sz_params = dict(state.extra.get("sz_params", {}))
+
+    # Write initial progress
+    _write_progress(sid, 0, len(project_files), project_files[0]["filename"], 0)
+
+    # Launch background thread
+    t = threading.Thread(
+        target=_detect_all_worker,
+        args=(sid, project_files, sz_params),
+        daemon=True,
+    )
+    t.start()
+
+    n = len(project_files)
+    progress_bar = html.Div(
+        style={"display": "flex", "alignItems": "center", "gap": "12px"},
+        children=[
+            dbc.Progress(
+                value=0, max=n,
+                style={"flex": "1", "height": "22px"},
+                color="success",
+                striped=True, animated=True,
+            ),
+            html.Span(
+                f"0/{n} files — starting...",
+                style={"color": "#8b949e", "fontSize": "0.82rem",
+                       "whiteSpace": "nowrap"},
+            ),
+        ],
+    )
+    return True, False, progress_bar, True  # running=True, poll enabled, disable btn
+
+
+@callback(
+    Output("sz-detect-all-status", "children", allow_duplicate=True),
+    Output("sz-detect-all-poll", "disabled", allow_duplicate=True),
+    Output("sz-detect-all-running", "data", allow_duplicate=True),
+    Output("sz-detect-all-btn", "disabled", allow_duplicate=True),
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("sz-detect-all-poll", "n_intervals"),
+    State("session-id", "data"),
+    State("sz-detect-all-running", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def poll_detect_all(n_intervals, sid, is_running, refresh):
+    """Poll progress file and update the progress bar."""
+    if not is_running:
+        return no_update, no_update, no_update, no_update, no_update
+
+    p = _progress_path(sid)
+    if not p.exists():
+        return no_update, no_update, no_update, no_update, no_update
+
+    try:
+        data = _json.loads(p.read_text())
+    except Exception:
+        return no_update, no_update, no_update, no_update, no_update
+
+    current = data.get("current", 0)
+    total = data.get("total", 1)
+    fname = data.get("file", "")
+    events = data.get("events", 0)
+    done = data.get("done", False)
+    error_msg = data.get("error", "")
+
+    if done:
+        # Clean up progress file
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+        msg = f"Detected {events} seizure(s) across {total} files."
+        if error_msg:
+            msg += f" Errors: {error_msg}"
+            result = alert(msg, "warning")
+        else:
+            result = alert(msg, "success")
+
+        # Stop polling, re-enable button, refresh tab to show updated results
+        return result, True, False, False, (refresh or 0) + 1
+
+    # Still running — update progress bar
+    pct = int(100 * current / total) if total else 0
+    short_name = fname if len(fname) <= 40 else fname[:37] + "..."
+    progress_bar = html.Div(
+        style={"display": "flex", "alignItems": "center", "gap": "12px"},
+        children=[
+            dbc.Progress(
+                value=current, max=total,
+                label=f"{current}/{total}",
+                style={"flex": "1", "height": "22px"},
+                color="success",
+                striped=True, animated=True,
+            ),
+            html.Span(
+                f"{current}/{total} files — {short_name}  ({events} events)",
+                style={"color": "#8b949e", "fontSize": "0.82rem",
+                       "whiteSpace": "nowrap"},
+            ),
+        ],
+    )
+    return progress_bar, no_update, no_update, no_update, no_update
 
 
 # ── Event Inspector callback ────────────────────────────────────────

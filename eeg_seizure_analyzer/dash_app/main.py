@@ -19,7 +19,7 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, ml_datasets, ml_detection, ml_results
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -201,6 +201,7 @@ TOP_TAB_DEFS = [
     ("viewer", "Viewer"),
     ("detection", "Detection"),      # parent — has subtabs
     ("training_grp", "Training"),    # parent — has subtabs
+    ("ml_grp", "Machine Learning"),  # parent — has subtabs
     ("tools_grp", "Tools"),          # parent — has subtabs
     ("results", "Results"),
     ("settings", "Settings"),
@@ -215,6 +216,11 @@ TRAINING_SUBTABS = [
     ("training", "Seizure"),
     ("training_spikes", "Interictal Spikes"),
 ]
+ML_SUBTABS = [
+    ("ml_datasets", "Dataset"),
+    ("ml_detection", "Detection"),
+    ("ml_results", "Results"),
+]
 TOOLS_SUBTABS = [
     ("video_converter", "Video Converter"),
 ]
@@ -224,6 +230,7 @@ ALL_TAB_IDS = (
     ["upload", "viewer"]
     + [tid for tid, _ in DETECTION_SUBTABS]
     + [tid for tid, _ in TRAINING_SUBTABS]
+    + [tid for tid, _ in ML_SUBTABS]
     + [tid for tid, _ in TOOLS_SUBTABS]
     + ["results", "settings"]
 )
@@ -328,6 +335,11 @@ app.layout = html.Div(
             id="main-content",
             children=[
                 _tab_bar(),
+                # File selector bar (shown when multiple files loaded)
+                html.Div(
+                    id="file-selector-bar",
+                    style={"display": "none"},
+                ),
                 html.Div(id="tab-content"),
             ],
         ),
@@ -356,6 +368,7 @@ def init_session(sid):
 _PARENT_DEFAULT_SUBTAB = {
     "detection": "seizures",
     "training_grp": "training",
+    "ml_grp": "ml_datasets",
     "tools_grp": "video_converter",
 }
 # Map subtab IDs back to their parent
@@ -364,6 +377,8 @@ for _st_id, _ in DETECTION_SUBTABS:
     _SUBTAB_TO_PARENT[_st_id] = "detection"
 for _st_id, _ in TRAINING_SUBTABS:
     _SUBTAB_TO_PARENT[_st_id] = "training_grp"
+for _st_id, _ in ML_SUBTABS:
+    _SUBTAB_TO_PARENT[_st_id] = "ml_grp"
 for _st_id, _ in TOOLS_SUBTABS:
     _SUBTAB_TO_PARENT[_st_id] = "tools_grp"
 
@@ -431,6 +446,8 @@ def _build_subtab_bar(active_subtab: str):
         subtabs = DETECTION_SUBTABS
     elif parent == "training_grp":
         subtabs = TRAINING_SUBTABS
+    elif parent == "ml_grp":
+        subtabs = ML_SUBTABS
     elif parent == "tools_grp":
         subtabs = TOOLS_SUBTABS
     else:
@@ -485,6 +502,12 @@ def render_tab(active_tab, _refresh, sid):
         return training_spikes.layout(sid)
     elif active_tab == "video_converter":
         return tools.layout(sid)
+    elif active_tab == "ml_datasets":
+        return ml_datasets.layout(sid)
+    elif active_tab == "ml_detection":
+        return ml_detection.layout(sid)
+    elif active_tab == "ml_results":
+        return ml_results.layout(sid)
     elif active_tab == "results":
         return _placeholder_tab(
             "Results",
@@ -810,6 +833,135 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
 def on_channel_toggle(checked):
     """Store selected channels when user toggles checkboxes."""
     return checked
+
+
+# ── File selector bar (multi-file project) ─────────────────────────
+
+
+@callback(
+    Output("file-selector-bar", "children"),
+    Output("file-selector-bar", "style"),
+    Input("tab-refresh", "data"),
+    State("session-id", "data"),
+)
+def update_file_selector_bar(_refresh, sid):
+    """Show file selector bar when a multi-file project is loaded."""
+    state = server_state.get_session(sid)
+    project_files = state.extra.get("project_files")
+    if not project_files or len(project_files) < 2:
+        return [], {"display": "none"}
+
+    active_idx = state.extra.get("project_active_idx", 0)
+    n_files = len(project_files)
+    folder = state.extra.get("project_folder", "")
+
+    # Build dropdown options with live status icons
+    options = []
+    for i, pf in enumerate(project_files):
+        fname = pf["filename"]
+        edf_path = pf["edf_path"]
+        stem = os.path.splitext(fname)[0]
+        d = os.path.dirname(edf_path)
+
+        # Check live status from disk
+        has_det = os.path.isfile(os.path.join(d, stem + "_ned_detections.json"))
+        has_ann = os.path.isfile(os.path.join(d, stem + "_ned_annotations.json"))
+
+        parts = []
+        if has_det:
+            parts.append("\u2705")
+        if has_ann:
+            parts.append("\U0001F4DD")
+        status = " ".join(parts)
+        label = f"{fname}  {status}" if status else fname
+        options.append({"label": label, "value": i})
+
+    bar = html.Div(
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "gap": "12px",
+            "padding": "6px 16px",
+            "backgroundColor": "#161b22",
+            "borderBottom": "1px solid #30363d",
+            "fontSize": "0.82rem",
+        },
+        children=[
+            html.Span(
+                f"\U0001F4C1 {n_files} files",
+                style={"color": "#8b949e", "whiteSpace": "nowrap"},
+            ),
+            dcc.Dropdown(
+                id="file-bar-dropdown",
+                options=options,
+                value=active_idx,
+                clearable=False,
+                style={"width": "360px", "fontSize": "0.82rem"},
+            ),
+            html.Span(
+                os.path.basename(folder),
+                style={"color": "#484f58", "fontSize": "0.75rem",
+                       "marginLeft": "auto"},
+            ),
+        ],
+    )
+
+    return [bar], {"display": "block"}
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("file-bar-dropdown", "value"),
+    State("session-id", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def file_bar_switch(file_idx, sid, refresh):
+    """Switch file from the file selector bar dropdown."""
+    if file_idx is None:
+        return no_update
+
+    state = server_state.get_session(sid)
+    project_files = state.extra.get("project_files", [])
+    if not project_files:
+        return no_update
+
+    file_idx = int(file_idx)
+    if file_idx == state.extra.get("project_active_idx"):
+        return no_update
+
+    if file_idx < 0 or file_idx >= len(project_files):
+        return no_update
+
+    entry = project_files[file_idx]
+
+    # Clear current recording state
+    state.recording = None
+    state.all_channels_info = []
+    state.activity_recordings = {}
+    state.channel_pairings = []
+    state.seizure_events = []
+    state.spike_events = []
+    state.detected_events = []
+    state.st_detection_info = {}
+    state.sp_detection_info = {}
+    state.extra.pop("tr_annotations", None)
+    state.extra.pop("tr_current_idx", None)
+    state.extra.pop("sz_selected_event_key", None)
+    state.extra.pop("video_path", None)
+
+    # Load the new file
+    from eeg_seizure_analyzer.dash_app.pages.upload import _load_edf_into_state
+    try:
+        _load_edf_into_state(state, entry["edf_path"])
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return no_update
+
+    state.extra["project_active_idx"] = file_idx
+
+    return (refresh or 0) + 1
 
 
 @callback(
