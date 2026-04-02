@@ -19,7 +19,7 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, ml_datasets, ml_detection, ml_results
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, adicht_converter, ml_datasets, ml_detection, ml_results
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -223,6 +223,7 @@ ML_SUBTABS = [
 ]
 TOOLS_SUBTABS = [
     ("video_converter", "Video Converter"),
+    ("adicht_converter", "ADICHT → EDF"),
 ]
 
 # All routable tab IDs (for render_tab and state)
@@ -502,6 +503,8 @@ def render_tab(active_tab, _refresh, sid):
         return training_spikes.layout(sid)
     elif active_tab == "video_converter":
         return tools.layout(sid)
+    elif active_tab == "adicht_converter":
+        return adicht_converter.layout(sid)
     elif active_tab == "ml_datasets":
         return ml_datasets.layout(sid)
     elif active_tab == "ml_detection":

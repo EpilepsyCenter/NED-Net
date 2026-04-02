@@ -255,6 +255,13 @@ def _upload_layout() -> html.Div:
             html.P(
                 "Supported files: EDF and ADICHT (Windows only)",
                 style={"fontSize": "0.85rem", "color": "#8b949e",
+                       "marginBottom": "8px"},
+            ),
+            html.P(
+                "Note: ADICHT files can be opened for viewing only. "
+                "Detection, training, ML, and saving results require EDF. "
+                "Convert first via Tools \u2192 ADICHT \u2192 EDF.",
+                style={"fontSize": "0.82rem", "color": "#d29922",
                        "marginBottom": "24px"},
             ),
 
@@ -1104,7 +1111,12 @@ def on_path_load(n_clicks, path, sid, refresh):
             recording.source_path = path
             state.recording = recording
             _discover_video(state)
-            return None, (refresh or 0) + 1
+            return alert(
+                "ADICHT file loaded for viewing. Detection, training, ML, "
+                "and saving results require EDF format. Convert via "
+                "Tools \u2192 ADICHT \u2192 EDF (Windows only).",
+                "warning",
+            ), (refresh or 0) + 1
 
         else:
             return alert("Unsupported file type", "danger"), no_update

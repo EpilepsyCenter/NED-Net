@@ -12,7 +12,7 @@ NED-Net combines classical signal-processing algorithms (spike-train detection, 
 
 | Area | What it does |
 |---|---|
-| **File loading** | EDF and ADICHT (LabChart) files with multi-rate channel support, auto-pairing of EEG + activity channels |
+| **File loading** | EDF files (primary) with multi-rate channel support, auto-pairing of EEG + activity channels. ADICHT (LabChart) files can be opened and viewed but must be converted to EDF for detection, training, and ML features |
 | **Viewer** | Scrollable multi-channel EEG with bandpass/notch filtering, min/max downsampling, activity overlay, and synchronized video playback |
 | **Seizure detection** | Spike-train method with HVSW / HPD / convulsive subtype classification, boundary refinement, quality scoring, and seizure burden metrics |
 | **Spike detection** | Interictal spike detection with z-score thresholding, prominence/width filtering, and spike-rate metrics |
@@ -53,7 +53,7 @@ source .venv/bin/activate   # macOS / Linux
 pip install -e .
 ```
 
-This installs the core dependencies:
+This installs all core dependencies including the Dash web app:
 
 | Package | Purpose |
 |---|---|
@@ -63,34 +63,28 @@ This installs the core dependencies:
 | pandas | Tabular data handling |
 | plotly | Interactive graphs |
 | matplotlib | Static plots |
-| streamlit | Legacy UI (Streamlit version) |
-
-### 4. Install the Dash app dependencies
-
-The primary UI is a Dash application. Install its dependencies:
-
-```bash
-pip install dash dash-bootstrap-components dash-ag-grid
-```
+| dash | Web application framework |
+| dash-bootstrap-components | UI components |
+| dash-ag-grid | Interactive data tables |
 
 ### ML extras
 
-To use the machine-learning pipeline (training, detection, results), install PyTorch and scikit-learn:
+To use the machine-learning pipeline (training, detection, results), install the ML dependencies:
 
 ```bash
-pip install torch scikit-learn
+pip install -e ".[ml]"
 ```
 
-On **Apple Silicon** Macs, PyTorch will automatically use the MPS (Metal) GPU backend for accelerated training.
+This installs PyTorch and scikit-learn. On **Apple Silicon** Macs, PyTorch will automatically use the MPS (Metal) GPU backend for accelerated training.
 
 For GPU support on other platforms, follow the [PyTorch installation guide](https://pytorch.org/get-started/locally/) to install the appropriate CUDA version.
 
 ### Windows extras (LabChart files)
 
-To read ADICHT (LabChart) files on Windows:
+To open and convert ADICHT (LabChart) files on Windows:
 
 ```bash
-pip install "eeg-seizure-analyzer[windows]"
+pip install -e ".[windows]"
 ```
 
 ### Development extras
@@ -225,8 +219,8 @@ Output: (batch, 1, n_samples) — seizure probability per sample
 ### Input
 | Format | Extension | Platform | Notes |
 |---|---|---|---|
-| EDF / EDF+ | `.edf` | All | Primary format, includes annotations |
-| ADICHT | `.adicht` | Windows | Requires `adi-reader` + `cffi` |
+| EDF / EDF+ | `.edf` | All | Primary format — required for detection, training, ML, and persistence |
+| ADICHT | `.adicht` | Windows | Can be opened and viewed, but does not support detection, saving results, or ML features. Use `eeg-convert` to convert to EDF first |
 
 ### Output (sidecar JSON files)
 | File | Contents |
@@ -297,6 +291,8 @@ Frequency bands are configured for mouse EEG: delta (1-4 Hz), theta (4-8 Hz), al
 ## CLI tools
 
 ### Convert ADICHT to EDF (Windows)
+
+ADICHT files can be opened in NED-Net for viewing, but all other features (detection, training, ML, saving/loading results) require EDF format. Convert first:
 
 ```bash
 eeg-convert input.adicht output.edf
