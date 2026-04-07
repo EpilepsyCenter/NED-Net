@@ -78,18 +78,16 @@ class DiceBCELoss(nn.Module):
         """
         Parameters
         ----------
-        logits : (batch, 1, n_samples) — raw model output
-        targets : (batch, n_samples) — binary mask
+        logits : (batch, n_classes, n_samples) — raw model output
+        targets : (batch, n_classes, n_samples) — multi-channel mask
         """
-        targets_3d = targets.unsqueeze(1)  # (batch, 1, n_samples)
-
         # BCE
-        bce_loss = self.bce(logits, targets_3d)
+        bce_loss = self.bce(logits, targets)
 
         # Dice
         probs = torch.sigmoid(logits)
-        intersection = (probs * targets_3d).sum()
-        union = probs.sum() + targets_3d.sum()
+        intersection = (probs * targets).sum()
+        union = probs.sum() + targets.sum()
         dice_loss = 1.0 - (2.0 * intersection + self.smooth) / (union + self.smooth)
 
         return self.dice_weight * dice_loss + self.bce_weight * bce_loss
@@ -348,6 +346,7 @@ def train_model(
         base_filters=train_config.base_filters,
         depth=train_config.depth,
         dropout=train_config.dropout,
+        n_classes=2,
     )
     model = model.to(device)
 
@@ -414,12 +413,13 @@ def train_model(
                 loss = criterion(logits, mask)
                 val_losses.append(loss.item())
 
-                probs = torch.sigmoid(logits).squeeze(1).cpu().numpy()
+                probs = torch.sigmoid(logits).cpu().numpy()
                 targets = mask.cpu().numpy()
 
+                # Use seizure channel (0) for event-level metrics
                 for i in range(probs.shape[0]):
-                    all_preds.append(probs[i])
-                    all_targets.append(targets[i])
+                    all_preds.append(probs[i, 0])
+                    all_targets.append(targets[i, 0])
 
         avg_val_loss = np.mean(val_losses) if val_losses else float("inf")
         val_metrics = _compute_metrics(
@@ -484,6 +484,7 @@ def train_model(
         "n_params": n_params,
         "n_eeg_channels": n_eeg_channels,
         "n_activity_channels": n_act_channels,
+        "n_classes": 2,
         "include_activity": dataset_config.include_activity,
         "target_fs": dataset_config.target_fs,
         "window_sec": dataset_config.window_sec,
@@ -578,6 +579,7 @@ def load_trained_model(model_name: str) -> tuple[SeizureUNet, dict]:
         base_filters=metadata.get("train_config", {}).get("base_filters", 32),
         depth=metadata.get("train_config", {}).get("depth", 4),
         dropout=0.0,  # no dropout at inference
+        n_classes=metadata.get("n_classes", 1),  # backward compat: old models have 1
     )
 
     weights_path = model_dir / "best_model.pt"

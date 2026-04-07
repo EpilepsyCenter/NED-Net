@@ -1,7 +1,10 @@
 """1D U-Net for per-sample seizure detection.
 
 Input:  (batch, n_channels, n_samples) — multi-channel EEG at 250 Hz
-Output: (batch, 1, n_samples)           — seizure probability per sample
+Output: (batch, n_classes, n_samples)  — per-sample probability
+
+n_classes=2 by default: channel 0 = seizure, channel 1 = convulsive.
+Models trained with n_classes=1 (legacy) only predict seizure.
 
 The architecture uses a standard encoder-decoder with skip connections.
 The encoder progressively downsamples to capture patterns at multiple
@@ -87,10 +90,12 @@ class SeizureUNet(nn.Module):
         base_filters: int = 32,
         depth: int = 4,
         dropout: float = 0.2,
+        n_classes: int = 2,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.depth = depth
+        self.n_classes = n_classes
 
         # Encoder
         self.enc_input = ConvBlock(in_channels, base_filters)
@@ -112,9 +117,9 @@ class SeizureUNet(nn.Module):
             self.decoders.append(UpBlock(ch, out_ch))
             ch = out_ch
 
-        # Output
+        # Output — n_classes channels (seizure + convulsive)
         self.dropout = nn.Dropout(dropout)
-        self.out_conv = nn.Conv1d(ch, 1, kernel_size=1)
+        self.out_conv = nn.Conv1d(ch, n_classes, kernel_size=1)
 
     def forward(self, x):
         """Forward pass.
@@ -125,7 +130,8 @@ class SeizureUNet(nn.Module):
 
         Returns
         -------
-        (batch, 1, n_samples) — seizure probability (logits, use sigmoid)
+        (batch, n_classes, n_samples) — logits, use sigmoid for probabilities.
+        Channel 0 = seizure, channel 1 = convulsive (if n_classes >= 2).
         """
         # Encoder path — collect skip connections
         skips = []
@@ -154,7 +160,7 @@ class SeizureUNet(nn.Module):
 
         Returns
         -------
-        (batch, 1, n_samples) — values in [0, 1]
+        (batch, n_classes, n_samples) — values in [0, 1]
         """
         return torch.sigmoid(self.forward(x))
 
@@ -166,6 +172,7 @@ def build_model(
     base_filters: int = 32,
     depth: int = 4,
     dropout: float = 0.2,
+    n_classes: int = 2,
 ) -> SeizureUNet:
     """Create a SeizureUNet with the right number of input channels.
 
@@ -177,6 +184,7 @@ def build_model(
     base_filters : filters in first layer
     depth : encoder depth
     dropout : dropout rate
+    n_classes : number of output channels (2 = seizure + convulsive)
 
     Returns
     -------
@@ -191,4 +199,5 @@ def build_model(
         base_filters=base_filters,
         depth=depth,
         dropout=dropout,
+        n_classes=n_classes,
     )

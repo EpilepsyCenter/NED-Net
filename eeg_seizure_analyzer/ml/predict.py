@@ -69,6 +69,8 @@ def predict_seizures(
     target_fs = metadata.get("target_fs", 250)
     window_sec = metadata.get("window_sec", 60)
     include_activity = metadata.get("include_activity", False)
+    n_classes = metadata.get("n_classes", 1)
+    has_convulsive = n_classes >= 2
 
     # Device
     if torch.cuda.is_available():
@@ -121,6 +123,8 @@ def predict_seizures(
         total_target_samples = int(rec_duration * target_fs)
         pred_sum = np.zeros(total_target_samples, dtype=np.float64)
         pred_count = np.zeros(total_target_samples, dtype=np.float64)
+        # Convulsive channel accumulator (if model supports it)
+        conv_sum = np.zeros(total_target_samples, dtype=np.float64) if has_convulsive else None
 
         for chunk_idx in range(n_chunks):
             start_sec = chunk_idx * stride_sec
@@ -157,17 +161,28 @@ def predict_seizures(
             with torch.no_grad():
                 x = torch.from_numpy(eeg).unsqueeze(0).to(device)
                 logits = model(x)
-                probs = torch.sigmoid(logits).squeeze().cpu().numpy()
+                probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
+                # probs shape: (n_classes, n_samples) or (n_samples,) for legacy
 
-            # Accumulate
+            # Accumulate — seizure channel
+            if probs.ndim == 1:
+                seizure_probs = probs
+                conv_probs = None
+            else:
+                seizure_probs = probs[0]
+                conv_probs = probs[1] if has_convulsive else None
+
             out_start = int(start_sec * target_fs)
-            out_len = min(len(probs), total_target_samples - out_start)
-            pred_sum[out_start:out_start + out_len] += probs[:out_len]
+            out_len = min(len(seizure_probs), total_target_samples - out_start)
+            pred_sum[out_start:out_start + out_len] += seizure_probs[:out_len]
             pred_count[out_start:out_start + out_len] += 1.0
+            if conv_probs is not None and conv_sum is not None:
+                conv_sum[out_start:out_start + out_len] += conv_probs[:out_len]
 
         # Average overlapping predictions
         pred_count[pred_count == 0] = 1.0
         avg_probs = pred_sum / pred_count
+        avg_conv = (conv_sum / pred_count) if conv_sum is not None else None
 
         # Extract events for this channel
         binary = (avg_probs > threshold).astype(int)
@@ -178,6 +193,7 @@ def predict_seizures(
             channel=eeg_ch,
             animal_id=animal_id,
             start_event_id=event_id,
+            convulsive_probs=avg_conv,
         )
         event_id += len(ch_events)
         all_events.extend(ch_events)
@@ -197,19 +213,21 @@ def _extract_events(
     channel: int = 0,
     animal_id: str = "",
     start_event_id: int = 1,
+    convulsive_probs: np.ndarray | None = None,
 ) -> list[DetectedEvent]:
     """Convert binary prediction array to DetectedEvent list.
 
     Parameters
     ----------
     binary : (n_samples,) binary array
-    probs : (n_samples,) probability array
+    probs : (n_samples,) seizure probability array
     fs : sampling rate
     min_duration_sec : discard events shorter than this
     merge_gap_sec : merge events closer than this
     channel : EEG channel index
     animal_id : animal ID for this channel
     start_event_id : starting event ID
+    convulsive_probs : (n_samples,) convulsive probability array, optional
 
     Returns
     -------
@@ -255,6 +273,18 @@ def _extract_events(
         seg_probs = probs[seg_start:seg_end]
         confidence = float(np.mean(seg_probs))
 
+        # Convulsive prediction for this segment
+        feat = {
+            "detection_method": "ml_unet",
+            "peak_probability": round(float(np.max(seg_probs)), 3),
+            "mean_probability": round(confidence, 3),
+        }
+        if convulsive_probs is not None:
+            seg_conv = convulsive_probs[seg_start:seg_end]
+            conv_confidence = float(np.mean(seg_conv))
+            feat["convulsive_probability"] = round(conv_confidence, 3)
+            feat["convulsive"] = conv_confidence > 0.5
+
         events.append(DetectedEvent(
             onset_sec=round(onset_sec, 3),
             offset_sec=round(offset_sec, 3),
@@ -262,11 +292,7 @@ def _extract_events(
             channel=channel,
             event_type="seizure",
             confidence=round(confidence, 3),
-            features={
-                "detection_method": "ml_unet",
-                "peak_probability": round(float(np.max(seg_probs)), 3),
-                "mean_probability": round(confidence, 3),
-            },
+            features=feat,
             animal_id=animal_id,
             event_id=event_id,
             source="detector",

@@ -153,7 +153,7 @@ def _augment(eeg: np.ndarray, mask: np.ndarray, rng: np.random.Generator):
     Parameters
     ----------
     eeg : (n_channels, n_samples) — already normalized
-    mask : (n_samples,) — binary seizure mask
+    mask : (n_classes, n_samples) — multi-channel target mask
     rng : numpy random generator
 
     Returns
@@ -173,14 +173,14 @@ def _augment(eeg: np.ndarray, mask: np.ndarray, rng: np.random.Generator):
     shift = rng.integers(-max_shift, max_shift + 1)
     if shift != 0:
         eeg = np.roll(eeg, shift, axis=1)
-        mask = np.roll(mask, shift)
+        mask = np.roll(mask, shift, axis=-1)
         # Zero-fill the wrapped portion
         if shift > 0:
             eeg[:, :shift] = 0
-            mask[:shift] = 0
+            mask[..., :shift] = 0
         else:
             eeg[:, shift:] = 0
-            mask[shift:] = 0
+            mask[..., shift:] = 0
 
     # 4. Channel dropout — zero out one channel with 15% probability
     if eeg.shape[0] > 1 and rng.random() < 0.15:
@@ -212,6 +212,8 @@ class WindowSpec:
     # For positive windows: list of (onset_sec, offset_sec) of seizures
     # (relative to window start)
     seizure_intervals: list[tuple[float, float]] = field(default_factory=list)
+    # Subset of seizure_intervals that are convulsive
+    convulsive_intervals: list[tuple[float, float]] = field(default_factory=list)
     animal_id: str = ""
 
 
@@ -292,6 +294,11 @@ def build_window_specs(
             ch_seizure_intervals = [
                 (a["onset_sec"], a["offset_sec"]) for a in ch_confirmed
             ]
+            # Convulsive subset
+            ch_convulsive_intervals = [
+                (a["onset_sec"], a["offset_sec"]) for a in ch_confirmed
+                if (a.get("features") or {}).get("convulsive", False)
+            ]
 
             # --- Positive windows (centred on confirmed seizures) ---
             for ann in ch_confirmed:
@@ -311,6 +318,13 @@ def build_window_specs(
                     for s in ch_seizure_intervals
                     if s[1] > win_start and s[0] < win_end
                 ]
+                # Convulsive seizures within the window
+                win_convulsive = [
+                    (max(s[0], win_start) - win_start,
+                     min(s[1], win_end) - win_start)
+                    for s in ch_convulsive_intervals
+                    if s[1] > win_start and s[0] < win_end
+                ]
 
                 specs.append(WindowSpec(
                     edf_path=edf_path,
@@ -320,6 +334,7 @@ def build_window_specs(
                     act_channel=act_ch,
                     is_positive=True,
                     seizure_intervals=win_seizures,
+                    convulsive_intervals=win_convulsive,
                     animal_id=animal_id,
                 ))
 
@@ -429,14 +444,22 @@ class SeizureDataset(Dataset):
         # Pad or trim to exact size — shape: (1, target_samples)
         eeg = _pad_or_trim(eeg, self.target_samples)
 
-        # Build seizure mask
-        mask = np.zeros(self.target_samples, dtype=np.float32)
+        # Build multi-channel mask: (n_classes, target_samples)
+        # Channel 0 = seizure, channel 1 = convulsive
+        n_classes = 2
+        mask = np.zeros((n_classes, self.target_samples), dtype=np.float32)
         for onset, offset in spec.seizure_intervals:
             start_idx = int(onset * self.config.target_fs)
             end_idx = int(offset * self.config.target_fs)
             start_idx = max(0, min(start_idx, self.target_samples))
             end_idx = max(0, min(end_idx, self.target_samples))
-            mask[start_idx:end_idx] = 1.0
+            mask[0, start_idx:end_idx] = 1.0
+        for onset, offset in spec.convulsive_intervals:
+            start_idx = int(onset * self.config.target_fs)
+            end_idx = int(offset * self.config.target_fs)
+            start_idx = max(0, min(start_idx, self.target_samples))
+            end_idx = max(0, min(end_idx, self.target_samples))
+            mask[1, start_idx:end_idx] = 1.0
 
         # Load paired activity channel if requested
         if spec.act_channel is not None:
