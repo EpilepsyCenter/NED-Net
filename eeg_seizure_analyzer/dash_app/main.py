@@ -19,7 +19,11 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, adicht_converter, ml_datasets, ml_detection, ml_results
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, adicht_converter, ml_datasets, ml_detection, ml_results, analysis as analysis_page, results as results_page
+
+# ── Initialise SQLite database ────────────────────────────────────────
+from eeg_seizure_analyzer import db as _db
+_db.init_db()
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -199,10 +203,11 @@ def _sidebar():
 TOP_TAB_DEFS = [
     ("upload", "Load"),
     ("viewer", "Viewer"),
-    ("detection", "Detection"),      # parent — has subtabs
-    ("training_grp", "Training"),    # parent — has subtabs
-    ("ml_grp", "Machine Learning"),  # parent — has subtabs
-    ("tools_grp", "Tools"),          # parent — has subtabs
+    ("detection", "Spike-train Detection"),  # parent — has subtabs
+    ("training_grp", "Training"),             # parent — has subtabs
+    ("ml_grp", "Dataset / Model"),            # parent — has subtabs
+    ("analysis", "Analysis"),                 # unified CNN detection (single/batch/live)
+    ("tools_grp", "Tools"),                   # parent — has subtabs
     ("results", "Results"),
     ("settings", "Settings"),
 ]
@@ -218,8 +223,6 @@ TRAINING_SUBTABS = [
 ]
 ML_SUBTABS = [
     ("ml_datasets", "Dataset"),
-    ("ml_detection", "Detection"),
-    ("ml_results", "Results"),
 ]
 TOOLS_SUBTABS = [
     ("video_converter", "Video Converter"),
@@ -228,7 +231,7 @@ TOOLS_SUBTABS = [
 
 # All routable tab IDs (for render_tab and state)
 ALL_TAB_IDS = (
-    ["upload", "viewer"]
+    ["upload", "viewer", "analysis"]
     + [tid for tid, _ in DETECTION_SUBTABS]
     + [tid for tid, _ in TRAINING_SUBTABS]
     + [tid for tid, _ in ML_SUBTABS]
@@ -507,15 +510,14 @@ def render_tab(active_tab, _refresh, sid):
         return adicht_converter.layout(sid)
     elif active_tab == "ml_datasets":
         return ml_datasets.layout(sid)
+    elif active_tab == "analysis":
+        return analysis_page.layout(sid)
     elif active_tab == "ml_detection":
         return ml_detection.layout(sid)
     elif active_tab == "ml_results":
         return ml_results.layout(sid)
     elif active_tab == "results":
-        return _placeholder_tab(
-            "Results",
-            "Analysis results and group comparisons will be displayed here.",
-        )
+        return results_page.layout(sid)
     elif active_tab == "settings":
         return _placeholder_tab(
             "Settings",

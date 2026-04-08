@@ -672,6 +672,16 @@ input[type="number"],
     z-index: 999 !important;
 }
 
+.rc-slider-mark-text {
+    color: var(--ned-text-muted) !important;
+}
+
+.rc-slider-tooltip-inner {
+    background: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    color: var(--ned-text) !important;
+}
+
 /* ── Collapsible param sections ────────────────────────────────────── */
 
 .param-section-header {
