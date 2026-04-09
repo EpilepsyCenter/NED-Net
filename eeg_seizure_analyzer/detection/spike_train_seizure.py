@@ -22,31 +22,25 @@ noise floors.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
 
 import numpy as np
-from scipy.signal import find_peaks
 
 from eeg_seizure_analyzer.config import SpikeTrainSeizureParams
 from eeg_seizure_analyzer.detection.base import DetectedEvent, DetectorBase
-from eeg_seizure_analyzer.io.base import EEGRecording
-from eeg_seizure_analyzer.processing.features import (
-    compute_zscore_baseline,
-    compute_rolling_baseline,
+from eeg_seizure_analyzer.detection.boundary_utils import (
+    refine_signal_rms,
+    refine_spike_density,
 )
+from eeg_seizure_analyzer.detection.spike_utils import (
+    Spike as _Spike,
+    compute_baseline,
+    detect_spikes,
+)
+from eeg_seizure_analyzer.io.base import EEGRecording
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 
 
 # ── Internal helpers ────────────────────────────────────────────────────
-
-
-@dataclass
-class _Spike:
-    """A single detected spike."""
-    sample_idx: int
-    time_sec: float
-    amplitude: float       # peak-to-trough absolute amplitude
-    amplitude_x: float     # amplitude as multiple of baseline
 
 
 @dataclass
@@ -167,133 +161,41 @@ class SpikeTrainSeizureDetector(DetectorBase):
 
     # ── Step 2: baseline ────────────────────────────────────────────
 
+    @staticmethod
     def _compute_baseline(
-        self, data: np.ndarray, fs: float, params: SpikeTrainSeizureParams
+        data: np.ndarray, fs: float, params: SpikeTrainSeizureParams
     ) -> tuple[float, float]:
-        """Compute baseline (mean, std) from quiet windows.
-
-        Returns (baseline_mean, baseline_std). The spike threshold becomes
-        ``baseline_mean + z × baseline_std``.
-
-        Supports:
-        - "percentile" (default): z-score baseline from quiet RMS windows.
-        - "rolling": adaptive z-score baseline recomputed periodically.
-          Returns median of rolling (mean, std) pairs.
-        - "first_n": mean + std of first 5 minutes.
-        """
-        method = params.baseline_method
-
-        if method == "percentile":
-            return compute_zscore_baseline(
-                data, fs,
-                window_sec=params.baseline_rms_window_sec,
-                percentile=params.baseline_percentile,
-            )
-
-        if method == "rolling":
-            rolling = compute_rolling_baseline(
-                data, fs,
-                window_sec=params.baseline_rms_window_sec,
-                percentile=params.baseline_percentile,
-                lookback_sec=params.rolling_lookback_sec,
-                step_sec=params.rolling_step_sec,
-            )
-            # Use median of rolling baselines for spike detection
-            means = [m for _, m, _ in rolling]
-            stds = [s for _, _, s in rolling]
-            return (float(np.median(means)), float(np.median(stds)))
-
-        # "first_n"
-        n = int(5 * 60 * fs)
-        segment = data[:min(n, len(data))]
-        bl_mean = float(np.mean(np.abs(segment)))
-        bl_std = float(np.std(np.abs(segment)))
-        if bl_mean < 1e-10:
-            bl_mean = float(np.std(segment))
-        if bl_mean < 1e-10:
-            bl_mean = 1.0
-        if bl_std < 1e-10:
-            bl_std = bl_mean * 0.1
-        return (bl_mean, bl_std)
+        """Compute baseline via shared utility.  See ``spike_utils.compute_baseline``."""
+        return compute_baseline(
+            data, fs,
+            method=params.baseline_method,
+            percentile=params.baseline_percentile,
+            rms_window_sec=params.baseline_rms_window_sec,
+            rolling_lookback_sec=getattr(params, "rolling_lookback_sec", 1800.0),
+            rolling_step_sec=getattr(params, "rolling_step_sec", 300.0),
+        )
 
     # ── Step 3: spike detection ─────────────────────────────────────
 
+    @staticmethod
     def _detect_spikes(
-        self,
         filtered: np.ndarray,
         fs: float,
         baseline_amp: float,
         params: SpikeTrainSeizureParams,
         baseline_std: float = 0.0,
     ) -> list[_Spike]:
-        """Detect spikes with amplitude, prominence, and width constraints.
-
-        Threshold: ``baseline_mean + z × baseline_std`` (z-score multiplier).
-
-        Filters applied:
-        - **Prominence**: spike must stand out from its local surroundings,
-          not just exceed an absolute threshold.  Rejects noise peaks riding
-          on slow oscillations.
-        - **Width**: spike half-width must be within [min_width, max_width].
-          Rejects single-sample artifacts (too narrow) and slow waves (too wide).
-        - **Refractory**: minimum inter-spike interval prevents double-counting
-          biphasic spikes.
-        """
-        if baseline_std > 0:
-            abs_threshold = baseline_amp + params.spike_amplitude_x_baseline * baseline_std
-        else:
-            abs_threshold = params.spike_amplitude_x_baseline * baseline_amp
-
-        # Apply absolute floor if set
-        abs_floor = params.spike_min_amplitude_uv
-        if abs_floor > 0:
-            abs_threshold = max(abs_threshold, abs_floor)
-
-        refractory_samples = max(1, int(params.spike_refractory_ms * fs / 1000))
-
-        # Prominence: spike must stand out from local context
-        min_prominence = params.spike_prominence_x_baseline * baseline_amp
-        if params.spike_min_prominence_uv > 0:
-            min_prominence = max(min_prominence, params.spike_min_prominence_uv)
-
-        # Width constraints (in samples) — half-height width
-        min_width_samples = max(1, int(params.spike_min_width_ms * fs / 1000))
-        max_width_samples = max(min_width_samples + 1,
-                                int(params.spike_max_width_ms * fs / 1000))
-
-        # Use absolute signal for peak detection
-        abs_signal = np.abs(filtered)
-
-        peaks, properties = find_peaks(
-            abs_signal,
-            height=abs_threshold,
-            distance=refractory_samples,
-            prominence=min_prominence,
-            width=(min_width_samples, max_width_samples),
+        """Detect spikes via shared utility.  See ``spike_utils.detect_spikes``."""
+        return detect_spikes(
+            filtered, fs, baseline_amp, baseline_std,
+            spike_amplitude_x_baseline=params.spike_amplitude_x_baseline,
+            spike_min_amplitude_uv=params.spike_min_amplitude_uv,
+            spike_refractory_ms=params.spike_refractory_ms,
+            spike_prominence_x_baseline=params.spike_prominence_x_baseline,
+            spike_min_prominence_uv=getattr(params, "spike_min_prominence_uv", 0.0),
+            spike_max_width_ms=params.spike_max_width_ms,
+            spike_min_width_ms=params.spike_min_width_ms,
         )
-
-        spikes = []
-        half_win = int(0.05 * fs)  # 50 ms window for peak-to-trough
-
-        for pk in peaks:
-            win_start = max(0, pk - half_win)
-            win_end = min(len(filtered), pk + half_win)
-            segment = filtered[win_start:win_end]
-
-            amplitude = abs(float(np.max(segment)) - float(np.min(segment)))
-
-            # Skip if below absolute floor (peak-to-trough check)
-            if abs_floor > 0 and amplitude < abs_floor:
-                continue
-
-            spikes.append(_Spike(
-                sample_idx=int(pk),
-                time_sec=float(pk) / fs,
-                amplitude=amplitude,
-                amplitude_x=amplitude / baseline_amp if baseline_amp > 0 else 0.0,
-            ))
-
-        return spikes
 
     # ── Step 4: grouping ────────────────────────────────────────────
 
@@ -413,37 +315,20 @@ class SpikeTrainSeizureDetector(DetectorBase):
         if len(spikes) < params.min_train_spikes:
             return None
 
-        win = params.boundary_window_sec
-        min_rate = params.boundary_min_rate_hz
-        min_amp_x = params.boundary_min_amplitude_x
-
-        # Trim onset: walk forward
-        onset_idx = 0
-        for i in range(len(spikes)):
-            t0 = spikes[i].time_sec
-            n_in_window = sum(1 for s in spikes[i:] if s.time_sec <= t0 + win)
-            local_rate = n_in_window / win if win > 0 else 0
-            if local_rate >= min_rate and spikes[i].amplitude_x >= min_amp_x:
-                onset_idx = i
-                break
-        else:
+        result = refine_spike_density(
+            spikes, train.onset_sec, train.offset_sec,
+            boundary_window_sec=params.boundary_window_sec,
+            min_rate_hz=params.boundary_min_rate_hz,
+            min_amplitude_x=params.boundary_min_amplitude_x,
+        )
+        if result is None:
             return None
 
-        # Trim offset: walk backward
-        offset_idx = len(spikes) - 1
-        for i in range(len(spikes) - 1, -1, -1):
-            t0 = spikes[i].time_sec
-            n_in_window = sum(1 for s in spikes[:i + 1] if s.time_sec >= t0 - win)
-            local_rate = n_in_window / win if win > 0 else 0
-            if local_rate >= min_rate and spikes[i].amplitude_x >= min_amp_x:
-                offset_idx = i
-                break
-        else:
+        r_onset, r_offset = result
+        trimmed = [s for s in spikes if r_onset <= s.time_sec <= r_offset]
+        if len(trimmed) < params.min_train_spikes:
             return None
-
-        if offset_idx <= onset_idx:
-            return None
-        return self._make_train(spikes[onset_idx:offset_idx + 1], params)
+        return self._make_train(trimmed, params)
 
     def _refine_signal(
         self,
@@ -453,81 +338,20 @@ class SpikeTrainSeizureDetector(DetectorBase):
         baseline_amp: float,
         params: SpikeTrainSeizureParams,
     ) -> _SpikeTrain | None:
-        """Refine boundaries using the raw signal RMS envelope.
-
-        Starting from the first/last spike, walk outward in the signal to
-        find where the RMS envelope first crosses above the threshold
-        (onset) and last crosses below it (offset).  Then walk inward
-        to clip any leading/trailing quiet segments.
-        """
+        """Refine boundaries using the raw signal RMS envelope."""
         spikes = train.spikes
         if len(spikes) < params.min_train_spikes:
             return None
 
-        rms_win_samples = max(1, int(params.boundary_rms_window_ms * fs / 1000))
-        threshold = params.boundary_rms_threshold_x * baseline_amp
-        max_trim_samples = int(params.boundary_max_trim_sec * fs)
-
-        # ── Compute RMS envelope of the full signal ───────────────────
-        # Use a fast strided approach: squared → cumsum → sqrt
-        sq = filtered.astype(np.float64) ** 2
-        cs = np.cumsum(sq)
-        # Pad so indexing is easy
-        cs = np.concatenate([[0], cs])
-        n = len(filtered)
-
-        def rms_at(idx: int) -> float:
-            """RMS of signal centred around idx, width = rms_win_samples."""
-            half = rms_win_samples // 2
-            lo = max(0, idx - half)
-            hi = min(n, idx + half)
-            if hi <= lo:
-                return 0.0
-            return float(np.sqrt((cs[hi] - cs[lo]) / (hi - lo)))
-
-        # ── Onset refinement ──────────────────────────────────────────
-        first_spike_idx = spikes[0].sample_idx
-        # Walk backward from the first spike to find where RMS drops
-        # below threshold — that's the true onset
-        search_start = max(0, first_spike_idx - max_trim_samples)
-        onset_sample = first_spike_idx
-
-        for idx in range(first_spike_idx, search_start - 1, -rms_win_samples):
-            if rms_at(idx) < threshold:
-                onset_sample = idx
-                break
-        else:
-            # RMS stayed above threshold all the way back — use search_start
-            onset_sample = search_start
-
-        # Now walk forward from onset_sample to find the first point
-        # where RMS crosses above threshold (the actual electrographic onset)
-        for idx in range(onset_sample, first_spike_idx + 1, rms_win_samples // 2 or 1):
-            if rms_at(idx) >= threshold:
-                onset_sample = idx
-                break
-
-        # ── Offset refinement ─────────────────────────────────────────
-        last_spike_idx = spikes[-1].sample_idx
-        search_end = min(n, last_spike_idx + max_trim_samples)
-        offset_sample = last_spike_idx
-
-        for idx in range(last_spike_idx, search_end + 1, rms_win_samples):
-            if rms_at(idx) < threshold:
-                offset_sample = idx
-                break
-        else:
-            offset_sample = search_end
-
-        # Walk backward from offset_sample to find where RMS last exceeds threshold
-        for idx in range(offset_sample, last_spike_idx - 1, -(rms_win_samples // 2 or 1)):
-            if rms_at(idx) >= threshold:
-                offset_sample = idx
-                break
-
-        # ── Trim spikes to refined boundaries ─────────────────────────
-        onset_sec = onset_sample / fs
-        offset_sec = offset_sample / fs
+        onset_sec, offset_sec = refine_signal_rms(
+            train.onset_sec, train.offset_sec,
+            filtered, fs, baseline_amp,
+            rms_window_ms=params.boundary_rms_window_ms,
+            rms_threshold_x=params.boundary_rms_threshold_x,
+            max_trim_sec=params.boundary_max_trim_sec,
+            anchor_onset_sample=spikes[0].sample_idx,
+            anchor_offset_sample=spikes[-1].sample_idx,
+        )
 
         trimmed = [s for s in spikes if onset_sec <= s.time_sec <= offset_sec]
 
@@ -538,7 +362,6 @@ class SpikeTrainSeizureDetector(DetectorBase):
         if new_train is None:
             return None
 
-        # Override onset/offset with signal-derived boundaries
         new_train.onset_sec = onset_sec
         new_train.offset_sec = offset_sec
         new_train.duration_sec = offset_sec - onset_sec

@@ -143,6 +143,120 @@ class SpikeTrainSeizureParams:
 
 
 @dataclass
+class SpectralBandParams:
+    """Parameters for spectral-band seizure detection.
+
+    Based on Casillas-Espinosa et al. (2019): seizures across rodent models
+    share a characteristic spectral peak in the 17–25 Hz band that is absent
+    in normal interictal EEG.  The detector computes a Spectral Band Index
+    (SBI) per sliding window and thresholds it against the baseline
+    distribution.
+    """
+
+    # Frequency band of interest
+    band_low: float = 17.0
+    band_high: float = 25.0
+
+    # Reference band for SBI ratio (total power denominator)
+    ref_band_low: float = 1.0
+    ref_band_high: float = 50.0
+
+    # Sliding window
+    window_sec: float = 2.0
+    step_sec: float = 1.0
+
+    # Threshold (z-score above baseline SBI)
+    threshold_z: float = 3.0
+
+    # Baseline
+    baseline_method: str = "percentile"   # "percentile" or "first_n"
+    baseline_percentile: int = 15
+
+    # Event grouping
+    min_duration_sec: float = 5.0
+    merge_gap_sec: float = 3.0
+
+    # Boundary refinement (signal-based only — no spikes in this method)
+    boundary_method: str = "none"          # "signal" or "none"
+    boundary_rms_window_ms: float = 100.0
+    boundary_rms_threshold_x: float = 2.0
+    boundary_max_trim_sec: float = 5.0
+
+
+@dataclass
+class AutocorrelationParams:
+    """Parameters for autocorrelation-based seizure detection.
+
+    Based on White et al. (2006): computes range overlap between consecutive
+    sub-windows to detect rhythmic, correlated activity characteristic of
+    seizures.  Combined with spike frequency counting for high specificity.
+    """
+
+    # ── Spike front-end (shared with spike-train) ──────────────────
+    bandpass_low: float = 1.0
+    bandpass_high: float = 100.0
+    spike_amplitude_x_baseline: float = 3.0
+    spike_min_amplitude_uv: float = 0.0
+    spike_refractory_ms: float = 50.0
+    spike_prominence_x_baseline: float = 1.5
+    spike_max_width_ms: float = 70.0
+    spike_min_width_ms: float = 2.0
+
+    # ── Autocorrelation-specific ───────────────────────────────────
+    # Sub-window for range computation (in data points at recording fs)
+    subwindow_points: int = 30       # ~120 ms at 250 Hz
+    lookahead_points: int = 60       # next 2 sub-windows
+
+    # Analysis window
+    acorr_window_sec: float = 12.0   # 3000 points at 250 Hz = 12s
+    acorr_step_sec: float = 4.0
+
+    # Thresholds
+    min_spike_freq_hz: float = 2.0   # min spikes/sec within window
+    acorr_threshold_z: float = 3.0   # z-score above baseline range-overlap
+
+    # Event grouping
+    min_duration_sec: float = 5.0
+    merge_gap_sec: float = 3.0
+
+    # Boundary refinement (signal or spike_density — has spikes)
+    boundary_method: str = "signal"        # "signal", "spike_density", or "none"
+    boundary_rms_window_ms: float = 100.0
+    boundary_rms_threshold_x: float = 2.0
+    boundary_max_trim_sec: float = 5.0
+    # spike_density boundary params
+    boundary_window_sec: float = 2.0
+    boundary_min_rate_hz: float = 2.0
+    boundary_min_amplitude_x: float = 2.0
+
+    # Baseline
+    baseline_method: str = "percentile"
+    baseline_percentile: int = 15
+    baseline_rms_window_sec: float = 10.0
+
+
+@dataclass
+class EnsembleParams:
+    """Parameters for ensemble seizure detection.
+
+    Runs multiple sub-detectors and combines their results via temporal
+    overlap voting.
+    """
+
+    # Which methods to include (subset of: spike_train, spectral_band, autocorrelation)
+    methods: list = field(default_factory=lambda: ["spike_train", "spectral_band"])
+
+    # Voting: event survives if >= voting_threshold methods detect it
+    voting_threshold: int = 2
+
+    # How to merge overlapping event boundaries
+    merge_strategy: str = "union"      # "union" (widest) or "intersection" (tightest)
+
+    # How to merge confidence scores
+    confidence_merge: str = "mean"     # "mean" or "max"
+
+
+@dataclass
 class PreprocessParams:
     """Preprocessing parameters."""
 

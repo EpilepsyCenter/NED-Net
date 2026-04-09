@@ -203,7 +203,7 @@ def _sidebar():
 TOP_TAB_DEFS = [
     ("upload", "Load"),
     ("viewer", "Viewer"),
-    ("detection", "Spike-train Detection"),  # parent — has subtabs
+    ("detection", "Detection"),              # parent — has subtabs
     ("training_grp", "Training"),             # parent — has subtabs
     ("ml_grp", "Dataset / Model"),            # parent — has subtabs
     ("analysis", "Analysis"),                 # unified CNN detection (single/batch/live)

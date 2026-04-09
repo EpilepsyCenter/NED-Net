@@ -1,4 +1,4 @@
-"""Seizure Detection tab: spike-train method with parameter controls."""
+"""Seizure Detection tab: multi-method detection with parameter controls."""
 
 from __future__ import annotations
 
@@ -19,7 +19,27 @@ from eeg_seizure_analyzer.dash_app.components import (
     alert,
     empty_state,
 )
-from eeg_seizure_analyzer.config import SpikeTrainSeizureParams
+from eeg_seizure_analyzer.config import (
+    SpikeTrainSeizureParams,
+    SpectralBandParams,
+    AutocorrelationParams,
+    EnsembleParams,
+)
+
+# Detection method labels
+_METHOD_OPTIONS = [
+    {"label": "Spike-Train", "value": "spike_train"},
+    {"label": "Spectral Band (17–25 Hz)", "value": "spectral_band"},
+    {"label": "Autocorrelation", "value": "autocorrelation"},
+    {"label": "Ensemble", "value": "ensemble"},
+]
+
+_DETECTOR_NAMES = {
+    "spike_train": "SpikeTrainSeizureDetector",
+    "spectral_band": "SpectralBandDetector",
+    "autocorrelation": "AutocorrelationDetector",
+    "ensemble": "EnsembleDetector",
+}
 
 # ── Default parameter values ────────────────────────────────────────
 
@@ -67,6 +87,65 @@ _SZ_DEFAULTS = {
 
 _SZ_SLIDER_KEYS = list(_SZ_DEFAULTS.keys())
 
+# ── Spectral band defaults ─────────────────────────────────────────
+_SB_DEFAULTS = {
+    "sz-sb-band-low": 17.0,
+    "sz-sb-band-high": 25.0,
+    "sz-sb-ref-low": 1.0,
+    "sz-sb-ref-high": 50.0,
+    "sz-sb-window": 2.0,
+    "sz-sb-step": 1.0,
+    "sz-sb-thr-z": 3.0,
+    "sz-sb-bl-pct": 15,
+    "sz-sb-min-dur": 5.0,
+    "sz-sb-merge-gap": 3.0,
+    # Boundary refinement
+    "sz-sb-bnd-rms-win": 100.0,
+    "sz-sb-bnd-rms-thr": 2.0,
+    "sz-sb-bnd-max-trim": 5.0,
+    # Pre-ictal local baseline
+    "sz-sb-lbl-start": 15.0,
+    "sz-sb-lbl-end": 5.0,
+    "sz-sb-lbl-trim-pct": 30.0,
+}
+_SB_SLIDER_KEYS = list(_SB_DEFAULTS.keys())
+
+# ── Autocorrelation defaults ───────────────────────────────────────
+_AC_DEFAULTS = {
+    "sz-ac-bp-low": 1.0,
+    "sz-ac-bp-high": 100.0,
+    "sz-ac-spike-amp": 3.0,
+    "sz-ac-spike-refr": 50.0,
+    "sz-ac-subwin": 30,
+    "sz-ac-lookahead": 60,
+    "sz-ac-window": 12.0,
+    "sz-ac-step": 4.0,
+    "sz-ac-min-freq": 2.0,
+    "sz-ac-thr-z": 3.0,
+    "sz-ac-min-dur": 5.0,
+    "sz-ac-merge-gap": 3.0,
+    "sz-ac-bl-pct": 15,
+    "sz-ac-bl-rms": 10.0,
+    # Boundary refinement
+    "sz-ac-bnd-rms-win": 100.0,
+    "sz-ac-bnd-rms-thr": 2.0,
+    "sz-ac-bnd-max-trim": 5.0,
+    "sz-ac-bnd-window": 2.0,
+    "sz-ac-bnd-rate": 2.0,
+    "sz-ac-bnd-amp-x": 2.0,
+    # Pre-ictal local baseline
+    "sz-ac-lbl-start": 15.0,
+    "sz-ac-lbl-end": 5.0,
+    "sz-ac-lbl-trim-pct": 30.0,
+}
+_AC_SLIDER_KEYS = list(_AC_DEFAULTS.keys())
+
+# ── Ensemble defaults ──────────────────────────────────────────────
+_ENS_DEFAULTS = {
+    "sz-ens-vote-thr": 2,
+}
+_ENS_SLIDER_KEYS = list(_ENS_DEFAULTS.keys())
+
 # Default filter values
 _FILTER_DEFAULTS = {
     "min_conf": 0, "max_conf": None,
@@ -82,6 +161,126 @@ _FILTER_DEFAULTS = {
     "min_td": 0, "max_td": None,
     "channel": None, "severity": "",
 }
+
+# ── Help text for detection methods ────────────────────────────────
+_METHOD_HELP_TEXT = """\
+## Spike-Train
+**Reference:** Twele et al., 2017
+
+Detects individual spikes exceeding a z-score amplitude threshold, \
+then groups them into trains by temporal proximity (inter-spike interval). \
+Trains are classified as HVSW, HPD, or electroclinical/convulsive based on \
+spike frequency, amplitude evolution, and morphology.
+
+**Parameter sections:**
+
+| Section | Description |
+|---------|-------------|
+| **Baseline** | How the quiet-period baseline amplitude is estimated. *Percentile*: takes the quietest P% of short RMS windows. *Rolling*: recomputes every N minutes using a lookback window. *First N min*: uses the first 5 minutes. |
+| **Spike Front-end** | Bandpass filter range, z-score amplitude threshold (threshold = mean + z x std), minimum prominence (spike must stand out from local context), width constraints (rejects slow waves and single-sample noise), refractory period (minimum time between successive spikes). |
+| **Boundary Refinement** | *Signal (RMS)*: computes a short-window RMS envelope and walks from the first/last spike to find where signal energy drops below threshold - produces precise electrographic onset/offset. *Spike density*: trims event edges to where local spike rate and amplitude exceed thresholds. *None*: uses raw spike-based boundaries. |
+| **Train Grouping** | Max inter-spike interval (spikes further apart start a new train), minimum spikes per train, minimum duration, and minimum inter-event interval (gap to separate distinct events). |
+
+Best for models with clear spike-and-wave patterns (kainate, pilocarpine).
+
+---
+
+## Spectral Band (17-25 Hz)
+**Reference:** Casillas-Espinosa et al., 2019 (ASSYST)
+
+Computes a Spectral Band Index (SBI) = power in target band (default 17-25 Hz) \
+divided by total power in a reference band (default 1-50 Hz) per sliding window. \
+Thresholds the SBI timeseries against the quiet baseline distribution. \
+100% sensitivity across 179 rats (10,600 seizures) in the original study.
+
+**Parameter sections:**
+
+| Section | Description |
+|---------|-------------|
+| **Baseline** | Percentile of SBI distribution used to estimate quiet-state statistics. |
+| **Detection (SBI)** | Target frequency band (low/high Hz), reference band (for ratio normalisation), sliding window size and step, z-score threshold above baseline SBI. |
+| **Boundary Refinement** | *Signal (RMS)*: refines coarse window-based boundaries using the raw signal's RMS envelope for sample-level precision. *None*: uses SBI window edges directly. |
+| **Event Grouping** | Minimum event duration and merge gap (events closer than this are merged). |
+
+Best as a first-pass detector for models with consistent spectral signature. \
+Works well when spike morphology varies but the seizure frequency band is stable.
+
+---
+
+## Autocorrelation
+**Reference:** White et al., 2006
+
+Combines two complementary metrics computed per sliding window:
+
+1. **Range autocorrelation**: compresses signal into min/max sub-windows and \
+measures overlap between consecutive ranges. High overlap = rhythmic, \
+repetitive activity.
+2. **Spike frequency**: counts detected spikes per window using the same \
+spike front-end as the Spike-Train method.
+
+A window is flagged as ictal when **both** metrics exceed their thresholds \
+simultaneously. 96% PPV, 100% sensitivity in the original study.
+
+**Parameter sections:**
+
+| Section | Description |
+|---------|-------------|
+| **Baseline** | Same options as Spike-Train (percentile, rolling, first N). Controls both the spike amplitude threshold and the autocorrelation baseline. |
+| **Spike Front-end + Detection** | Spike detection params (same as Spike-Train) plus autocorrelation-specific: sub-window size (data points for range computation), lookahead (points to compare), analysis window size/step, minimum spike frequency, autocorrelation z-score threshold. |
+| **Boundary Refinement** | All three options: *Signal (RMS)*, *Spike density*, *None*. Uses first/last spike as anchor for RMS refinement. |
+| **Event Grouping** | Minimum duration and merge gap. |
+
+Best for models with rhythmic seizure patterns. High specificity due to \
+dual-metric requirement.
+
+---
+
+## Ensemble
+
+Runs 2 or 3 of the above detectors independently, then combines results \
+via temporal overlap voting. An event survives only if at least N methods \
+detected overlapping activity.
+
+**Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| **Methods to combine** | Select which detectors to include. |
+| **Voting threshold** | Minimum number of methods that must agree (e.g., 2 of 3). |
+| **Merge strategy** | *Union*: merged event spans the widest boundaries. *Intersection*: spans only the overlap region. |
+| **Confidence merge** | How confidence scores are combined (mean or max). |
+
+Individual method parameters are inherited from the other method tabs. \
+Switch to each method to tune its parameters, then select Ensemble to combine.
+
+Best for maximum specificity - reduces false positives by requiring agreement.
+
+---
+
+## Common Concepts
+
+### Baseline Methods
+- **Percentile**: Computes RMS in short windows, takes the quietest P% as \
+baseline. Default P=15. Most robust for recordings with variable activity.
+- **Rolling**: Recomputes baseline every N minutes using a lookback window. \
+Adapts to slow drift in signal amplitude.
+- **First N min**: Uses the first 5 minutes of the recording as baseline. \
+Only suitable if the recording starts with quiet EEG.
+
+### Boundary Refinement
+- **Signal (RMS)**: Computes a short-window RMS envelope and walks from the \
+candidate boundary to find where signal energy crosses above/below a \
+threshold. Produces precise electrographic onset/offset.
+- **Spike density**: Trims event edges to the first/last point where local \
+spike rate and amplitude exceed thresholds. Only available for methods \
+that detect spikes (Spike-Train, Autocorrelation).
+- **None**: Uses raw candidate boundaries without refinement.
+
+### Pre-ictal Local Baseline
+A separate comparison window (default: 20-5 seconds before event onset) \
+is used to compute a local signal-to-baseline ratio for confidence scoring. \
+This runs for all methods post-detection and is not a detection parameter.
+"""
 
 # Default inspector options
 _INSP_DEFAULTS = {
@@ -112,10 +311,35 @@ def layout(sid: str | None) -> html.Div:
     # ── Explicit param save (belt-and-suspenders with ALL callback) ──
     # Ensures params survive tab switches even if the ALL-pattern callback
     # in main.py doesn't fire reliably during component mount/unmount.
+    # All method params go into one dict — keys have distinct prefixes so no collision.
     resolved = {k: _val(k) for k in _SZ_DEFAULTS}
     # Include dropdown values so they're saved in the detection file too
     resolved["sz-bl-method"] = state.extra.get("sz_bl_method", "percentile")
     resolved["sz-bnd-method"] = state.extra.get("sz_bnd_method", "signal")
+    # Merge spectral band / autocorrelation / ensemble params into same dict
+    for k in _SB_DEFAULTS:
+        if k in overrides:
+            resolved[k] = overrides[k]
+        elif k in persisted:
+            resolved[k] = persisted[k]
+        else:
+            resolved[k] = _SB_DEFAULTS[k]
+    for k in _AC_DEFAULTS:
+        if k in overrides:
+            resolved[k] = overrides[k]
+        elif k in persisted:
+            resolved[k] = persisted[k]
+        else:
+            resolved[k] = _AC_DEFAULTS[k]
+    for k in _ENS_DEFAULTS:
+        if k in overrides:
+            resolved[k] = overrides[k]
+        elif k in persisted:
+            resolved[k] = persisted[k]
+        else:
+            resolved[k] = _ENS_DEFAULTS[k]
+    # Also persist the selected method and ensemble sub-options
+    resolved["sz-method"] = state.extra.get("sz_method", "spike_train")
     state.extra["sz_params"] = resolved
 
     # Channel selector — restore persisted selection
@@ -172,6 +396,31 @@ def layout(sid: str | None) -> html.Div:
             n_total=len(state.seizure_events),
         )
 
+    # Persisted detection method
+    persisted_method = state.extra.get("sz_method", "spike_train")
+
+    # Value helpers for new method params — all in same persisted dict now
+    def _sb_val(key):
+        if key in overrides:
+            return overrides[key]
+        if key in persisted:
+            return persisted[key]
+        return _SB_DEFAULTS[key]
+
+    def _ac_val(key):
+        if key in overrides:
+            return overrides[key]
+        if key in persisted:
+            return persisted[key]
+        return _AC_DEFAULTS[key]
+
+    def _ens_val(key):
+        if key in overrides:
+            return overrides[key]
+        if key in persisted:
+            return persisted[key]
+        return _ENS_DEFAULTS[key]
+
     return html.Div(
         style={"padding": "24px"},
         children=[
@@ -181,12 +430,65 @@ def layout(sid: str | None) -> html.Div:
                 children=[
                     html.H4("Seizure Detection", style={"margin": "0"}),
                     html.Span(
-                        "Spike-train method",
+                        id="sz-method-badge",
+                        children={o["value"]: o["label"] for o in _METHOD_OPTIONS}.get(
+                            persisted_method, "Spike-Train"),
                         style={"fontSize": "0.78rem", "color": "#8b949e",
                                "border": "1px solid #2d333b", "borderRadius": "12px",
                                "padding": "2px 10px"},
                     ),
                 ],
+            ),
+
+            # ── Detection method selector ───────────────────────────
+            html.Div(
+                style={"marginBottom": "16px"},
+                children=[
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "gap": "8px",
+                               "marginBottom": "6px"},
+                        children=[
+                            html.Label(
+                                "Detection method",
+                                style={"fontSize": "0.82rem", "fontWeight": "500",
+                                       "color": "#8b949e", "margin": "0"},
+                            ),
+                            dbc.Button(
+                                "?", id="sz-method-help-btn", size="sm",
+                                color="secondary", outline=True,
+                                style={"padding": "0px 7px", "fontSize": "0.75rem",
+                                       "lineHeight": "1.4", "borderRadius": "50%"},
+                            ),
+                        ],
+                    ),
+                    dbc.RadioItems(
+                        id="sz-method-selector",
+                        options=_METHOD_OPTIONS,
+                        value=persisted_method,
+                        inline=True,
+                        className="mb-2",
+                        style={"fontSize": "0.82rem"},
+                    ),
+                ],
+            ),
+
+            # ── Help modal ─────────────────────────────────────────────
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(dbc.ModalTitle("Detection Methods Reference")),
+                    dbc.ModalBody(dcc.Markdown(
+                        _METHOD_HELP_TEXT,
+                        style={"fontSize": "0.85rem", "lineHeight": "1.6"},
+                    )),
+                    dbc.ModalFooter(
+                        dbc.Button("Close", id="sz-method-help-close",
+                                   className="ms-auto btn-ned-secondary"),
+                    ),
+                ],
+                id="sz-method-help-modal",
+                size="xl",
+                scrollable=True,
+                is_open=False,
             ),
 
             # Channel selector
@@ -210,16 +512,49 @@ def layout(sid: str | None) -> html.Div:
                 ],
             ),
 
-            # Parameter sections
-            dbc.Row([
-                dbc.Col([_spike_frontend_params(_val)], width=4),
-                dbc.Col([
-                    _train_grouping_params(_val),
-                    html.Div(style={"marginTop": "12px"}),
-                    _boundary_params(_val, persisted_bnd_method),
-                ], width=4),
-                dbc.Col([_baseline_params(_val, persisted_bl_method)], width=4),
-            ], className="g-3 mb-3"),
+            # ── Spike-Train params (shown/hidden) ──────────────────
+            # Flow: Baseline → Spike Frontend → Boundary → Grouping
+            html.Div(
+                id="sz-params-spike-train",
+                style={"display": "block" if persisted_method == "spike_train" else "none"},
+                children=[
+                    dbc.Row([
+                        dbc.Col([_baseline_params(_val, persisted_bl_method)], width=3),
+                        dbc.Col([_spike_frontend_params(_val)], width=3),
+                        dbc.Col([_boundary_params(_val, persisted_bnd_method)], width=3),
+                        dbc.Col([_train_grouping_params(_val)], width=3),
+                    ], className="g-3 mb-3"),
+                ],
+            ),
+
+            # ── Spectral Band params (shown/hidden) ────────────────
+            html.Div(
+                id="sz-params-spectral-band",
+                style={"display": "block" if persisted_method == "spectral_band" else "none"},
+                children=[_spectral_band_params(
+                    _sb_val,
+                    sb_bnd_method=state.extra.get("sz_sb_bnd_method", "none"),
+                )],
+            ),
+
+            # ── Autocorrelation params (shown/hidden) ──────────────
+            html.Div(
+                id="sz-params-autocorrelation",
+                style={"display": "block" if persisted_method == "autocorrelation" else "none"},
+                children=[_autocorrelation_params(
+                    _ac_val,
+                    ac_bl_method=state.extra.get("sz_ac_bl_method", "percentile"),
+                    ac_bnd_method=state.extra.get("sz_ac_bnd_method", "signal"),
+                )],
+            ),
+
+            # ── Ensemble params (shown/hidden) ─────────────────────
+            html.Div(
+                id="sz-params-ensemble",
+                style={"display": "block" if persisted_method == "ensemble" else "none"},
+                children=[_ensemble_params(_ens_val, state.extra.get("sz_ens_methods",
+                          ["spike_train", "spectral_band"]))],
+            ),
 
             # Hidden: subtype params (kept for callback compatibility —
             # the detect callback still reads these param-slider States)
@@ -632,9 +967,336 @@ def _subtype_params(_val, classify_on=False) -> html.Div:
     )
 
 
+# ── Spectral band parameter builder ───────────────────────────────────
+
+
+def _spectral_band_params(_val, sb_bnd_method="none") -> html.Div:
+    # Flow: Baseline → Detection Frontend → Boundary → Grouping
+    sb_signal_controls = html.Div(
+        id="sz-sb-bnd-signal-controls",
+        style={"display": "block" if sb_bnd_method == "signal" else "none"},
+        children=[
+            param_control("RMS window (ms)", "sz-sb-bnd-rms-win",
+                          10.0, 500.0, 10.0, _val("sz-sb-bnd-rms-win")),
+            param_control("RMS threshold (x BL)", "sz-sb-bnd-rms-thr",
+                          0.5, 10.0, 0.5, _val("sz-sb-bnd-rms-thr")),
+            param_control("Max trim (s)", "sz-sb-bnd-max-trim",
+                          0.5, 20.0, 0.5, _val("sz-sb-bnd-max-trim")),
+        ],
+    )
+    return dbc.Row([
+        dbc.Col([
+            collapsible_section(
+                "Baseline", "sz-sb-baseline",
+                default_open=True,
+                children=[
+                    param_control("Baseline percentile", "sz-sb-bl-pct",
+                                  1, 50, 1, _val("sz-sb-bl-pct")),
+                    html.Hr(style={"margin": "10px 0", "borderColor": "#30363d"}),
+                    html.Span("Pre-ictal local baseline",
+                              style={"fontSize": "0.75rem", "color": "#8b949e",
+                                     "display": "block", "marginBottom": "6px"}),
+                    param_control("Window start (s before onset)", "sz-sb-lbl-start",
+                                  1.0, 120.0, 1.0, _val("sz-sb-lbl-start")),
+                    param_control("Window end (s before onset)", "sz-sb-lbl-end",
+                                  1.0, 60.0, 1.0, _val("sz-sb-lbl-end")),
+                    param_control("Trim top % (spike removal)", "sz-sb-lbl-trim-pct",
+                                  0, 80, 5, _val("sz-sb-lbl-trim-pct")),
+                ],
+            ),
+        ], width=3),
+        dbc.Col([
+            collapsible_section(
+                "Detection (SBI)", "sz-sb-band",
+                default_open=True,
+                children=[
+                    param_control("Band low (Hz)", "sz-sb-band-low",
+                                  1.0, 50.0, 1.0, _val("sz-sb-band-low")),
+                    param_control("Band high (Hz)", "sz-sb-band-high",
+                                  5.0, 100.0, 1.0, _val("sz-sb-band-high")),
+                    param_control("Ref band low (Hz)", "sz-sb-ref-low",
+                                  0.5, 20.0, 0.5, _val("sz-sb-ref-low"),
+                                  "Lower bound of reference band for SBI ratio."),
+                    param_control("Ref band high (Hz)", "sz-sb-ref-high",
+                                  10.0, 200.0, 1.0, _val("sz-sb-ref-high"),
+                                  "Upper bound of reference band for SBI ratio."),
+                    param_control("Window (s)", "sz-sb-window",
+                                  0.5, 10.0, 0.5, _val("sz-sb-window")),
+                    param_control("Step (s)", "sz-sb-step",
+                                  0.25, 5.0, 0.25, _val("sz-sb-step")),
+                    param_control("Threshold (z-score)", "sz-sb-thr-z",
+                                  1.0, 10.0, 0.5, _val("sz-sb-thr-z"),
+                                  "SBI must exceed baseline_mean + z × baseline_std"),
+                ],
+            ),
+        ], width=3),
+        dbc.Col([
+            collapsible_section(
+                "Boundary Refinement", "sz-sb-boundary",
+                default_open=True,
+                children=[
+                    html.Div([
+                        html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                                                    "marginBottom": "4px"}),
+                        dcc.Dropdown(
+                            id="sz-sb-bnd-method",
+                            options=[
+                                {"label": "Signal (RMS)", "value": "signal"},
+                                {"label": "None", "value": "none"},
+                            ],
+                            value=sb_bnd_method, clearable=False,
+                            style={"fontSize": "0.82rem"},
+                        ),
+                    ], style={"marginBottom": "12px"}),
+                    sb_signal_controls,
+                ],
+            ),
+        ], width=3),
+        dbc.Col([
+            collapsible_section(
+                "Event Grouping", "sz-sb-grp",
+                default_open=True,
+                children=[
+                    param_control("Min duration (s)", "sz-sb-min-dur",
+                                  1.0, 60.0, 0.5, _val("sz-sb-min-dur")),
+                    param_control("Merge gap (s)", "sz-sb-merge-gap",
+                                  0.5, 30.0, 0.5, _val("sz-sb-merge-gap")),
+                ],
+            ),
+        ], width=3),
+    ], className="g-3 mb-3")
+
+
+# ── Autocorrelation parameter builder ─────────────────────────────────
+
+
+def _autocorrelation_params(_val, ac_bl_method="percentile",
+                            ac_bnd_method="signal") -> html.Div:
+    # Flow: Baseline → Spike Frontend + Detection → Boundary → Grouping
+    ac_bnd_signal = html.Div(
+        id="sz-ac-bnd-signal-controls",
+        style={"display": "block" if ac_bnd_method == "signal" else "none"},
+        children=[
+            param_control("RMS window (ms)", "sz-ac-bnd-rms-win",
+                          10.0, 500.0, 10.0, _val("sz-ac-bnd-rms-win")),
+            param_control("RMS threshold (x BL)", "sz-ac-bnd-rms-thr",
+                          0.5, 10.0, 0.5, _val("sz-ac-bnd-rms-thr")),
+            param_control("Max trim (s)", "sz-ac-bnd-max-trim",
+                          0.5, 20.0, 0.5, _val("sz-ac-bnd-max-trim")),
+        ],
+    )
+    ac_bnd_density = html.Div(
+        id="sz-ac-bnd-density-controls",
+        style={"display": "block" if ac_bnd_method == "spike_density" else "none"},
+        children=[
+            param_control("Boundary window (s)", "sz-ac-bnd-window",
+                          0.5, 10.0, 0.5, _val("sz-ac-bnd-window")),
+            param_control("Min rate (Hz)", "sz-ac-bnd-rate",
+                          0.5, 20.0, 0.5, _val("sz-ac-bnd-rate")),
+            param_control("Min amplitude (x BL)", "sz-ac-bnd-amp-x",
+                          0.5, 10.0, 0.5, _val("sz-ac-bnd-amp-x")),
+        ],
+    )
+    return dbc.Row([
+        dbc.Col([
+            collapsible_section(
+                "Baseline", "sz-ac-baseline",
+                default_open=True,
+                children=[
+                    html.Div([
+                        html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                                                    "marginBottom": "4px"}),
+                        dcc.Dropdown(
+                            id="sz-ac-bl-method",
+                            options=[
+                                {"label": "Percentile", "value": "percentile"},
+                                {"label": "Rolling", "value": "rolling"},
+                                {"label": "First N min", "value": "first_n"},
+                            ],
+                            value=ac_bl_method, clearable=False,
+                            style={"fontSize": "0.82rem"},
+                        ),
+                    ], style={"marginBottom": "12px"}),
+                    param_control("Percentile", "sz-ac-bl-pct",
+                                  1, 50, 1, _val("sz-ac-bl-pct")),
+                    param_control("RMS window (s)", "sz-ac-bl-rms",
+                                  1.0, 60.0, 1.0, _val("sz-ac-bl-rms")),
+                    html.Hr(style={"margin": "10px 0", "borderColor": "#30363d"}),
+                    html.Span("Pre-ictal local baseline",
+                              style={"fontSize": "0.75rem", "color": "#8b949e",
+                                     "display": "block", "marginBottom": "6px"}),
+                    param_control("Window start (s before onset)", "sz-ac-lbl-start",
+                                  1.0, 120.0, 1.0, _val("sz-ac-lbl-start")),
+                    param_control("Window end (s before onset)", "sz-ac-lbl-end",
+                                  1.0, 60.0, 1.0, _val("sz-ac-lbl-end")),
+                    param_control("Trim top % (spike removal)", "sz-ac-lbl-trim-pct",
+                                  0, 80, 5, _val("sz-ac-lbl-trim-pct")),
+                ],
+            ),
+        ], width=3),
+        dbc.Col([
+            collapsible_section(
+                "Spike Front-end", "sz-ac-spike",
+                default_open=True,
+                children=[
+                    param_control("Bandpass low (Hz)", "sz-ac-bp-low",
+                                  0.5, 100.0, 0.5, _val("sz-ac-bp-low")),
+                    param_control("Bandpass high (Hz)", "sz-ac-bp-high",
+                                  10.0, 500.0, 1.0, _val("sz-ac-bp-high")),
+                    param_control("Threshold (z-score)", "sz-ac-spike-amp",
+                                  1.0, 10.0, 0.5, _val("sz-ac-spike-amp")),
+                    param_control("Refractory (ms)", "sz-ac-spike-refr",
+                                  5.0, 200.0, 5.0, _val("sz-ac-spike-refr")),
+                    html.Hr(style={"margin": "8px 0", "borderColor": "#30363d"}),
+                    html.Span("Autocorrelation",
+                              style={"fontSize": "0.75rem", "color": "#8b949e",
+                                     "display": "block", "marginBottom": "6px"}),
+                    param_control("Sub-window (pts)", "sz-ac-subwin",
+                                  10, 100, 5, _val("sz-ac-subwin"),
+                                  "Data points per sub-window for range computation."),
+                    param_control("Lookahead (pts)", "sz-ac-lookahead",
+                                  20, 200, 10, _val("sz-ac-lookahead"),
+                                  "Data points to look ahead for overlap."),
+                    param_control("Window (s)", "sz-ac-window",
+                                  2.0, 30.0, 1.0, _val("sz-ac-window")),
+                    param_control("Step (s)", "sz-ac-step",
+                                  0.5, 10.0, 0.5, _val("sz-ac-step")),
+                    param_control("Min spike freq (Hz)", "sz-ac-min-freq",
+                                  0.5, 10.0, 0.5, _val("sz-ac-min-freq")),
+                    param_control("Threshold (z-score)", "sz-ac-thr-z",
+                                  1.0, 10.0, 0.5, _val("sz-ac-thr-z")),
+                ],
+            ),
+        ], width=3),
+        dbc.Col([
+            collapsible_section(
+                "Boundary Refinement", "sz-ac-boundary",
+                default_open=True,
+                children=[
+                    html.Div([
+                        html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                                                    "marginBottom": "4px"}),
+                        dcc.Dropdown(
+                            id="sz-ac-bnd-method",
+                            options=[
+                                {"label": "Signal (RMS)", "value": "signal"},
+                                {"label": "Spike density", "value": "spike_density"},
+                                {"label": "None", "value": "none"},
+                            ],
+                            value=ac_bnd_method, clearable=False,
+                            style={"fontSize": "0.82rem"},
+                        ),
+                    ], style={"marginBottom": "12px"}),
+                    ac_bnd_signal,
+                    ac_bnd_density,
+                ],
+            ),
+        ], width=3),
+        dbc.Col([
+            collapsible_section(
+                "Event Grouping", "sz-ac-grp",
+                default_open=True,
+                children=[
+                    param_control("Min duration (s)", "sz-ac-min-dur",
+                                  1.0, 60.0, 0.5, _val("sz-ac-min-dur")),
+                    param_control("Merge gap (s)", "sz-ac-merge-gap",
+                                  0.5, 30.0, 0.5, _val("sz-ac-merge-gap")),
+                ],
+            ),
+        ], width=3),
+    ], className="g-3 mb-3")
+
+
+# ── Ensemble parameter builder ────────────────────────────────────────
+
+
+def _ensemble_params(_val, selected_methods=None) -> html.Div:
+    if selected_methods is None:
+        selected_methods = ["spike_train", "spectral_band"]
+    return html.Div([
+        dbc.Row([
+            dbc.Col([
+                collapsible_section(
+                    "Ensemble Settings", "sz-ens-cfg",
+                    default_open=True,
+                    children=[
+                        html.Div([
+                            html.Label("Methods to combine",
+                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                              "marginBottom": "4px"}),
+                            dbc.Checklist(
+                                id="sz-ens-methods",
+                                options=[
+                                    {"label": "Spike-Train", "value": "spike_train"},
+                                    {"label": "Spectral Band", "value": "spectral_band"},
+                                    {"label": "Autocorrelation", "value": "autocorrelation"},
+                                ],
+                                value=selected_methods,
+                                inline=True,
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], style={"marginBottom": "12px"}),
+                        param_control("Voting threshold", "sz-ens-vote-thr",
+                                      1, 3, 1, _val("sz-ens-vote-thr"),
+                                      "Min methods that must agree for an event to survive."),
+                        html.Div([
+                            html.Label("Merge strategy",
+                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                              "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="sz-ens-merge",
+                                options=[
+                                    {"label": "Union (widest)", "value": "union"},
+                                    {"label": "Intersection (tightest)", "value": "intersection"},
+                                ],
+                                value="union", clearable=False,
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], style={"marginBottom": "12px"}),
+                        html.Div([
+                            html.Label("Confidence merge",
+                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                              "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="sz-ens-conf-merge",
+                                options=[
+                                    {"label": "Mean", "value": "mean"},
+                                    {"label": "Max", "value": "max"},
+                                ],
+                                value="mean", clearable=False,
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ]),
+                    ],
+                ),
+            ], width=6),
+            dbc.Col([
+                html.Div(
+                    "Individual method parameters are inherited from the other "
+                    "tabs above. Switch to each method to tune its parameters, "
+                    "then select Ensemble to combine results.",
+                    style={"fontSize": "0.78rem", "color": "#8b949e",
+                           "padding": "12px", "border": "1px solid #30363d",
+                           "borderRadius": "6px", "marginTop": "8px"},
+                ),
+            ], width=6),
+        ], className="g-3 mb-3"),
+    ])
+
+
 # ── Collapse toggle callbacks ─────────────────────────────────────────
 
-for section_id in ["sz-spike", "sz-train", "sz-baseline", "sz-boundary", "sz-subtype"]:
+_ALL_COLLAPSE_SECTIONS = [
+    "sz-spike", "sz-train", "sz-baseline", "sz-boundary", "sz-subtype",
+    # Spectral band
+    "sz-sb-baseline", "sz-sb-band", "sz-sb-boundary", "sz-sb-grp",
+    # Autocorrelation
+    "sz-ac-baseline", "sz-ac-spike", "sz-ac-boundary", "sz-ac-grp",
+    # Ensemble
+    "sz-ens-cfg",
+]
+
+for section_id in _ALL_COLLAPSE_SECTIONS:
     @callback(
         Output(f"{section_id}-collapse", "is_open"),
         Output(f"{section_id}-chevron", "children"),
@@ -666,6 +1328,79 @@ def toggle_boundary_controls(method):
     return hide, hide
 
 
+@callback(
+    Output("sz-sb-bnd-signal-controls", "style"),
+    Input("sz-sb-bnd-method", "value"),
+    prevent_initial_call=True,
+)
+def toggle_sb_boundary_controls(method):
+    """Show/hide spectral band boundary sub-controls."""
+    return {"display": "block"} if method == "signal" else {"display": "none"}
+
+
+@callback(
+    Output("sz-ac-bnd-signal-controls", "style"),
+    Output("sz-ac-bnd-density-controls", "style"),
+    Input("sz-ac-bnd-method", "value"),
+    prevent_initial_call=True,
+)
+def toggle_ac_boundary_controls(method):
+    """Show/hide autocorrelation boundary sub-controls."""
+    show = {"display": "block"}
+    hide = {"display": "none"}
+    if method == "signal":
+        return show, hide
+    elif method == "spike_density":
+        return hide, show
+    return hide, hide
+
+
+# ── Method selector toggle ───────────────────────────────────────────
+
+
+@callback(
+    Output("sz-params-spike-train", "style"),
+    Output("sz-params-spectral-band", "style"),
+    Output("sz-params-autocorrelation", "style"),
+    Output("sz-params-ensemble", "style"),
+    Output("sz-method-badge", "children"),
+    Input("sz-method-selector", "value"),
+    prevent_initial_call=True,
+)
+def toggle_method_params(method):
+    """Show/hide parameter sections based on selected detection method."""
+    show = {"display": "block"}
+    hide = {"display": "none"}
+    labels = {o["value"]: o["label"] for o in _METHOD_OPTIONS}
+    styles = {
+        "spike_train": hide, "spectral_band": hide,
+        "autocorrelation": hide, "ensemble": hide,
+    }
+    styles[method] = show
+    return (
+        styles["spike_train"],
+        styles["spectral_band"],
+        styles["autocorrelation"],
+        styles["ensemble"],
+        labels.get(method, "Spike-Train"),
+    )
+
+
+# ── Help modal toggle ─────────────────────────────────────────────
+
+
+@callback(
+    Output("sz-method-help-modal", "is_open"),
+    Input("sz-method-help-btn", "n_clicks"),
+    Input("sz-method-help-close", "n_clicks"),
+    State("sz-method-help-modal", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_help_modal(open_clicks, close_clicks, is_open):
+    """Open/close the detection methods help modal."""
+    return not is_open
+
+
 # ── Auto-save non-MATCH components to server state ──────────────────
 
 
@@ -675,6 +1410,11 @@ def toggle_boundary_controls(method):
     Input("sz-bl-method", "value"),
     Input("sz-bnd-method", "value"),
     Input("sz-classify-subtypes", "value"),
+    Input("sz-method-selector", "value"),
+    # New method dropdowns
+    Input("sz-sb-bnd-method", "value"),
+    Input("sz-ac-bl-method", "value"),
+    Input("sz-ac-bnd-method", "value"),
     # Filter values (min + max)
     *[Input(fid, "value") for fid in _ALL_FILTER_IDS],
     Input("sz-filter-channel", "value"),
@@ -692,15 +1432,16 @@ def toggle_boundary_controls(method):
 )
 def auto_save_sz_extras(*args):
     """Save all non-MATCH seizure component values to server state on any change."""
-    # Unpack *args: 4 fixed + n_min + n_max filter IDs + 2 dropdowns + 1 toggle + 5 inspector + sid
+    # Unpack *args: 8 fixed + n_min + n_max filter IDs + 2 dropdowns + 1 toggle + 5 inspector + sid
     n_min = len(_ALL_FILTER_MIN_IDS)
     n_max = len(_ALL_FILTER_MAX_IDS)
-    channels, bl_method, bnd_method, classify = args[0:4]
-    filt_min_vals = args[4:4 + n_min]
-    filt_max_vals = args[4 + n_min:4 + n_min + n_max]
-    filt_channel = args[4 + n_min + n_max]
-    filt_severity = args[4 + n_min + n_max + 1]
-    filt_enabled = args[4 + n_min + n_max + 2]
+    (channels, bl_method, bnd_method, classify, method_sel,
+     sb_bnd_method, ac_bl_method, ac_bnd_method) = args[0:8]
+    filt_min_vals = args[8:8 + n_min]
+    filt_max_vals = args[8 + n_min:8 + n_min + n_max]
+    filt_channel = args[8 + n_min + n_max]
+    filt_severity = args[8 + n_min + n_max + 1]
+    filt_enabled = args[8 + n_min + n_max + 2]
     insp_spikes, insp_baseline, insp_threshold, insp_bp, insp_yr = args[-6:-1]
     sid = args[-1]
 
@@ -716,6 +1457,14 @@ def auto_save_sz_extras(*args):
         state.extra["sz_bnd_method"] = bnd_method
     if classify is not None:
         state.extra["sz_classify_subtypes"] = classify
+    if method_sel is not None:
+        state.extra["sz_method"] = method_sel
+    if sb_bnd_method is not None:
+        state.extra["sz_sb_bnd_method"] = sb_bnd_method
+    if ac_bl_method is not None:
+        state.extra["sz_ac_bl_method"] = ac_bl_method
+    if ac_bnd_method is not None:
+        state.extra["sz_ac_bnd_method"] = ac_bnd_method
     # Merge filter values — only update keys with non-None values
     _min_keys = ["min_conf", "min_dur", "min_spikes", "min_amp", "min_lbl",
                  "min_top_amp", "min_ll", "min_energy", "min_sigbl",
@@ -845,6 +1594,20 @@ def auto_save_sz_extras(*args):
     State({"type": "param-slider", "key": "sz-lbl-start"}, "value"),
     State({"type": "param-slider", "key": "sz-lbl-end"}, "value"),
     State({"type": "param-slider", "key": "sz-lbl-trim-pct"}, "value"),
+    # ── Method selector ──
+    State("sz-method-selector", "value"),
+    # ── Spectral band params ──
+    *[State({"type": "param-slider", "key": k}, "value") for k in _SB_SLIDER_KEYS],
+    State("sz-sb-bnd-method", "value"),
+    # ── Autocorrelation params ──
+    *[State({"type": "param-slider", "key": k}, "value") for k in _AC_SLIDER_KEYS],
+    State("sz-ac-bl-method", "value"),
+    State("sz-ac-bnd-method", "value"),
+    # ── Ensemble params ──
+    *[State({"type": "param-slider", "key": k}, "value") for k in _ENS_SLIDER_KEYS],
+    State("sz-ens-methods", "value"),
+    State("sz-ens-merge", "value"),
+    State("sz-ens-conf-merge", "value"),
     # Session
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -870,9 +1633,28 @@ def run_detection(
     hpd_amp, hpd_freq, hpd_dur,
     conv_dur, conv_amp, conv_postictal,
     lbl_start, lbl_end, lbl_trim_pct,
+    # New method params
+    detection_method,
+    # Spectral band (13 params + 3 pre-ictal + 1 dropdown)
+    sb_band_low, sb_band_high, sb_ref_low, sb_ref_high,
+    sb_window, sb_step, sb_thr_z, sb_bl_pct, sb_min_dur, sb_merge_gap,
+    sb_bnd_rms_win, sb_bnd_rms_thr, sb_bnd_max_trim,
+    sb_lbl_start, sb_lbl_end, sb_lbl_trim_pct,
+    sb_bnd_method,
+    # Autocorrelation (19 params + 3 pre-ictal + 2 dropdowns)
+    ac_bp_low, ac_bp_high, ac_spike_amp, ac_spike_refr,
+    ac_subwin, ac_lookahead, ac_window, ac_step,
+    ac_min_freq, ac_thr_z, ac_min_dur, ac_merge_gap, ac_bl_pct, ac_bl_rms,
+    ac_bnd_rms_win, ac_bnd_rms_thr, ac_bnd_max_trim,
+    ac_bnd_window, ac_bnd_rate, ac_bnd_amp_x,
+    ac_lbl_start, ac_lbl_end, ac_lbl_trim_pct,
+    ac_bl_method, ac_bnd_method,
+    # Ensemble
+    ens_vote_thr,
+    ens_methods, ens_merge, ens_conf_merge,
     sid,
 ):
-    """Run spike-train seizure detection, clear results, or apply filters."""
+    """Run seizure detection (multi-method), clear results, or apply filters."""
     trigger = ctx.triggered_id
     state = server_state.get_session(sid)
     rec = state.recording
@@ -957,6 +1739,15 @@ def run_detection(
         from eeg_seizure_analyzer.detection.spike_train_seizure import (
             SpikeTrainSeizureDetector,
         )
+        from eeg_seizure_analyzer.detection.spectral_band_seizure import (
+            SpectralBandDetector,
+        )
+        from eeg_seizure_analyzer.detection.autocorrelation_seizure import (
+            AutocorrelationDetector,
+        )
+        from eeg_seizure_analyzer.detection.ensemble_seizure import (
+            EnsembleDetector,
+        )
         from eeg_seizure_analyzer.detection.confidence import (
             compute_event_quality,
             compute_confidence_score,
@@ -964,80 +1755,240 @@ def run_detection(
             compute_top_spike_amplitude,
         )
 
-        params = SpikeTrainSeizureParams(
-            classify_subtypes=bool(classify_subtypes),
-            bandpass_low=float(bp_low),
-            bandpass_high=float(bp_high),
-            spike_amplitude_x_baseline=float(spike_amp),
-            spike_min_amplitude_uv=float(spike_min_uv),
-            spike_prominence_x_baseline=float(spike_prom),
-            spike_max_width_ms=float(spike_maxw),
-            spike_min_width_ms=float(spike_minw),
-            spike_refractory_ms=float(spike_refr),
-            max_interspike_interval_ms=float(max_isi),
-            min_train_spikes=int(min_spikes),
-            min_train_duration_sec=float(min_dur),
-            min_interevent_interval_sec=float(min_iei),
-            baseline_method=bl_method,
-            baseline_percentile=int(bl_pct),
-            baseline_rms_window_sec=float(bl_rms),
-            boundary_method=bnd_method,
-            boundary_rms_window_ms=float(bnd_rms_win),
-            boundary_rms_threshold_x=float(bnd_rms_thr),
-            boundary_max_trim_sec=float(bnd_max_trim),
-            boundary_window_sec=float(bnd_window),
-            boundary_min_rate_hz=float(bnd_rate),
-            boundary_min_amplitude_x=float(bnd_amp_x),
-            hvsw_min_amplitude_x=float(hvsw_amp),
-            hvsw_min_frequency_hz=float(hvsw_freq),
-            hvsw_min_duration_sec=float(hvsw_dur),
-            hvsw_max_evolution=float(hvsw_max_ev),
-            hpd_min_amplitude_x=float(hpd_amp),
-            hpd_min_frequency_hz=float(hpd_freq),
-            hpd_min_duration_sec=float(hpd_dur),
-            convulsive_min_duration_sec=float(conv_dur),
-            convulsive_min_amplitude_x=float(conv_amp),
-            convulsive_postictal_suppression_sec=float(conv_postictal),
-        )
+        method = detection_method or "spike_train"
 
-        detector = SpikeTrainSeizureDetector()
+        # ── Build detector + params based on selected method ────────
+        if method == "spike_train":
+            params = SpikeTrainSeizureParams(
+                classify_subtypes=bool(classify_subtypes),
+                bandpass_low=float(bp_low),
+                bandpass_high=float(bp_high),
+                spike_amplitude_x_baseline=float(spike_amp),
+                spike_min_amplitude_uv=float(spike_min_uv),
+                spike_prominence_x_baseline=float(spike_prom),
+                spike_max_width_ms=float(spike_maxw),
+                spike_min_width_ms=float(spike_minw),
+                spike_refractory_ms=float(spike_refr),
+                max_interspike_interval_ms=float(max_isi),
+                min_train_spikes=int(min_spikes),
+                min_train_duration_sec=float(min_dur),
+                min_interevent_interval_sec=float(min_iei),
+                baseline_method=bl_method,
+                baseline_percentile=int(bl_pct),
+                baseline_rms_window_sec=float(bl_rms),
+                boundary_method=bnd_method,
+                boundary_rms_window_ms=float(bnd_rms_win),
+                boundary_rms_threshold_x=float(bnd_rms_thr),
+                boundary_max_trim_sec=float(bnd_max_trim),
+                boundary_window_sec=float(bnd_window),
+                boundary_min_rate_hz=float(bnd_rate),
+                boundary_min_amplitude_x=float(bnd_amp_x),
+                hvsw_min_amplitude_x=float(hvsw_amp),
+                hvsw_min_frequency_hz=float(hvsw_freq),
+                hvsw_min_duration_sec=float(hvsw_dur),
+                hvsw_max_evolution=float(hvsw_max_ev),
+                hpd_min_amplitude_x=float(hpd_amp),
+                hpd_min_frequency_hz=float(hpd_freq),
+                hpd_min_duration_sec=float(hpd_dur),
+                convulsive_min_duration_sec=float(conv_dur),
+                convulsive_min_amplitude_x=float(conv_amp),
+                convulsive_postictal_suppression_sec=float(conv_postictal),
+            )
+            detector = SpikeTrainSeizureDetector()
+
+        elif method == "spectral_band":
+            params = SpectralBandParams(
+                band_low=float(sb_band_low),
+                band_high=float(sb_band_high),
+                ref_band_low=float(sb_ref_low),
+                ref_band_high=float(sb_ref_high),
+                window_sec=float(sb_window),
+                step_sec=float(sb_step),
+                threshold_z=float(sb_thr_z),
+                baseline_percentile=int(sb_bl_pct),
+                min_duration_sec=float(sb_min_dur),
+                merge_gap_sec=float(sb_merge_gap),
+                boundary_method=sb_bnd_method or "none",
+                boundary_rms_window_ms=float(sb_bnd_rms_win or 100),
+                boundary_rms_threshold_x=float(sb_bnd_rms_thr or 2.0),
+                boundary_max_trim_sec=float(sb_bnd_max_trim or 5.0),
+            )
+            detector = SpectralBandDetector()
+
+        elif method == "autocorrelation":
+            params = AutocorrelationParams(
+                bandpass_low=float(ac_bp_low),
+                bandpass_high=float(ac_bp_high),
+                spike_amplitude_x_baseline=float(ac_spike_amp),
+                spike_refractory_ms=float(ac_spike_refr),
+                subwindow_points=int(ac_subwin),
+                lookahead_points=int(ac_lookahead),
+                acorr_window_sec=float(ac_window),
+                acorr_step_sec=float(ac_step),
+                min_spike_freq_hz=float(ac_min_freq),
+                acorr_threshold_z=float(ac_thr_z),
+                min_duration_sec=float(ac_min_dur),
+                merge_gap_sec=float(ac_merge_gap),
+                baseline_method=ac_bl_method or "percentile",
+                baseline_percentile=int(ac_bl_pct),
+                baseline_rms_window_sec=float(ac_bl_rms or 10.0),
+                boundary_method=ac_bnd_method or "signal",
+                boundary_rms_window_ms=float(ac_bnd_rms_win or 100),
+                boundary_rms_threshold_x=float(ac_bnd_rms_thr or 2.0),
+                boundary_max_trim_sec=float(ac_bnd_max_trim or 5.0),
+                boundary_window_sec=float(ac_bnd_window or 2.0),
+                boundary_min_rate_hz=float(ac_bnd_rate or 2.0),
+                boundary_min_amplitude_x=float(ac_bnd_amp_x or 2.0),
+            )
+            detector = AutocorrelationDetector()
+
+        elif method == "ensemble":
+            detector = None  # handled separately below
+            params = None
+        else:
+            return (
+                alert(f"Unknown method: {method}", "danger"),
+                no_update, no_update, no_update, no_update,
+            )
+
         seizures = []
         detection_info = {}
 
-        # Use chunked detection for large files (>30 min per channel)
         _src = getattr(rec, "source_path", "") or ""
-        _use_chunked = (
-            _src.lower().endswith(".edf")
-            and rec.duration_sec > 1800
-        )
 
-        if _use_chunked:
-            from eeg_seizure_analyzer.detection.base import detect_chunked
-            valid_channels = [ch for ch in selected_channels
-                              if 0 <= ch < rec.n_channels]
-            seizures, detection_info = detect_chunked(
-                detector,
-                path=_src,
-                channels=valid_channels,
-                chunk_duration_sec=1800.0,
-                overlap_sec=30.0,
-                params=params,
-            )
-        else:
-            for ch in selected_channels:
-                if ch < 0 or ch >= rec.n_channels:
+        if method == "ensemble":
+            # Run each selected sub-detector and pass results to ensemble
+            ens_method_list = ens_methods or ["spike_train", "spectral_band"]
+            method_events = {}
+
+            for sub_method in ens_method_list:
+                if sub_method == "spike_train":
+                    sub_params = SpikeTrainSeizureParams(
+                        classify_subtypes=bool(classify_subtypes),
+                        bandpass_low=float(bp_low), bandpass_high=float(bp_high),
+                        spike_amplitude_x_baseline=float(spike_amp),
+                        spike_min_amplitude_uv=float(spike_min_uv),
+                        spike_prominence_x_baseline=float(spike_prom),
+                        spike_max_width_ms=float(spike_maxw),
+                        spike_min_width_ms=float(spike_minw),
+                        spike_refractory_ms=float(spike_refr),
+                        max_interspike_interval_ms=float(max_isi),
+                        min_train_spikes=int(min_spikes),
+                        min_train_duration_sec=float(min_dur),
+                        min_interevent_interval_sec=float(min_iei),
+                        baseline_method=bl_method,
+                        baseline_percentile=int(bl_pct),
+                        baseline_rms_window_sec=float(bl_rms),
+                        boundary_method=bnd_method,
+                    )
+                    sub_det = SpikeTrainSeizureDetector()
+                elif sub_method == "spectral_band":
+                    sub_params = SpectralBandParams(
+                        band_low=float(sb_band_low), band_high=float(sb_band_high),
+                        ref_band_low=float(sb_ref_low), ref_band_high=float(sb_ref_high),
+                        window_sec=float(sb_window), step_sec=float(sb_step),
+                        threshold_z=float(sb_thr_z), baseline_percentile=int(sb_bl_pct),
+                        min_duration_sec=float(sb_min_dur), merge_gap_sec=float(sb_merge_gap),
+                        boundary_method=sb_bnd_method or "none",
+                        boundary_rms_window_ms=float(sb_bnd_rms_win or 100),
+                        boundary_rms_threshold_x=float(sb_bnd_rms_thr or 2.0),
+                        boundary_max_trim_sec=float(sb_bnd_max_trim or 5.0),
+                    )
+                    sub_det = SpectralBandDetector()
+                elif sub_method == "autocorrelation":
+                    sub_params = AutocorrelationParams(
+                        bandpass_low=float(ac_bp_low), bandpass_high=float(ac_bp_high),
+                        spike_amplitude_x_baseline=float(ac_spike_amp),
+                        spike_refractory_ms=float(ac_spike_refr),
+                        subwindow_points=int(ac_subwin), lookahead_points=int(ac_lookahead),
+                        acorr_window_sec=float(ac_window), acorr_step_sec=float(ac_step),
+                        min_spike_freq_hz=float(ac_min_freq),
+                        acorr_threshold_z=float(ac_thr_z),
+                        min_duration_sec=float(ac_min_dur), merge_gap_sec=float(ac_merge_gap),
+                        baseline_method=ac_bl_method or "percentile",
+                        baseline_percentile=int(ac_bl_pct),
+                        baseline_rms_window_sec=float(ac_bl_rms or 10.0),
+                        boundary_method=ac_bnd_method or "signal",
+                        boundary_rms_window_ms=float(ac_bnd_rms_win or 100),
+                        boundary_rms_threshold_x=float(ac_bnd_rms_thr or 2.0),
+                        boundary_max_trim_sec=float(ac_bnd_max_trim or 5.0),
+                        boundary_window_sec=float(ac_bnd_window or 2.0),
+                        boundary_min_rate_hz=float(ac_bnd_rate or 2.0),
+                        boundary_min_amplitude_x=float(ac_bnd_amp_x or 2.0),
+                    )
+                    sub_det = AutocorrelationDetector()
+                else:
                     continue
-                ch_events = detector.detect(rec, ch, params=params)
-                seizures.extend(ch_events)
-                if hasattr(detector, "_last_detection_info"):
-                    detection_info[ch] = detector._last_detection_info.copy()
+
+                sub_events = []
+                for ch in selected_channels:
+                    if ch < 0 or ch >= rec.n_channels:
+                        continue
+                    ch_events = sub_det.detect(rec, ch, params=sub_params)
+                    sub_events.extend(ch_events)
+                    if hasattr(sub_det, "_last_detection_info"):
+                        detection_info[ch] = sub_det._last_detection_info.copy()
+                method_events[sub_method] = sub_events
+
+            ens_det = EnsembleDetector()
+            ens_params = EnsembleParams(
+                methods=ens_method_list,
+                voting_threshold=int(ens_vote_thr or 2),
+                merge_strategy=ens_merge or "union",
+                confidence_merge=ens_conf_merge or "mean",
+            )
+            seizures = ens_det.detect_ensemble(method_events, params=ens_params)
+            if hasattr(ens_det, "_last_detection_info"):
+                for ch in selected_channels:
+                    if ch not in detection_info:
+                        detection_info[ch] = ens_det._last_detection_info.copy()
+
+        else:
+            # Single-method detection (spike_train, spectral_band, autocorrelation)
+            # Use chunked detection for large files (>30 min per channel)
+            _use_chunked = (
+                _src.lower().endswith(".edf")
+                and rec.duration_sec > 1800
+                and method == "spike_train"  # chunked only for spike-train for now
+            )
+
+            if _use_chunked:
+                from eeg_seizure_analyzer.detection.base import detect_chunked
+                valid_channels = [ch for ch in selected_channels
+                                  if 0 <= ch < rec.n_channels]
+                seizures, detection_info = detect_chunked(
+                    detector,
+                    path=_src,
+                    channels=valid_channels,
+                    chunk_duration_sec=1800.0,
+                    overlap_sec=30.0,
+                    params=params,
+                )
+            else:
+                for ch in selected_channels:
+                    if ch < 0 or ch >= rec.n_channels:
+                        continue
+                    ch_events = detector.detect(rec, ch, params=params)
+                    seizures.extend(ch_events)
+                    if hasattr(detector, "_last_detection_info"):
+                        detection_info[ch] = detector._last_detection_info.copy()
 
         seizures.sort(key=lambda e: e.onset_sec)
 
         # Compute proper confidence scores using the confidence module
-        _lbl_start = float(lbl_start) if lbl_start is not None else -20.0
-        _lbl_end = float(lbl_end) if lbl_end is not None else -5.0
-        _lbl_trim = float(lbl_trim_pct) if lbl_trim_pct is not None else 30.0
+        # Use method-specific pre-ictal local baseline params
+        if method == "spectral_band":
+            _lbl_start = float(sb_lbl_start) if sb_lbl_start is not None else -15.0
+            _lbl_end = float(sb_lbl_end) if sb_lbl_end is not None else -5.0
+            _lbl_trim = float(sb_lbl_trim_pct) if sb_lbl_trim_pct is not None else 30.0
+        elif method == "autocorrelation":
+            _lbl_start = float(ac_lbl_start) if ac_lbl_start is not None else -15.0
+            _lbl_end = float(ac_lbl_end) if ac_lbl_end is not None else -5.0
+            _lbl_trim = float(ac_lbl_trim_pct) if ac_lbl_trim_pct is not None else 30.0
+        else:
+            _lbl_start = float(lbl_start) if lbl_start is not None else -20.0
+            _lbl_end = float(lbl_end) if lbl_end is not None else -5.0
+            _lbl_trim = float(lbl_trim_pct) if lbl_trim_pct is not None else 30.0
         # Ensure they are negative offsets
         if _lbl_start > 0:
             _lbl_start = -_lbl_start
@@ -1138,6 +2089,54 @@ def run_detection(
         state.st_detection_info = detection_info
         state.extra.pop("sz_selected_event_key", None)  # new detection, clear selection
 
+        # ── Persist all method params to sz_params ──────────────────
+        # Capture actual slider values used during this detection so they
+        # survive tab switches and are saved in the detection JSON.
+        all_params = dict(state.extra.get("sz_params", {}))
+        # Spike-train params
+        for k, v in zip(_SZ_SLIDER_KEYS, [
+            bp_low, bp_high, spike_amp, spike_min_uv, spike_prom,
+            spike_maxw, spike_minw, spike_refr, max_isi, min_spikes,
+            min_dur, min_iei, bl_pct, bl_rms,
+            bnd_rms_win, bnd_rms_thr, bnd_max_trim,
+            bnd_window, bnd_rate, bnd_amp_x,
+            hvsw_amp, hvsw_freq, hvsw_dur, hvsw_max_ev,
+            hpd_amp, hpd_freq, hpd_dur,
+            conv_dur, conv_amp, conv_postictal,
+            lbl_start, lbl_end, lbl_trim_pct,
+        ]):
+            if v is not None:
+                all_params[k] = v
+        all_params["sz-bl-method"] = bl_method
+        all_params["sz-bnd-method"] = bnd_method
+        # Spectral band params
+        for k, v in zip(_SB_SLIDER_KEYS, [
+            sb_band_low, sb_band_high, sb_ref_low, sb_ref_high,
+            sb_window, sb_step, sb_thr_z, sb_bl_pct, sb_min_dur, sb_merge_gap,
+            sb_bnd_rms_win, sb_bnd_rms_thr, sb_bnd_max_trim,
+            sb_lbl_start, sb_lbl_end, sb_lbl_trim_pct,
+        ]):
+            if v is not None:
+                all_params[k] = v
+        all_params["sz-sb-bnd-method"] = sb_bnd_method or "none"
+        # Autocorrelation params
+        for k, v in zip(_AC_SLIDER_KEYS, [
+            ac_bp_low, ac_bp_high, ac_spike_amp, ac_spike_refr,
+            ac_subwin, ac_lookahead, ac_window, ac_step,
+            ac_min_freq, ac_thr_z, ac_min_dur, ac_merge_gap, ac_bl_pct, ac_bl_rms,
+            ac_bnd_rms_win, ac_bnd_rms_thr, ac_bnd_max_trim,
+            ac_bnd_window, ac_bnd_rate, ac_bnd_amp_x,
+            ac_lbl_start, ac_lbl_end, ac_lbl_trim_pct,
+        ]):
+            if v is not None:
+                all_params[k] = v
+        all_params["sz-ac-bl-method"] = ac_bl_method or "percentile"
+        all_params["sz-ac-bnd-method"] = ac_bnd_method or "signal"
+        # Ensemble params
+        all_params["sz-ens-vote-thr"] = ens_vote_thr
+        all_params["sz-method"] = method
+        state.extra["sz_params"] = all_params
+
         # ── Refresh training-tab annotations ──────────────────────
         # Clear stale in-memory annotations so the training tab
         # re-initialises from fresh detections on next visit.
@@ -1178,7 +2177,7 @@ def run_detection(
                     events=seizures,
                     detection_info=detection_info,
                     params_dict=state.extra.get("sz_params", {}),
-                    detector_name="SpikeTrainSeizureDetector",
+                    detector_name=_DETECTOR_NAMES.get(method, "SpikeTrainSeizureDetector"),
                     channels=selected_channels,
                     animal_id=getattr(state, "animal_id", ""),
                     filter_settings={
@@ -1203,7 +2202,8 @@ def run_detection(
         n_ch = len(selected_channels)
 
         return (
-            alert(f"Found {len(seizures)} seizure(s) across {n_ch} channel(s).", "success"),
+            alert(f"[{({o['value']: o['label'] for o in _METHOD_OPTIONS}).get(method, method)}] "
+                  f"Found {len(seizures)} seizure(s) across {n_ch} channel(s).", "success"),
             results, show_style, block_style, insp_block,
         )
 
@@ -1417,11 +2417,18 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         spike_freq = feat.get("mean_spike_frequency_hz")
         max_amp = feat.get("max_amplitude_x_baseline")
 
+        # Detection method label
+        det_method = feat.get("detection_method", "spike_train")
+        method_labels = {"spike_train": "Spike-Train", "spectral_band": "Spectral",
+                         "autocorrelation": "Autocorr", "ensemble": "Ensemble"}
+        method_label = method_labels.get(det_method, det_method)
+
         row = {
             "#": i + 1,
             "ID": e.event_id if e.event_id > 0 else i + 1,
             "_event_key": ek,
             "_source": "manual" if is_manual else "detector",
+            "Method": method_label,
             "Channel": rec.channel_names[e.channel],
             "Onset (s)": round(e.onset_sec, 2),
             "Offset (s)": round(e.offset_sec, 2),
@@ -1448,6 +2455,8 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         {"field": "ID", "maxWidth": 55, "minWidth": 40, "headerTooltip": "Stable event ID"},
         {"field": "_event_key", "hide": True},
         {"field": "_source", "hide": True},
+        {"field": "Method", "flex": 1, "minWidth": 75,
+         "headerTooltip": "Detection method used"},
         {"field": "Channel", "flex": 1, "minWidth": 75},
         {"field": "Onset (s)", "flex": 1, "minWidth": 70},
         {"field": "Offset (s)", "flex": 1, "minWidth": 70},
@@ -1970,6 +2979,11 @@ def _render_inspector(rec, event, det_info, state, *,
 
     has_act = act_data is not None
 
+    # Determine detection method for this event
+    features = event.features or {}
+    det_method = features.get("detection_method", "spike_train")
+    has_spikes = det_method in ("spike_train", "autocorrelation", "ensemble")
+
     # Y range
     if y_range is None or y_range <= 0:
         y_range = state.extra.get("viewer_settings", {}).get("yrange", 1.0)
@@ -2000,15 +3014,19 @@ def _render_inspector(rec, event, det_info, state, *,
         fig_eeg.add_vline(x=t, line=dict(color="#f85149", width=1, dash="dash"),
                           row=1, col=1)
 
-    # Spike dots
-    if show_spikes:
+    # Spike dots (spike-train, autocorrelation, ensemble — not spectral_band)
+    if show_spikes and has_spikes:
         spike_times = det_info.get("all_spike_times", [])
         spike_samples = det_info.get("all_spike_samples", [])
+        # For ensemble events, also try event-level spike data
+        if not spike_times and det_method == "ensemble":
+            spike_times = features.get("spike_times", [])
+            spike_samples = features.get("spike_samples", [])
         if spike_times:
             in_t, in_y, out_t, out_y = [], [], [], []
             for i, t in enumerate(spike_times):
                 if win_start <= t <= win_end:
-                    local = spike_samples[i] - start_idx
+                    local = spike_samples[i] - start_idx if i < len(spike_samples) else -1
                     yv = float(data[local]) if 0 <= local < len(data) else 0.0
                     if onset <= t <= offset:
                         in_t.append(t); in_y.append(yv)
@@ -2029,35 +3047,32 @@ def _render_inspector(rec, event, det_info, state, *,
                     hovertemplate="Spike @ %{x:.3f}s<extra></extra>",
                 ), row=1, col=1)
 
-    # Baseline / threshold lines
-    baseline_val = det_info.get("baseline_mean")
-    if show_baseline and baseline_val is not None:
-        # Positive side — with annotation
-        fig_eeg.add_hline(
-            y=baseline_val, row=1, col=1,
-            line=dict(color="#3fb950", width=1, dash="dot"),
-            annotation_text="Baseline",
-            annotation_position="top right",
-        )
-        # Negative side — no annotation
-        fig_eeg.add_hline(
-            y=-baseline_val, row=1, col=1,
-            line=dict(color="#3fb950", width=1, dash="dot"),
-        )
-    threshold_val = det_info.get("threshold")
-    if show_threshold and threshold_val is not None:
-        # Positive side — with annotation
-        fig_eeg.add_hline(
-            y=threshold_val, row=1, col=1,
-            line=dict(color="#d29922", width=1, dash="dash"),
-            annotation_text="Threshold",
-            annotation_position="top right",
-        )
-        # Negative side — no annotation
-        fig_eeg.add_hline(
-            y=-threshold_val, row=1, col=1,
-            line=dict(color="#d29922", width=1, dash="dash"),
-        )
+    # Baseline / threshold lines (spike-train and autocorrelation only)
+    if has_spikes:
+        baseline_val = det_info.get("baseline_mean")
+        if show_baseline and baseline_val is not None:
+            fig_eeg.add_hline(
+                y=baseline_val, row=1, col=1,
+                line=dict(color="#3fb950", width=1, dash="dot"),
+                annotation_text="Baseline",
+                annotation_position="top right",
+            )
+            fig_eeg.add_hline(
+                y=-baseline_val, row=1, col=1,
+                line=dict(color="#3fb950", width=1, dash="dot"),
+            )
+        threshold_val = det_info.get("threshold")
+        if show_threshold and threshold_val is not None:
+            fig_eeg.add_hline(
+                y=threshold_val, row=1, col=1,
+                line=dict(color="#d29922", width=1, dash="dash"),
+                annotation_text="Threshold",
+                annotation_position="top right",
+            )
+            fig_eeg.add_hline(
+                y=-threshold_val, row=1, col=1,
+                line=dict(color="#d29922", width=1, dash="dash"),
+            )
 
     # Activity
     if has_act:
@@ -2184,15 +3199,142 @@ def _render_inspector(rec, event, det_info, state, *,
     apply_fig_theme(fig_bp)
     fig_bp.update_layout(margin=dict(l=60, r=20, t=30, b=40))
 
+    # ── Method-specific extra plots ───────────────────────────────
+    method_plots = []
+
+    if det_method == "spectral_band":
+        # SBI timeseries plot
+        sbi_times = det_info.get("sbi_times", [])
+        sbi_values = det_info.get("sbi_values", [])
+        sbi_thr = det_info.get("threshold", 0)
+        if sbi_times and sbi_values:
+            fig_sbi = go.Figure()
+            fig_sbi.add_trace(go.Scatter(
+                x=sbi_times, y=sbi_values,
+                mode="lines", name="SBI",
+                line=dict(width=1.2, color="#58a6ff"),
+            ))
+            fig_sbi.add_hline(
+                y=sbi_thr,
+                line=dict(color="#d29922", width=1, dash="dash"),
+                annotation_text="Threshold",
+                annotation_position="top right",
+            )
+            fig_sbi.add_vrect(
+                x0=onset, x1=offset,
+                fillcolor="rgba(248, 81, 73, 0.15)",
+                line=dict(width=0), layer="below",
+            )
+            fig_sbi.update_layout(
+                height=200,
+                xaxis_title="Time (s)", yaxis_title="SBI (target/ref power)",
+                xaxis_range=[win_start, win_end],
+                showlegend=False,
+                uirevision=f"sbi_{onset}_{ch}",
+            )
+            apply_fig_theme(fig_sbi)
+            fig_sbi.update_layout(margin=dict(l=60, r=20, t=30, b=40))
+            method_plots.append(html.Div([
+                html.Div("Spectral Band Index (SBI)",
+                         style={"fontSize": "0.82rem", "fontWeight": "600",
+                                "color": "#8b949e", "marginBottom": "4px",
+                                "marginTop": "12px"}),
+                dcc.Graph(figure=fig_sbi, config={"scrollZoom": True}),
+            ]))
+
+    elif det_method == "autocorrelation":
+        # Autocorrelation metric + spike frequency timeseries
+        acorr_times = det_info.get("acorr_times", [])
+        acorr_values = det_info.get("acorr_values", [])
+        spike_freqs = det_info.get("spike_freqs", [])
+        acorr_thr = det_info.get("acorr_threshold", 0)
+        if acorr_times and acorr_values:
+            fig_acorr = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                row_heights=[0.5, 0.5], vertical_spacing=0.08,
+            )
+            fig_acorr.add_trace(go.Scatter(
+                x=acorr_times, y=acorr_values,
+                mode="lines", name="Range Autocorrelation",
+                line=dict(width=1.2, color="#58a6ff"),
+            ), row=1, col=1)
+            fig_acorr.add_hline(
+                y=acorr_thr, row=1, col=1,
+                line=dict(color="#d29922", width=1, dash="dash"),
+                annotation_text="Threshold",
+                annotation_position="top right",
+            )
+            if spike_freqs:
+                fig_acorr.add_trace(go.Scatter(
+                    x=acorr_times, y=spike_freqs,
+                    mode="lines", name="Spike Frequency",
+                    line=dict(width=1.2, color="#3fb950"),
+                ), row=2, col=1)
+            fig_acorr.add_vrect(
+                x0=onset, x1=offset,
+                fillcolor="rgba(248, 81, 73, 0.15)",
+                line=dict(width=0), layer="below", row=1, col=1,
+            )
+            fig_acorr.add_vrect(
+                x0=onset, x1=offset,
+                fillcolor="rgba(248, 81, 73, 0.15)",
+                line=dict(width=0), layer="below", row=2, col=1,
+            )
+            fig_acorr.update_xaxes(range=[win_start, win_end], row=1, col=1)
+            fig_acorr.update_xaxes(range=[win_start, win_end], title_text="Time (s)",
+                                    row=2, col=1)
+            fig_acorr.update_yaxes(title_text="Autocorrelation", row=1, col=1)
+            fig_acorr.update_yaxes(title_text="Spike Freq (Hz)", row=2, col=1)
+            fig_acorr.update_layout(
+                height=300, showlegend=False,
+                uirevision=f"acorr_{onset}_{ch}",
+            )
+            apply_fig_theme(fig_acorr)
+            fig_acorr.update_layout(margin=dict(l=60, r=20, t=30, b=40))
+            method_plots.append(html.Div([
+                html.Div("Autocorrelation Metrics",
+                         style={"fontSize": "0.82rem", "fontWeight": "600",
+                                "color": "#8b949e", "marginBottom": "4px",
+                                "marginTop": "12px"}),
+                dcc.Graph(figure=fig_acorr, config={"scrollZoom": True}),
+            ]))
+
     # ── Event detail metrics ────────────────────────────────────
-    features = event.features or {}
     qm = event.quality_metrics or {}
+
+    # Method-specific detail cards
+    method_label_map = {"spike_train": "Spike-Train", "spectral_band": "Spectral Band",
+                        "autocorrelation": "Autocorrelation", "ensemble": "Ensemble"}
+    method_card = metric_card("Method", method_label_map.get(det_method, det_method))
+
+    extra_cards = []
+    if det_method == "spectral_band":
+        sbi_peak = features.get("sbi_peak")
+        if sbi_peak is not None:
+            extra_cards.append(dbc.Col(metric_card("SBI Peak", f"{sbi_peak:.3f}"), width=2))
+    elif det_method == "autocorrelation":
+        peak_acorr = features.get("peak_acorr")
+        mean_freq = features.get("mean_spike_frequency_hz")
+        if peak_acorr is not None:
+            extra_cards.append(dbc.Col(metric_card("Peak Autocorr", f"{peak_acorr:.3f}"), width=2))
+        if mean_freq is not None:
+            extra_cards.append(dbc.Col(metric_card("Spike Freq", f"{mean_freq:.1f} Hz"), width=2))
+    elif det_method == "ensemble":
+        contrib = features.get("contributing_methods", [])
+        n_methods = features.get("n_methods", len(contrib))
+        extra_cards.append(dbc.Col(metric_card("Methods", f"{n_methods} agreed"), width=2))
+        if contrib:
+            short = [m.replace("_", " ").title()[:8] for m in contrib]
+            extra_cards.append(dbc.Col(metric_card("Sources", ", ".join(short)), width=2))
+
     detail_metrics = dbc.Row([
+        dbc.Col(method_card, width=2),
         dbc.Col(metric_card("Channel", ch_name), width=2),
         dbc.Col(metric_card("Onset", f"{onset:.2f}s"), width=2),
         dbc.Col(metric_card("Duration", f"{event.duration_sec:.2f}s"), width=2),
         dbc.Col(metric_card("Spikes", str(features.get("n_spikes", "\u2014"))), width=2),
         dbc.Col(metric_card("Confidence", f"{event.confidence:.2f}"), width=2),
+        *extra_cards,
     ], className="g-3 mb-3")
 
     # ── Video player (if available) ────────────────────────────────
@@ -2244,6 +3386,7 @@ def _render_inspector(rec, event, det_info, state, *,
                                       "color": "#8b949e", "marginBottom": "4px"}),
         dcc.Graph(id=graph_id, figure=fig_eeg,
                   config={"scrollZoom": True, "displayModeBar": True}),
+        *method_plots,
         *video_section,
         dbc.Row([
             dbc.Col([
@@ -2334,6 +3477,8 @@ def handle_settings(*args):
                 state.extra["sz_bl_method"] = saved_params["sz-bl-method"]
             if "sz-bnd-method" in saved_params:
                 state.extra["sz_bnd_method"] = saved_params["sz-bnd-method"]
+            if "sz-method" in saved_params:
+                state.extra["sz_method"] = saved_params["sz-method"]
         saved_channels = result.get("channels", [])
         if saved_channels:
             state.extra["sz_selected_channels"] = saved_channels
@@ -2356,7 +3501,8 @@ def handle_settings(*args):
         return alert(f"Detection params recalled ({n_p} params).", "success"), (refresh or 0) + 1
 
     if trigger == "sz-recall-defaults-btn":
-        state.extra["sz_param_overrides"] = dict(_SZ_DEFAULTS)
+        all_defaults = {**_SZ_DEFAULTS, **_SB_DEFAULTS, **_AC_DEFAULTS, **_ENS_DEFAULTS}
+        state.extra["sz_param_overrides"] = all_defaults
         return alert("Default parameters restored.", "info"), (refresh or 0) + 1
 
     if trigger == "sz-save-settings-btn":
@@ -2364,6 +3510,13 @@ def handle_settings(*args):
         params = {k: v for k, v in zip(_SZ_SLIDER_KEYS, current_values)}
         params["sz-bl-method"] = bl_method
         params["sz-bnd-method"] = bnd_method
+        # Include all method params from server state
+        all_method_params = state.extra.get("sz_params", {})
+        for k in list(_SB_DEFAULTS) + list(_AC_DEFAULTS) + list(_ENS_DEFAULTS):
+            if k in all_method_params:
+                params[k] = all_method_params[k]
+        # Save selected method
+        params["sz-method"] = state.extra.get("sz_method", "spike_train")
         # Include filter settings (min + max)
         n_min = len(_ALL_FILTER_MIN_IDS)
         filter_min_vals = filter_slider_vals[:n_min]
@@ -2412,6 +3565,9 @@ def handle_settings(*args):
             if fk in saved:
                 filter_vals[mk] = saved.pop(fk)
         filter_enabled = saved.pop("filter-enabled", True)
+        # Remove method selection from overrides — recall should restore
+        # parameter values without changing the currently selected method
+        saved.pop("sz-method", None)
         if filter_vals:
             state.extra["sz_filter_values"] = {**_FILTER_DEFAULTS, **filter_vals}
         state.extra["sz_filter_enabled"] = filter_enabled
