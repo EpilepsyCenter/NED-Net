@@ -32,7 +32,27 @@ Extras/*.msi
 adisdk/
 windows_import_service/.venv/
 
-# Test data
+# Test data & recordings
 imports/
 exports/
+Recordings/
+Test_ned_*.json
 ~$*
+
+# Design files
+*.afdesign
+
+# Demo / scratch scripts
+font_theme_demo.py
+input_style_demo.py
+
+# Spec documents & papers
+Implementations/
+
+# Misc
+.Rhistory
+Gemini_Generated_Image_*
+
+# Video files
+*.mp4
+*.wmv

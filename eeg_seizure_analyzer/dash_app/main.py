@@ -204,6 +204,13 @@ def _sidebar():
                         html.Span("NED-Net v0.1"),
                         html.Span(" \u00B7 ", style={"opacity": "0.4"}),
                         html.Span("EEG Analysis Platform"),
+                        html.Span(" \u00B7 ", style={"opacity": "0.4"}),
+                        html.A("Help",
+                               href="/assets/manual.html",
+                               target="_blank",
+                               style={"color": "var(--ned-accent)",
+                                      "textDecoration": "none",
+                                      "fontSize": "0.75rem"}),
                     ]),
                 ],
             ),
@@ -223,7 +230,7 @@ TOP_TAB_DEFS = [
     ("analysis", "Analysis"),                 # unified CNN detection (single/batch/live)
     ("tools_grp", "Tools"),                   # parent — has subtabs
     ("results", "Results"),
-    ("settings", "Settings"),
+    # ("settings", "Settings"),  # removed — placeholder not ready
 ]
 
 # Subtabs for parent tab groups
@@ -250,7 +257,7 @@ ALL_TAB_IDS = (
     + [tid for tid, _ in TRAINING_SUBTABS]
     + [tid for tid, _ in ML_SUBTABS]
     + [tid for tid, _ in TOOLS_SUBTABS]
-    + ["results", "settings"]
+    + ["results"]
 )
 
 # Legacy TAB_DEFS kept for any remaining references
@@ -259,8 +266,8 @@ TAB_DEFS = [(tid, label) for tid, label in TOP_TAB_DEFS]
 
 def _tab_bar():
     # Split tabs: main tabs on the left, Tools & Settings pushed right
-    _LEFT_TABS = [t for t in TOP_TAB_DEFS if t[0] not in ("tools_grp", "settings")]
-    _RIGHT_TABS = [t for t in TOP_TAB_DEFS if t[0] in ("tools_grp", "settings")]
+    _LEFT_TABS = [t for t in TOP_TAB_DEFS if t[0] not in ("tools_grp",)]
+    _RIGHT_TABS = [t for t in TOP_TAB_DEFS if t[0] in ("tools_grp",)]
     nav_items = [
         dbc.NavLink(label, id=f"tab-{tid}", active=tid == "upload", n_clicks=0)
         for tid, label in _LEFT_TABS
@@ -562,12 +569,6 @@ def render_tab(active_tab, _refresh, sid):
         return ml_results.layout(sid)
     elif active_tab == "results":
         return results_page.layout(sid)
-    elif active_tab == "settings":
-        return _placeholder_tab(
-            "Settings",
-            "Application settings (dark mode, batch processing, defaults) "
-            "will be configured here.",
-        )
     return html.Div("Unknown tab")
 
 

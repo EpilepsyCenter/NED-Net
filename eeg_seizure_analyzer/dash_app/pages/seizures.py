@@ -633,6 +633,12 @@ def layout(sid: str | None) -> html.Div:
                 children=_prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid=sid)
                 if has_results and selected_event_key else [],
             ),
+
+            # Export section
+            _export_controls(has_results, state.seizure_events, rec),
+
+            # Download component
+            dcc.Download(id="sz-export-download"),
         ],
     )
 
@@ -846,6 +852,138 @@ def _inspector_controls(visible: bool, y_range: float, opts=None) -> html.Div:
                             ),
                         ],
                     ),
+                ],
+            ),
+        ],
+    )
+
+
+# ── Export controls ───────────────────────────────────────────────────
+
+
+def _export_controls(visible: bool, seizure_events, rec) -> html.Div:
+    """Build the export section with method/field selectors."""
+    import os
+    # Method options from current events
+    method_opts = _method_filter_options(seizure_events or [])
+    method_values = [o["value"] for o in method_opts]
+
+    # Channel options
+    ch_options = []
+    if rec is not None:
+        ch_options = [{"label": rec.channel_names[i], "value": i}
+                      for i in range(rec.n_channels)]
+
+    # Default filename
+    fname = ""
+    if rec and rec.source_path:
+        base = os.path.splitext(os.path.basename(rec.source_path))[0]
+        fname = f"{base}_seizures.csv"
+
+    return html.Div(
+        id="sz-export-section",
+        style={"display": "block" if visible else "none",
+               "marginTop": "24px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "8px",
+                       "cursor": "pointer", "marginBottom": "8px"},
+                id="sz-export-header",
+                children=[
+                    html.Span("Export Results",
+                              style={"fontSize": "0.88rem", "fontWeight": "600",
+                                     "color": "var(--ned-accent)"}),
+                ],
+            ),
+            html.Div(
+                style={"border": "1px solid var(--ned-border)",
+                       "borderRadius": "8px", "padding": "16px",
+                       "background": "var(--ned-surface)"},
+                children=[
+                    # Row 1: Methods + Channel
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Methods",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dbc.Checklist(
+                                id="sz-export-methods",
+                                options=method_opts,
+                                value=method_values,
+                                inline=True,
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], width=6),
+                        dbc.Col([
+                            html.Label("Channel",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Dropdown(
+                                id="sz-export-channel",
+                                options=ch_options,
+                                value=None,
+                                placeholder="All channels",
+                                clearable=True,
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], width=3),
+                    ], className="g-2 mb-3"),
+                    # Row 2: Field groups
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Fields to export",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dbc.Checklist(
+                                id="sz-export-fields",
+                                options=[
+                                    {"label": "Core (ID, onset, duration, channel, confidence)",
+                                     "value": "core"},
+                                    {"label": "Features (spikes, amplitude, frequency, ISI)",
+                                     "value": "features"},
+                                    {"label": "Quality metrics (local BL, LL z-score, energy z-score)",
+                                     "value": "quality"},
+                                    {"label": "Spectral (band powers, dominant freq, entropy)",
+                                     "value": "spectral"},
+                                ],
+                                value=["core", "features", "quality"],
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                    # Row 3: Filename + export button
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Filename",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Input(
+                                id="sz-export-filename",
+                                type="text",
+                                value=fname,
+                                debounce=True,
+                                className="form-control",
+                                style={"width": "100%", "fontSize": "0.82rem"},
+                            ),
+                        ], width=5),
+                        dbc.Col([
+                            html.Div(style={"height": "20px"}),  # spacer for alignment
+                            dbc.Button(
+                                "Export CSV",
+                                id="sz-export-btn",
+                                className="btn-ned-primary",
+                                size="sm",
+                            ),
+                        ], width=2),
+                        dbc.Col([
+                            html.Div(
+                                id="sz-export-status",
+                                style={"marginTop": "24px",
+                                       "fontSize": "0.82rem",
+                                       "color": "var(--ned-text-muted)"},
+                            ),
+                        ], width=5),
+                    ], className="g-2"),
                 ],
             ),
         ],
@@ -2592,6 +2730,188 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
 
 import json as _json
 import threading
+# ── Export CSV callback ───────────────────────────────────────────────
+
+
+@callback(
+    Output("sz-export-download", "data"),
+    Output("sz-export-status", "children"),
+    Input("sz-export-btn", "n_clicks"),
+    State("sz-export-methods", "value"),
+    State("sz-export-channel", "value"),
+    State("sz-export-fields", "value"),
+    State("sz-export-filename", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def export_csv(n_clicks, methods, channel, fields, filename, sid):
+    """Export detected seizures to CSV."""
+    import pandas as pd
+    from scipy.signal import welch as _welch
+
+    if not n_clicks:
+        return no_update, no_update
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+    if not state.seizure_events:
+        return no_update, "No events to export."
+
+    events = list(state.seizure_events)
+
+    # Filter by method
+    if methods:
+        events = [e for e in events
+                  if (e.features or {}).get("detection_method", "") in methods]
+
+    # Filter by channel
+    if channel is not None and channel != "":
+        events = [e for e in events if e.channel == int(channel)]
+
+    if not events:
+        return no_update, "No events match the selected filters."
+
+    fields = fields or ["core"]
+
+    # Build rows
+    rows = []
+    for ev in events:
+        row = {}
+        feat = ev.features or {}
+        qm = ev.quality_metrics or {}
+
+        # Core fields (always included)
+        if "core" in fields:
+            ch_name = ""
+            if rec and ev.channel < len(rec.channel_names):
+                ch_name = rec.channel_names[ev.channel]
+            row.update({
+                "event_id": ev.event_id,
+                "onset_sec": round(ev.onset_sec, 4),
+                "offset_sec": round(ev.offset_sec, 4),
+                "duration_sec": round(ev.duration_sec, 4),
+                "channel": ev.channel,
+                "channel_name": ch_name,
+                "animal_id": ev.animal_id,
+                "detection_method": feat.get("detection_method", ""),
+                "confidence": round(ev.confidence, 4),
+                "severity": ev.severity or "",
+                "movement_flag": ev.movement_flag,
+            })
+
+        # Feature fields
+        if "features" in fields:
+            row.update({
+                "n_spikes": feat.get("n_spikes"),
+                "mean_spike_frequency_hz": _round_or_none(feat.get("mean_spike_frequency_hz")),
+                "max_amplitude_x_baseline": _round_or_none(feat.get("max_amplitude_x_baseline")),
+                "mean_isi_ms": _round_or_none(feat.get("mean_isi_ms")),
+                "spike_regularity": _round_or_none(feat.get("spike_regularity")),
+                "mean_amplitude_uv": _round_or_none(feat.get("mean_amplitude_uv")),
+                "max_amplitude_uv": _round_or_none(feat.get("max_amplitude_uv")),
+            })
+
+        # Quality metric fields
+        if "quality" in fields:
+            row.update({
+                "local_baseline_ratio": _round_or_none(qm.get("local_baseline_ratio")),
+                "top_spike_amplitude_x": _round_or_none(qm.get("top_spike_amplitude_x")),
+                "peak_ll_zscore": _round_or_none(qm.get("peak_ll_zscore")),
+                "peak_energy_zscore": _round_or_none(qm.get("peak_energy_zscore")),
+                "signal_to_baseline_ratio": _round_or_none(qm.get("signal_to_baseline_ratio")),
+                "theta_delta_ratio": _round_or_none(qm.get("theta_delta_ratio")),
+                "activity_zscore": _round_or_none(qm.get("activity_zscore")),
+            })
+
+        # Spectral fields — compute from raw EEG
+        if "spectral" in fields and rec is not None:
+            try:
+                ch = ev.channel
+                onset_s = int(ev.onset_sec * rec.fs)
+                offset_s = int(ev.offset_sec * rec.fs)
+                onset_s = max(0, onset_s)
+                offset_s = min(rec.n_samples, offset_s)
+                segment = rec.data[ch, onset_s:offset_s].astype(np.float64)
+
+                if len(segment) > int(rec.fs):
+                    nperseg = min(int(rec.fs * 2), len(segment))
+                    freqs, psd = _welch(segment, fs=rec.fs, nperseg=nperseg)
+
+                    def _band_power(f_low, f_high):
+                        mask = (freqs >= f_low) & (freqs <= f_high)
+                        return float(np.trapz(psd[mask], freqs[mask])) if mask.any() else 0.0
+
+                    delta = _band_power(0.5, 4)
+                    theta = _band_power(4, 8)
+                    alpha = _band_power(8, 13)
+                    beta = _band_power(13, 30)
+                    gamma = _band_power(30, 100)
+                    total = delta + theta + alpha + beta + gamma
+                    dom_freq = float(freqs[np.argmax(psd)]) if len(psd) > 0 else 0.0
+
+                    # Spectral entropy
+                    psd_norm = psd / psd.sum() if psd.sum() > 0 else psd
+                    psd_norm = psd_norm[psd_norm > 0]
+                    entropy = float(-np.sum(psd_norm * np.log2(psd_norm))) if len(psd_norm) > 0 else 0.0
+
+                    row.update({
+                        "delta_power": round(delta, 4),
+                        "theta_power": round(theta, 4),
+                        "alpha_power": round(alpha, 4),
+                        "beta_power": round(beta, 4),
+                        "gamma_power": round(gamma, 4),
+                        "total_power": round(total, 4),
+                        "delta_rel": round(delta / total, 4) if total > 0 else 0,
+                        "theta_rel": round(theta / total, 4) if total > 0 else 0,
+                        "alpha_rel": round(alpha / total, 4) if total > 0 else 0,
+                        "beta_rel": round(beta / total, 4) if total > 0 else 0,
+                        "gamma_rel": round(gamma / total, 4) if total > 0 else 0,
+                        "dominant_freq_hz": round(dom_freq, 2),
+                        "spectral_entropy": round(entropy, 4),
+                    })
+                else:
+                    row.update({k: None for k in [
+                        "delta_power", "theta_power", "alpha_power",
+                        "beta_power", "gamma_power", "total_power",
+                        "delta_rel", "theta_rel", "alpha_rel",
+                        "beta_rel", "gamma_rel",
+                        "dominant_freq_hz", "spectral_entropy",
+                    ]})
+            except Exception:
+                row.update({k: None for k in [
+                    "delta_power", "theta_power", "alpha_power",
+                    "beta_power", "gamma_power", "total_power",
+                    "delta_rel", "theta_rel", "alpha_rel",
+                    "beta_rel", "gamma_rel",
+                    "dominant_freq_hz", "spectral_entropy",
+                ]})
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    fname = filename or "seizures.csv"
+    if not fname.endswith(".csv"):
+        fname += ".csv"
+
+    n = len(df)
+    return (
+        dcc.send_data_frame(df.to_csv, fname, index=False),
+        f"Exported {n} event(s).",
+    )
+
+
+def _round_or_none(val, decimals=4):
+    """Round a value if not None."""
+    if val is None:
+        return None
+    try:
+        return round(float(val), decimals)
+    except (ValueError, TypeError):
+        return val
+
+
+# ── Detect-all (batch) ────────────────────────────────────────────────
+
 from pathlib import Path as _Path
 
 _DETECT_ALL_PROGRESS_DIR = _Path.home() / ".eeg_seizure_analyzer" / "cache"

@@ -224,6 +224,121 @@ def layout(sid: str | None) -> html.Div:
 
             # Rate graph — below inspector
             html.Div(id="sp-rate-graph", children=existing_rate_graph),
+
+            # Export controls
+            _sp_export_controls(has_results, state.spike_events, rec),
+            dcc.Download(id="sp-export-download"),
+        ],
+    )
+
+
+def _sp_export_controls(visible: bool, spike_events, rec) -> html.Div:
+    """Build the export section for interictal spikes."""
+    import os
+
+    ch_options = []
+    if rec is not None:
+        ch_options = [{"label": rec.channel_names[i], "value": i}
+                      for i in range(rec.n_channels)]
+
+    fname = ""
+    if rec and rec.source_path:
+        base = os.path.splitext(os.path.basename(rec.source_path))[0]
+        fname = f"{base}_spikes.csv"
+
+    return html.Div(
+        id="sp-export-section",
+        style={"display": "block" if visible else "none",
+               "marginTop": "24px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "8px",
+                       "marginBottom": "8px"},
+                children=[
+                    html.Span("Export Results",
+                              style={"fontSize": "0.88rem", "fontWeight": "600",
+                                     "color": "var(--ned-accent)"}),
+                ],
+            ),
+            html.Div(
+                style={"border": "1px solid var(--ned-border)",
+                       "borderRadius": "8px", "padding": "16px",
+                       "background": "var(--ned-surface)"},
+                children=[
+                    # Row 1: Channel
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Channel",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Dropdown(
+                                id="sp-export-channel",
+                                options=ch_options,
+                                value=None,
+                                placeholder="All channels",
+                                clearable=True,
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], width=3),
+                    ], className="g-2 mb-3"),
+                    # Row 2: Field groups
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Fields to export",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dbc.Checklist(
+                                id="sp-export-fields",
+                                options=[
+                                    {"label": "Core (ID, time, channel, amplitude, confidence)",
+                                     "value": "core"},
+                                    {"label": "Morphology (duration, sharpness, phase ratio, SNR)",
+                                     "value": "morphology"},
+                                    {"label": "Context (baseline, threshold, neighbours, slow-wave)",
+                                     "value": "context"},
+                                    {"label": "Spectral (band powers, dominant freq, entropy)",
+                                     "value": "spectral"},
+                                ],
+                                value=["core", "morphology"],
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                    # Row 3: Filename + export button
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Filename",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Input(
+                                id="sp-export-filename",
+                                type="text",
+                                value=fname,
+                                debounce=True,
+                                className="form-control",
+                                style={"width": "100%", "fontSize": "0.82rem"},
+                            ),
+                        ], width=5),
+                        dbc.Col([
+                            html.Div(style={"height": "20px"}),
+                            dbc.Button(
+                                "Export CSV",
+                                id="sp-export-btn",
+                                className="btn-ned-primary",
+                                size="sm",
+                            ),
+                        ], width=2),
+                        dbc.Col([
+                            html.Div(
+                                id="sp-export-status",
+                                style={"marginTop": "24px",
+                                       "fontSize": "0.82rem",
+                                       "color": "var(--ned-text-muted)"},
+                            ),
+                        ], width=5),
+                    ], className="g-2"),
+                ],
+            ),
         ],
     )
 
@@ -987,7 +1102,7 @@ def show_spike_inspector(selected_rows, show_baseline, show_threshold,
     fig = go.Figure()
     fig.add_trace(go.Scattergl(
         x=time_arr, y=data, mode="lines",
-        name=ch_name, line=dict(color="#58a6ff", width=1),
+        name=ch_name, line=dict(color="#1b2a4a", width=1),
     ))
     # Mark the peak
     fig.add_vline(x=peak_time, line=dict(color="#f85149", width=1.5, dash="dash"))
@@ -1194,3 +1309,168 @@ def handle_sp_settings(*args):
         return alert("User params loaded.", "success"), (refresh or 0) + 1
 
     return no_update, no_update
+
+
+# ── Export callback ────────────────────────────────────────────────────
+
+
+def _round_or_none(val, decimals=4):
+    """Round a value if not None."""
+    if val is None:
+        return None
+    try:
+        return round(float(val), decimals)
+    except (ValueError, TypeError):
+        return val
+
+
+@callback(
+    Output("sp-export-download", "data"),
+    Output("sp-export-status", "children"),
+    Input("sp-export-btn", "n_clicks"),
+    State("sp-export-channel", "value"),
+    State("sp-export-fields", "value"),
+    State("sp-export-filename", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def export_spike_csv(n_clicks, channel, fields, filename, sid):
+    """Export detected interictal spikes to CSV."""
+    import pandas as pd
+    from scipy.signal import welch as _welch
+
+    if not n_clicks:
+        return no_update, no_update
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+    if not state.spike_events:
+        return no_update, "No spikes to export."
+
+    events = list(state.spike_events)
+
+    # Filter by channel
+    if channel is not None and channel != "":
+        events = [e for e in events if e.channel == int(channel)]
+
+    if not events:
+        return no_update, "No spikes match the selected filters."
+
+    fields = fields or ["core"]
+
+    rows = []
+    for ev in events:
+        row = {}
+        feat = ev.features or {}
+
+        if "core" in fields:
+            ch_name = ""
+            if rec and ev.channel < len(rec.channel_names):
+                ch_name = rec.channel_names[ev.channel]
+            peak_time = feat.get("peak_time_sec", ev.onset_sec)
+            row.update({
+                "event_id": ev.event_id,
+                "peak_time_sec": round(peak_time, 4),
+                "channel": ev.channel,
+                "channel_name": ch_name,
+                "animal_id": ev.animal_id,
+                "amplitude": _round_or_none(feat.get("amplitude")),
+                "amplitude_x_baseline": _round_or_none(feat.get("amplitude_x_baseline")),
+                "confidence": round(ev.confidence, 4),
+            })
+
+        if "morphology" in fields:
+            row.update({
+                "duration_ms": _round_or_none(feat.get("duration_ms")),
+                "sharpness": _round_or_none(feat.get("sharpness")),
+                "phase_ratio": _round_or_none(feat.get("phase_ratio")),
+                "local_snr": _round_or_none(feat.get("local_snr")),
+                "rise_time_ms": _round_or_none(feat.get("rise_time_ms")),
+                "fall_time_ms": _round_or_none(feat.get("fall_time_ms")),
+            })
+
+        if "context" in fields:
+            row.update({
+                "baseline_mean": _round_or_none(feat.get("baseline_mean")),
+                "threshold": _round_or_none(feat.get("threshold")),
+                "neighbours": feat.get("neighbours"),
+                "after_slow_wave": bool(feat.get("after_slow_wave")),
+                "isolation_score": _round_or_none(feat.get("isolation_score")),
+            })
+
+        # Spectral — compute from raw EEG around spike
+        if "spectral" in fields and rec is not None:
+            try:
+                ch = ev.channel
+                peak_time = feat.get("peak_time_sec", ev.onset_sec)
+                # Use a 1-second window centred on the spike
+                half_win = 0.5
+                onset_s = int(max(0, (peak_time - half_win)) * rec.fs)
+                offset_s = int(min(rec.duration_sec, (peak_time + half_win)) * rec.fs)
+                offset_s = min(rec.n_samples, offset_s)
+                segment = rec.data[ch, onset_s:offset_s].astype(np.float64)
+
+                if len(segment) > int(rec.fs * 0.25):
+                    nperseg = min(int(rec.fs), len(segment))
+                    freqs, psd = _welch(segment, fs=rec.fs, nperseg=nperseg)
+
+                    def _band_power(f_low, f_high):
+                        mask = (freqs >= f_low) & (freqs <= f_high)
+                        return float(np.trapz(psd[mask], freqs[mask])) if mask.any() else 0.0
+
+                    delta = _band_power(0.5, 4)
+                    theta = _band_power(4, 8)
+                    alpha = _band_power(8, 13)
+                    beta = _band_power(13, 30)
+                    gamma = _band_power(30, 100)
+                    total = delta + theta + alpha + beta + gamma
+                    dom_freq = float(freqs[np.argmax(psd)]) if len(psd) > 0 else 0.0
+
+                    psd_norm = psd / psd.sum() if psd.sum() > 0 else psd
+                    psd_norm = psd_norm[psd_norm > 0]
+                    entropy = float(-np.sum(psd_norm * np.log2(psd_norm))) if len(psd_norm) > 0 else 0.0
+
+                    row.update({
+                        "delta_power": round(delta, 4),
+                        "theta_power": round(theta, 4),
+                        "alpha_power": round(alpha, 4),
+                        "beta_power": round(beta, 4),
+                        "gamma_power": round(gamma, 4),
+                        "total_power": round(total, 4),
+                        "delta_rel": round(delta / total, 4) if total > 0 else 0,
+                        "theta_rel": round(theta / total, 4) if total > 0 else 0,
+                        "alpha_rel": round(alpha / total, 4) if total > 0 else 0,
+                        "beta_rel": round(beta / total, 4) if total > 0 else 0,
+                        "gamma_rel": round(gamma / total, 4) if total > 0 else 0,
+                        "dominant_freq_hz": round(dom_freq, 2),
+                        "spectral_entropy": round(entropy, 4),
+                    })
+                else:
+                    row.update({k: None for k in [
+                        "delta_power", "theta_power", "alpha_power",
+                        "beta_power", "gamma_power", "total_power",
+                        "delta_rel", "theta_rel", "alpha_rel",
+                        "beta_rel", "gamma_rel",
+                        "dominant_freq_hz", "spectral_entropy",
+                    ]})
+            except Exception:
+                row.update({k: None for k in [
+                    "delta_power", "theta_power", "alpha_power",
+                    "beta_power", "gamma_power", "total_power",
+                    "delta_rel", "theta_rel", "alpha_rel",
+                    "beta_rel", "gamma_rel",
+                    "dominant_freq_hz", "spectral_entropy",
+                ]})
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    fname = filename or "spikes.csv"
+    if not fname.endswith(".csv"):
+        fname += ".csv"
+
+    n = len(df)
+    return (
+        dcc.send_data_frame(df.to_csv, fname, index=False),
+        f"Exported {n} spike(s).",
+    )
