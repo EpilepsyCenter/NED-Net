@@ -535,6 +535,15 @@ def split_by_animal(
     animal_ids = sorted(animals.keys())
     rng.shuffle(animal_ids)
 
+    if len(animal_ids) < 2:
+        raise ValueError(
+            "Training requires annotations from at least 2 different animals "
+            "so the data can be split into train and validation sets without "
+            "data leakage. Found only 1 animal. Add recordings from more "
+            "animals to the dataset, or assign distinct Animal IDs to "
+            "different channels on the Load tab."
+        )
+
     # Allocate animals to val until we hit the target fraction
     total = len(specs)
     val_count = 0
@@ -546,9 +555,13 @@ def split_by_animal(
         val_animals.add(aid)
         val_count += len(animals[aid])
 
-    # Ensure at least one animal in val if we have multiple
-    if not val_animals and len(animal_ids) > 1:
+    # Ensure at least one animal in val
+    if not val_animals:
         val_animals.add(animal_ids[0])
+
+    # Ensure at least one animal in train
+    if val_animals == set(animal_ids):
+        val_animals.discard(animal_ids[-1])
 
     train_specs = []
     val_specs = []

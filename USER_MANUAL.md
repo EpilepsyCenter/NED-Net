@@ -697,6 +697,8 @@ On the **Dataset** subtab:
 | **Window size (s)** | Length of EEG segments fed to the model |
 | **Validation split** | Fraction of data held out for validation (typically 0.2 = 20%). Splitting is done by animal — all events from a given animal go entirely into training or validation, never both |
 
+> **Important:** Training requires annotations from **at least 2 different animals** so the data can be split into train and validation sets without data leakage. If all your channels belong to the same animal, assign distinct Animal IDs to different channels on the Load tab, or include recordings from multiple animals in the dataset.
+
 ### 11.3 Understanding training metrics
 
 During training, NED-Net shows epoch-by-epoch progress:

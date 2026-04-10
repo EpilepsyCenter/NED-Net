@@ -298,6 +298,13 @@ def train_model(
     print(f"Input channels: {n_eeg_channels + n_act_channels} "
           f"(1 EEG{' + 1 activity' if n_act_channels else ''})")
 
+    if len(train_ds) == 0 or len(val_ds) == 0:
+        raise ValueError(
+            "Training requires at least 2 animals for a proper train/val "
+            f"split. Got {len(train_ds)} train and {len(val_ds)} val samples. "
+            "Add recordings from more animals to the dataset."
+        )
+
     # Count unique animals
     train_animals = set(s.animal_id for s in train_ds.specs)
     val_animals = set(s.animal_id for s in val_ds.specs)

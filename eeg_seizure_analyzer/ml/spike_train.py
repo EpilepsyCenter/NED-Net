@@ -77,6 +77,14 @@ def train_spike_model(
           f"Validation samples: {len(val_ds)}")
     print(f"[IS] Input channels: {n_eeg_channels + n_act_channels}")
 
+    if len(train_ds) == 0 or len(val_ds) == 0:
+        raise ValueError(
+            "Training requires annotations from at least 2 animals "
+            "so the data can be split into train and validation sets. "
+            f"Found {len(train_ds)} train and {len(val_ds)} val samples. "
+            "Add recordings from more animals to the dataset."
+        )
+
     train_animals = set(s.animal_id for s in train_ds.specs)
     val_animals = set(s.animal_id for s in val_ds.specs)
     print(f"[IS] Train animals: {len(train_animals)} {sorted(train_animals)}")
