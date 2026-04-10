@@ -27,8 +27,8 @@ Thumbs.db
 # Claude
 .claude/
 
-# SDK binaries & installers
-Extras/*.msi
+# SDK binaries, installers & extras
+Extras/
 adisdk/
 windows_import_service/.venv/
 
@@ -52,7 +52,12 @@ Implementations/
 # Misc
 .Rhistory
 Gemini_Generated_Image_*
+Logo.png
 
 # Video files
 *.mp4
 *.wmv
+
+# Legacy Streamlit app
+Streamlit/
+eeg_seizure_analyzer/app/
