@@ -773,6 +773,8 @@ Both model types are stored in the same models directory and are listed with the
 
 The **Analysis** tab runs trained CNN models on EDF recordings. It replaces the need for manual parameter tuning — the model applies patterns it learned from your annotations.
 
+![Screenshot: Analysis tab with model selector, HVSW/HPD classification, and results summary](screenshots/analysis_tab.png)
+
 ### 12.1 Detection type
 
 At the top of the tab, select whether to detect **Seizures** or **Interictal Spikes**. This determines which models appear in the model selector.
