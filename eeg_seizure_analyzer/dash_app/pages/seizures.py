@@ -2820,7 +2820,7 @@ def export_csv(n_clicks, methods, channel, fields, filename, sid):
                 "peak_energy_zscore": _round_or_none(qm.get("peak_energy_zscore")),
                 "signal_to_baseline_ratio": _round_or_none(qm.get("signal_to_baseline_ratio")),
                 "theta_delta_ratio": _round_or_none(qm.get("theta_delta_ratio")),
-                "activity_zscore": _round_or_none(qm.get("activity_zscore")),
+                "activity_zscore": _round_or_none(feat.get("activity_zscore")),
             })
 
         # Spectral fields — compute from raw EEG

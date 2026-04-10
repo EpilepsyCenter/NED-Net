@@ -373,6 +373,14 @@ class SpikeTrainSeizureDetector(DetectorBase):
         self, train: _SpikeTrain, channel: int
     ) -> DetectedEvent:
         """Convert a spike train to a generic seizure event (no subtype)."""
+        # ISI stats
+        isis_ms = []
+        for i in range(len(train.spikes) - 1):
+            isi = (train.spikes[i + 1].time_sec - train.spikes[i].time_sec) * 1000
+            isis_ms.append(isi)
+        mean_isi = float(np.mean(isis_ms)) if isis_ms else 0.0
+        raw_amps = [s.amplitude for s in train.spikes]
+
         return DetectedEvent(
             onset_sec=train.onset_sec,
             offset_sec=train.offset_sec,
@@ -386,6 +394,10 @@ class SpikeTrainSeizureDetector(DetectorBase):
                 "n_spikes": len(train.spikes),
                 "max_amplitude_x_baseline": round(train.max_amplitude_x, 2),
                 "mean_spike_frequency_hz": round(train.mean_frequency_hz, 2),
+                "mean_isi_ms": round(mean_isi, 2),
+                "spike_regularity": round(train.isi_cv, 3),
+                "mean_amplitude_uv": round(float(np.mean(raw_amps)), 2) if raw_amps else 0.0,
+                "max_amplitude_uv": round(float(np.max(raw_amps)), 2) if raw_amps else 0.0,
                 "isi_cv": round(train.isi_cv, 3),
                 "detection_method": "spike_train",
                 "spike_amplitudes_x": [round(s.amplitude_x, 2) for s in train.spikes],
@@ -418,16 +430,31 @@ class SpikeTrainSeizureDetector(DetectorBase):
         )
 
         # Build common features dict
+        # ISI stats
+        isis_ms = []
+        for i in range(len(train.spikes) - 1):
+            isi = (train.spikes[i + 1].time_sec - train.spikes[i].time_sec) * 1000
+            isis_ms.append(isi)
+        mean_isi = float(np.mean(isis_ms)) if isis_ms else 0.0
+
+        # Amplitude in raw units (µV)
+        raw_amps = [s.amplitude for s in train.spikes]
+
         features = {
             "n_spikes": len(train.spikes),
             "mean_amplitude_x_baseline": round(train.mean_amplitude_x, 2),
             "max_amplitude_x_baseline": round(train.max_amplitude_x, 2),
             "mean_spike_frequency_hz": round(train.mean_frequency_hz, 2),
+            "mean_isi_ms": round(mean_isi, 2),
+            "spike_regularity": round(train.isi_cv, 3),
+            "mean_amplitude_uv": round(float(np.mean(raw_amps)), 2) if raw_amps else 0.0,
+            "max_amplitude_uv": round(float(np.max(raw_amps)), 2) if raw_amps else 0.0,
             "isi_cv": round(train.isi_cv, 3),
             "amplitude_trend": round(train.amplitude_trend, 4),
             "frequency_trend": round(train.frequency_trend, 4),
             "has_postictal_suppression": has_postictal,
             "spike_amplitudes_x": [round(s.amplitude_x, 2) for s in train.spikes],
+            "detection_method": "spike_train",
         }
 
         # ── Electroclinical / convulsive ─────────────────────────────
