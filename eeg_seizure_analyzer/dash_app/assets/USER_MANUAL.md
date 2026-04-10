@@ -129,7 +129,6 @@ This installs NED-Net and all required packages:
 | pyedflib | Reading/writing EDF files |
 | pandas | Tabular data handling |
 | plotly | Interactive plots |
-| matplotlib | Static plots (export) |
 | dash | Web application framework |
 | dash-bootstrap-components | UI components |
 | dash-ag-grid | Interactive data tables |
@@ -142,7 +141,7 @@ If you want to use the machine-learning features (model training and CNN-based d
 pip install -e ".[ml]"
 ```
 
-This adds **PyTorch** and **scikit-learn**. On Apple Silicon Macs (M1/M2/M3/M4), PyTorch automatically uses the Metal GPU backend for accelerated training. For NVIDIA GPU support on Linux/Windows, follow the [PyTorch installation guide](https://pytorch.org/get-started/locally/) to install the correct CUDA version.
+This adds **PyTorch**. On Apple Silicon Macs (M1/M2/M3/M4), PyTorch automatically uses the Metal GPU backend for accelerated training. For NVIDIA GPU support on Linux/Windows, follow the [PyTorch installation guide](https://pytorch.org/get-started/locally/) to install the correct CUDA version.
 
 ### 2.6 Install LabChart support (Windows only, optional)
 
