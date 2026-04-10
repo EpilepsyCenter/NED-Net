@@ -232,7 +232,9 @@ Each channel must be assigned an **Animal ID** before running detection. This li
 
 ### 4.3 Loading multiple files (batch/project)
 
-Click **Load Multiple...** to load a folder of EDF files for batch processing. NED-Net scans the folder and lists all EDF files found. You can then run detection across all of them from the Detection tab (see [Batch Processing](#14-batch-processing)).
+Click **Load Multiple...** to load a folder of EDF files for batch processing. NED-Net scans the folder and lists all EDF files found. A file selector bar appears at the top of the main content area, allowing you to switch between loaded files. You can then run detection across all of them from the Detection tab (see [Batch Processing](#14-batch-processing)).
+
+> **Important:** When loading multiple files from the same animals (e.g. consecutive recording sessions), make sure the **Animal IDs are consistent** across files. If channel 0 in `Day1.edf` is `Mouse_01`, it must also be `Mouse_01` in `Day2.edf`. NED-Net uses Animal IDs to group results by animal across files — inconsistent IDs will cause the same animal's events to be counted separately. This also applies to batch detection (Detect All) and to building ML training datasets.
 
 ### 4.4 Pairing EEG with activity channels
 
@@ -898,6 +900,8 @@ When you have loaded a project folder (multiple EDF files via **Load Multiple...
 3. Click **Detect All Files**.
 
 NED-Net processes each file sequentially, showing a progress bar with the current file name and count.
+
+> **Tip:** Ensure Animal IDs are consistent across all files in the project. If the same animal appears in multiple recordings (e.g. different days), use the same Animal ID in each file so that results can be correctly grouped per animal.
 
 ![Screenshot: Batch processing progress bar](screenshots/batch_progress.png)
 

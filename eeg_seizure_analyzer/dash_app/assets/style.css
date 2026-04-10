@@ -969,6 +969,30 @@ p, span, div, h1, h2, h3, h4, h5, h6 {
     letter-spacing: 0.3px;
 }
 
+/* ── File selector bar (multi-file) ────────────────────────────────── */
+
+.file-selector-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 16px;
+    background-color: var(--ned-surface);
+    border-bottom: 1px solid var(--ned-border);
+    font-size: 0.82rem;
+}
+
+.file-selector-count {
+    color: var(--ned-text-muted);
+    white-space: nowrap;
+}
+
+.file-selector-folder {
+    color: var(--ned-text-muted);
+    font-size: 0.75rem;
+    margin-left: auto;
+    opacity: 0.7;
+}
+
 /* ── Responsive ────────────────────────────────────────────────────── */
 
 @media (max-width: 1200px) {

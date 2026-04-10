@@ -964,19 +964,11 @@ def update_file_selector_bar(_refresh, sid):
         options.append({"label": label, "value": i})
 
     bar = html.Div(
-        style={
-            "display": "flex",
-            "alignItems": "center",
-            "gap": "12px",
-            "padding": "6px 16px",
-            "backgroundColor": "#161b22",
-            "borderBottom": "1px solid #30363d",
-            "fontSize": "0.82rem",
-        },
+        className="file-selector-bar",
         children=[
             html.Span(
                 f"\U0001F4C1 {n_files} files",
-                style={"color": "#8b949e", "whiteSpace": "nowrap"},
+                className="file-selector-count",
             ),
             dcc.Dropdown(
                 id="file-bar-dropdown",
@@ -987,8 +979,7 @@ def update_file_selector_bar(_refresh, sid):
             ),
             html.Span(
                 os.path.basename(folder),
-                style={"color": "#484f58", "fontSize": "0.75rem",
-                       "marginLeft": "auto"},
+                className="file-selector-folder",
             ),
         ],
     )
