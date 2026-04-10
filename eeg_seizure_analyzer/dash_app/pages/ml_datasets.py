@@ -45,7 +45,7 @@ def layout(sid: str | None) -> html.Div:
                 "Select a folder containing annotated EDF recordings to "
                 "build a training dataset. Annotations are discovered "
                 "automatically from files saved by the Training tab.",
-                style={"color": "#8b949e", "fontSize": "0.9rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "24px"},
             ),
 
@@ -59,7 +59,7 @@ def layout(sid: str | None) -> html.Div:
                         children=[
                             html.Label("Saved datasets",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dcc.Dropdown(
                                 id="ml-load-dropdown",
                                 options=ds_options,
@@ -77,7 +77,7 @@ def layout(sid: str | None) -> html.Div:
 
             # ── Annotation type ──────────────────────────────────
             html.Label("Annotation type",
-                       style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
             dbc.RadioItems(
                 id="ml-type-radio",
                 options=[
@@ -92,7 +92,7 @@ def layout(sid: str | None) -> html.Div:
 
             # ── Folder browse + scan ─────────────────────────────
             html.Label("Recordings folder",
-                       style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
             dbc.InputGroup([
                 dbc.Input(
                     id="ml-folder-input",
@@ -120,10 +120,10 @@ def layout(sid: str | None) -> html.Div:
                 id="ml-save-area",
                 style={"display": "none", "marginTop": "24px"},
                 children=[
-                    html.Hr(style={"borderColor": "#30363d"}),
+                    html.Hr(style={"borderColor": "var(--ned-border)"}),
                     html.Label("Dataset name",
                                style={"fontSize": "0.82rem",
-                                      "color": "#8b949e"}),
+                                      "color": "var(--ned-text-muted)"}),
                     dbc.InputGroup([
                         dbc.Input(
                             id="ml-dataset-name",
@@ -142,13 +142,13 @@ def layout(sid: str | None) -> html.Div:
                 id="ml-train-area",
                 style={"display": "none", "marginTop": "8px"},
                 children=[
-                    html.Hr(style={"borderColor": "#30363d"}),
+                    html.Hr(style={"borderColor": "var(--ned-border)"}),
                     html.H5("Train Model",
-                            style={"marginBottom": "12px", "color": "#58a6ff"}),
+                            style={"marginBottom": "12px", "color": "var(--ned-accent)"}),
 
                     # Model name
                     html.Label("Model name",
-                               style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(
                         id="ml-model-name",
                         placeholder="e.g. study1_v1",
@@ -160,21 +160,21 @@ def layout(sid: str | None) -> html.Div:
                     dbc.Row([
                         dbc.Col([
                             html.Label("Epochs",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(id="ml-epochs", type="number",
                                       value=50, min=1, max=500, step=1,
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Batch size",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(id="ml-batch-size", type="number",
                                       value=8, min=1, max=128, step=1,
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Learning rate",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(id="ml-lr", type="number",
                                       value=0.001, min=0.00001, max=0.1,
                                       step=0.0001,
@@ -182,21 +182,21 @@ def layout(sid: str | None) -> html.Div:
                         ], width=2),
                         dbc.Col([
                             html.Label("Patience",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(id="ml-patience", type="number",
                                       value=10, min=1, max=100, step=1,
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Pos weight",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(id="ml-pos-weight", type="number",
                                       value=5.0, min=0.1, max=50.0, step=0.5,
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Neg/Pos ratio",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(id="ml-neg-ratio", type="number",
                                       value=2.0, min=0.5, max=10.0, step=0.5,
                                       className="form-control", size="sm"),
@@ -703,7 +703,7 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
         html.Div(
             "Building dataset...",
             id="ml-train-progress-text",
-            style={"fontSize": "0.85rem", "color": "#8b949e",
+            style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                    "textAlign": "center"},
         ),
     ])
@@ -742,7 +742,7 @@ def poll_training(n_intervals, is_running, sid):
             ),
             html.Div(
                 "📦 Building dataset (loading EDF files, extracting windows)...",
-                style={"fontSize": "0.85rem", "color": "#8b949e",
+                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                        "textAlign": "center"},
             ),
         ])
@@ -775,7 +775,7 @@ def poll_training(n_intervals, is_running, sid):
             ),
             html.Div(
                 detail,
-                style={"fontSize": "0.82rem", "color": "#8b949e",
+                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
                        "textAlign": "center"},
             ),
         ])
@@ -792,7 +792,7 @@ def poll_training(n_intervals, is_running, sid):
         results = html.Div([
             html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
             html.H5("✅ Training Complete",
-                     style={"color": "#3fb950", "marginBottom": "12px"}),
+                     style={"color": "var(--ned-success)", "marginBottom": "12px"}),
             dbc.Row([
                 dbc.Col(metric_card("Model", info.get("model_name", "")),
                         width=2),
@@ -825,7 +825,7 @@ def poll_training(n_intervals, is_running, sid):
             ], className="g-2 mb-3"),
             html.Div(
                 f"Model saved to: {model_path}",
-                style={"fontSize": "0.82rem", "color": "#8b949e",
+                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
                        "marginTop": "8px"},
             ),
         ])

@@ -18,6 +18,7 @@ from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
+    get_plotly_theme,
     metric_card,
     no_recording_placeholder,
 )
@@ -110,7 +111,7 @@ def _build_comparison_summary(ml_events, st_events):
     if not st_events:
         return html.Div(
             "No spike-train detections to compare against.",
-            style={"color": "#484f58", "fontSize": "0.85rem",
+            style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem",
                    "marginBottom": "12px"},
         )
     matched_ml, matched_st, unique_ml, unique_st = _match_events(
@@ -120,7 +121,7 @@ def _build_comparison_summary(ml_events, st_events):
         children=[
             html.Div("Comparison with spike-train detections",
                      style={"fontSize": "0.82rem", "fontWeight": "600",
-                            "color": "#8b949e", "marginBottom": "6px"}),
+                            "color": "var(--ned-text-muted)", "marginBottom": "6px"}),
             dbc.Badge(f"Matched: {len(matched_ml)}", color="success",
                       className="me-2", style={"fontSize": "0.82rem"}),
             dbc.Badge(f"ML-only: {len(unique_ml)}", color="info",
@@ -214,9 +215,9 @@ def _build_statistics(ml_events, rec, state):
         ]))
 
     return html.Div([
-        html.Hr(style={"borderColor": "#30363d", "margin": "24px 0"}),
+        html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0"}),
         html.H5("Statistics per Animal",
-                style={"color": "#58a6ff", "marginBottom": "12px"}),
+                style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
         dbc.Table(
             children=[
                 html.Thead(html.Tr([
@@ -336,9 +337,10 @@ def _build_eeg_figure(rec, ev, state, bp_low=1.0, bp_high=50.0):
     else:
         fig = go.Figure()
 
+    _eeg_color = "#1b2a4a" if get_plotly_theme() == "light" else "#58a6ff"
     trace = go.Scattergl(
         x=ds_time, y=ds_data, mode="lines", name=ch_name,
-        line=dict(width=0.8, color="#58a6ff"),
+        line=dict(width=0.8, color=_eeg_color),
     )
     if has_act:
         fig.add_trace(trace, row=1, col=1)
@@ -598,9 +600,9 @@ def _build_video_section(state, sid, ev):
                 children=[
                     html.Label("Video", style={"fontSize": "0.82rem",
                                                 "fontWeight": "600",
-                                                "color": "#8b949e"}),
+                                                "color": "var(--ned-text-muted)"}),
                     html.Span(vname, style={"fontSize": "0.78rem",
-                                             "color": "#484f58"}),
+                                             "color": "var(--ned-text-muted)"}),
                 ],
             ),
             html.Video(
@@ -684,7 +686,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Channel",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dcc.Dropdown(
                         id="ml-res-ch-filter", options=ch_options,
                         value="all", clearable=False,
@@ -692,35 +694,35 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Min duration (s)",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(id="ml-res-min-dur", type="number",
                               value=0, min=0, step=0.5, size="sm",
                               className="form-control"),
                 ], width=2),
                 dbc.Col([
                     html.Label("Max duration (s)",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(id="ml-res-max-dur", type="number",
                               value=None, min=0, step=0.5, size="sm",
                               className="form-control"),
                 ], width=2),
                 dbc.Col([
                     html.Label("Min confidence",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(id="ml-res-min-conf", type="number",
                               value=0, min=0, max=1, step=0.05, size="sm",
                               className="form-control"),
                 ], width=2),
                 dbc.Col([
                     html.Label("Min peak freq",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(id="ml-res-min-freq", type="number",
                               value=0, min=0, step=1, size="sm",
                               className="form-control"),
                 ], width=2),
                 dbc.Col([
                     html.Label("Max peak freq",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(id="ml-res-max-freq", type="number",
                               value=None, min=0, step=1, size="sm",
                               className="form-control"),
@@ -732,7 +734,7 @@ def layout(sid: str | None) -> html.Div:
                      style={"marginBottom": "8px"},
                      children=html.Span(
                          f"Total: {n_all} events — Shown: {n_all}",
-                         style={"fontSize": "0.88rem", "color": "#c9d1d9"},
+                         style={"fontSize": "0.88rem", "color": "var(--ned-text)"},
                      )),
 
             html.Div(
@@ -744,7 +746,7 @@ def layout(sid: str | None) -> html.Div:
                             style={"margin": "0"}),
                     html.Span(
                         "Click a row to inspect",
-                        style={"fontSize": "0.75rem", "color": "#8b949e"},
+                        style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"},
                     ),
                 ],
             ),
@@ -756,13 +758,13 @@ def layout(sid: str | None) -> html.Div:
             ),
 
             # ── Inspector ───────────────────────────────────────────
-            html.Hr(style={"borderColor": "#2d333b", "margin": "20px 0"}),
+            html.Hr(style={"borderColor": "var(--ned-border)", "margin": "20px 0"}),
             html.H5("Event Inspector",
-                     style={"marginBottom": "12px", "color": "#58a6ff"}),
+                     style={"marginBottom": "12px", "color": "var(--ned-accent)"}),
 
             html.Div("EEG Trace",
                      style={"fontSize": "0.82rem", "fontWeight": "600",
-                            "color": "#8b949e", "marginBottom": "4px"}),
+                            "color": "var(--ned-text-muted)", "marginBottom": "4px"}),
             dcc.Graph(id="ml-res-eeg", figure=fig_eeg,
                       config={"scrollZoom": True, "displayModeBar": True}),
 
@@ -775,7 +777,7 @@ def layout(sid: str | None) -> html.Div:
                 dbc.Col([
                     html.Div("Spectrogram",
                              style={"fontSize": "0.82rem", "fontWeight": "600",
-                                    "color": "#8b949e", "marginBottom": "4px",
+                                    "color": "var(--ned-text-muted)", "marginBottom": "4px",
                                     "marginTop": "16px"}),
                     dcc.Graph(id="ml-res-spec", figure=fig_spec,
                               config={"scrollZoom": True}),
@@ -783,7 +785,7 @@ def layout(sid: str | None) -> html.Div:
                 dbc.Col([
                     html.Div("Power Over Time",
                              style={"fontSize": "0.82rem", "fontWeight": "600",
-                                    "color": "#8b949e", "marginBottom": "4px",
+                                    "color": "var(--ned-text-muted)", "marginBottom": "4px",
                                     "marginTop": "16px"}),
                     dcc.Graph(id="ml-res-bp", figure=fig_bp,
                               config={"scrollZoom": True}),
@@ -795,7 +797,7 @@ def layout(sid: str | None) -> html.Div:
                      children=_build_statistics(ml_events, rec, state)),
 
             # Export
-            html.Hr(style={"borderColor": "#30363d", "margin": "24px 0"}),
+            html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0"}),
             html.Div(
                 style={"display": "flex", "gap": "12px",
                        "alignItems": "center"},
@@ -856,12 +858,12 @@ def update_table(ch_filter, min_dur, max_dur, min_conf, min_freq, max_freq,
         children=[
             html.Span(f"Total: {n_all}", style={"fontSize": "0.88rem",
                                                   "fontWeight": "600",
-                                                  "color": "#c9d1d9"}),
-            html.Span("•", style={"color": "#484f58"}),
+                                                  "color": "var(--ned-text)"}),
+            html.Span("•", style={"color": "var(--ned-text-muted)"}),
             html.Span(
                 f"Shown: {n_shown}",
                 style={"fontSize": "0.88rem", "fontWeight": "500",
-                       "color": "#58a6ff" if n_shown < n_all else "#c9d1d9"},
+                       "color": "var(--ned-accent)" if n_shown < n_all else "#c9d1d9"},
             ),
         ],
     )

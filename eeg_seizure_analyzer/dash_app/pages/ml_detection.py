@@ -85,7 +85,7 @@ def layout(sid: str | None) -> html.Div:
                 "Run a trained model on the currently loaded recording. "
                 "ML detections are stored separately from spike-train detections "
                 "and can be reviewed in the Training tab.",
-                style={"color": "#8b949e", "fontSize": "0.9rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "24px"},
             ),
 
@@ -99,7 +99,7 @@ def layout(sid: str | None) -> html.Div:
 
             # ── Model selector ──────────────────────────────────────
             html.Label("Trained model",
-                       style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
             dcc.Dropdown(
                 id="ml-det-model",
                 options=model_options,
@@ -116,12 +116,12 @@ def layout(sid: str | None) -> html.Div:
 
             # ── Inference settings ──────────────────────────────────
             html.Label("Inference settings",
-                       style={"fontSize": "0.82rem", "color": "#8b949e",
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
                               "marginBottom": "8px"}),
             dbc.Row([
                 dbc.Col([
                     html.Label("Threshold",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(
                         id="ml-det-threshold", type="number",
                         value=prev_threshold, min=0.05, max=0.95, step=0.05,
@@ -129,12 +129,12 @@ def layout(sid: str | None) -> html.Div:
                     ),
                     html.Small(
                         "Higher = fewer detections, more confident",
-                        style={"color": "#484f58", "fontSize": "0.72rem"},
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem"},
                     ),
                 ], width=3),
                 dbc.Col([
                     html.Label("Min duration (s)",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(
                         id="ml-det-min-dur", type="number",
                         value=prev_min_dur, min=0.5, max=30, step=0.5,
@@ -142,12 +142,12 @@ def layout(sid: str | None) -> html.Div:
                     ),
                     html.Small(
                         "Discard events shorter than this",
-                        style={"color": "#484f58", "fontSize": "0.72rem"},
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem"},
                     ),
                 ], width=3),
                 dbc.Col([
                     html.Label("Merge gap (s)",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dbc.Input(
                         id="ml-det-merge-gap", type="number",
                         value=prev_merge_gap, min=0.0, max=30, step=0.5,
@@ -155,7 +155,7 @@ def layout(sid: str | None) -> html.Div:
                     ),
                     html.Small(
                         "Merge events closer than this",
-                        style={"color": "#484f58", "fontSize": "0.72rem"},
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem"},
                     ),
                 ], width=3),
             ], className="g-2 mb-4"),
@@ -221,12 +221,12 @@ def _build_results_section(state, ml_events):
     return html.Div([
         html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
         html.H5(f"ML Detection Results — {total} events",
-                style={"color": "#58a6ff", "marginBottom": "12px"}),
+                style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
         html.Div(ch_badges, style={"marginBottom": "12px"}),
         html.P(
             "These detections are stored separately from spike-train detections. "
             "Switch to the Training tab to review and annotate them.",
-            style={"color": "#8b949e", "fontSize": "0.85rem"},
+            style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"},
         ),
     ])
 
@@ -282,11 +282,11 @@ def show_model_info(model_name):
                 f"Trained: {meta.get('created', '—')[:10]} — "
                 f"Best epoch: {meta.get('best_epoch', '—')} — "
                 f"Window: {dc.get('window_sec', 60)}s @ {dc.get('target_fs', 250)}Hz",
-                style={"fontSize": "0.78rem", "color": "#484f58",
+                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                        "marginTop": "8px"},
             ),
         ]),
-        style={"backgroundColor": "#161b22", "border": "1px solid #21262d"},
+        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid #21262d"},
     )
 
 
@@ -494,7 +494,7 @@ def start_detection(n_clicks, model_name, threshold, min_dur, merge_gap, sid):
         ),
         html.Div(
             "Loading model...",
-            style={"fontSize": "0.85rem", "color": "#8b949e",
+            style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                    "textAlign": "center"},
         ),
     ])
@@ -532,7 +532,7 @@ def poll_detection(n_intervals, is_running, sid):
             ),
             html.Div(
                 "🧠 Loading model...",
-                style={"fontSize": "0.85rem", "color": "#8b949e",
+                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                        "textAlign": "center"},
             ),
         ])
@@ -550,7 +550,7 @@ def poll_detection(n_intervals, is_running, sid):
             ),
             html.Div(
                 f"📊 Computing features for {total} events...",
-                style={"fontSize": "0.85rem", "color": "#8b949e",
+                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                        "textAlign": "center"},
             ),
         ])
@@ -570,7 +570,7 @@ def poll_detection(n_intervals, is_running, sid):
             ),
             html.Div(
                 f"Processing EEG windows... ({pct}%)",
-                style={"fontSize": "0.85rem", "color": "#8b949e",
+                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                        "textAlign": "center"},
             ),
         ])
@@ -609,12 +609,12 @@ def poll_detection(n_intervals, is_running, sid):
         results = html.Div([
             html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
             html.H5(f"ML Detection Results — {n_events} events",
-                    style={"color": "#58a6ff", "marginBottom": "12px"}),
+                    style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
             html.Div(ch_badges, style={"marginBottom": "12px"}),
             html.P(
                 "Detections saved to disk. Switch to the Training tab to "
                 "review and annotate them.",
-                style={"color": "#8b949e", "fontSize": "0.85rem"},
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"},
             ),
         ])
 

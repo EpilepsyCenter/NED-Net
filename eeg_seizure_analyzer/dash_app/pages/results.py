@@ -24,6 +24,7 @@ from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
+    get_plotly_theme,
     metric_card,
 )
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
@@ -56,7 +57,7 @@ def layout(sid: str | None) -> html.Div:
             html.P(
                 "Analysis results from all modes (single, batch, live). "
                 "Use filters to scope what is shown. Click an event to inspect.",
-                style={"color": "#8b949e", "fontSize": "0.9rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "16px"},
             ),
 
@@ -80,7 +81,7 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("Source file",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dcc.Dropdown(
                                 id="res-file-filter",
                                 options=file_options,
@@ -91,30 +92,30 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("Date range",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dbc.Row([
                                 dbc.Col(dbc.Input(
                                     id="res-date-start", type="text",
                                     placeholder="Start",
                                     value=date_min or "", size="sm",
-                                    style={"backgroundColor": "#0d1117",
-                                           "color": "#c9d1d9",
-                                           "border": "1px solid #30363d"},
+                                    style={"backgroundColor": "var(--ned-bg)",
+                                           "color": "var(--ned-text)",
+                                           "border": "1px solid var(--ned-border)"},
                                 ), width=6),
                                 dbc.Col(dbc.Input(
                                     id="res-date-end", type="text",
                                     placeholder="End",
                                     value=date_max or "", size="sm",
-                                    style={"backgroundColor": "#0d1117",
-                                           "color": "#c9d1d9",
-                                           "border": "1px solid #30363d"},
+                                    style={"backgroundColor": "var(--ned-bg)",
+                                           "color": "var(--ned-text)",
+                                           "border": "1px solid var(--ned-border)"},
                                 ), width=6),
                             ], className="g-1"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Mode",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dbc.Checklist(
                                 id="res-mode-filter",
                                 options=[
@@ -130,7 +131,7 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("Animals",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dcc.Dropdown(
                                 id="res-animal-filter",
                                 options=[{"label": a, "value": a}
@@ -142,7 +143,7 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("Event type",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dbc.Checklist(
                                 id="res-type-filter",
                                 options=[
@@ -157,13 +158,13 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("Min conf",
                                        style={"fontSize": "0.82rem",
-                                              "color": "#8b949e"}),
+                                              "color": "var(--ned-text-muted)"}),
                             dbc.Input(
                                 id="res-min-conf", type="number",
                                 value=0, min=0, max=1, step=0.05, size="sm",
-                                style={"backgroundColor": "#0d1117",
-                                       "color": "#c9d1d9",
-                                       "border": "1px solid #30363d"},
+                                style={"backgroundColor": "var(--ned-bg)",
+                                       "color": "var(--ned-text)",
+                                       "border": "1px solid var(--ned-border)"},
                             ),
                         ], width=1),
                     ], className="g-2"),
@@ -173,7 +174,7 @@ def layout(sid: str | None) -> html.Div:
                         className="mt-2",
                     ),
                 ]),
-                style={"backgroundColor": "#161b22",
+                style={"backgroundColor": "var(--ned-sidebar)",
                        "border": "1px solid #21262d",
                        "marginBottom": "20px"},
             ),
@@ -188,7 +189,7 @@ def layout(sid: str | None) -> html.Div:
             ], className="mb-3"),
 
             # ── Events table ───────────────────────────────────────
-            html.H6("Events", style={"color": "#58a6ff", "marginTop": "16px"}),
+            html.H6("Events", style={"color": "var(--ned-accent)", "marginTop": "16px"}),
             html.Div(id="res-events-table"),
 
             # ── Event inspector ────────────────────────────────────
@@ -364,7 +365,7 @@ def _inspector_params_only(ev_data: dict):
     """Show just the parameters table when EDF file is not available."""
     return html.Div([
         html.H6("Event Inspector",
-                style={"color": "#58a6ff", "marginBottom": "12px"}),
+                style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
         alert("EDF file not found — showing parameters only.", "info"),
         _inspector_params_panel(ev_data),
     ])
@@ -400,10 +401,11 @@ def _build_full_inspector(edf_path: str, ev_data: dict):
     # ── EEG trace ──────────────────────────────────────────────────
     ds_time, ds_data = _minmax_downsample(time_axis, data_filt)
 
+    _eeg_color = "#1b2a4a" if get_plotly_theme() == "light" else "#58a6ff"
     fig_eeg = go.Figure()
     fig_eeg.add_trace(go.Scattergl(
         x=ds_time, y=ds_data, mode="lines",
-        line=dict(width=0.8, color="#58a6ff"),
+        line=dict(width=0.8, color=_eeg_color),
         name="EEG",
     ))
     fig_eeg.add_shape(
@@ -540,7 +542,7 @@ def _build_full_inspector(edf_path: str, ev_data: dict):
     return html.Div([
         html.Hr(style={"borderColor": "#58a6ff", "margin": "16px 0"}),
         html.H6("Event Inspector",
-                style={"color": "#58a6ff", "marginBottom": "12px"}),
+                style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
 
         # EEG trace
         dcc.Graph(figure=fig_eeg, config={"displayModeBar": False}),
@@ -589,15 +591,15 @@ def _inspector_params_panel(ev_data: dict, computed: dict | None = None):
             continue
         rows.append(
             html.Tr([
-                html.Td(k, style={"color": "#8b949e", "fontSize": "0.82rem",
+                html.Td(k, style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                                    "paddingRight": "16px", "whiteSpace": "nowrap"}),
-                html.Td(str(v), style={"color": "#c9d1d9", "fontSize": "0.82rem"}),
+                html.Td(str(v), style={"color": "var(--ned-text)", "fontSize": "0.82rem"}),
             ])
         )
 
     return dbc.Card(
         dbc.CardBody([
-            html.H6("Parameters", style={"color": "#8b949e",
+            html.H6("Parameters", style={"color": "var(--ned-text-muted)",
                                           "fontSize": "0.82rem",
                                           "marginBottom": "8px"}),
             html.Table(
@@ -605,7 +607,7 @@ def _inspector_params_panel(ev_data: dict, computed: dict | None = None):
                 style={"width": "100%"},
             ),
         ]),
-        style={"backgroundColor": "#161b22", "border": "1px solid #21262d",
+        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid #21262d",
                "marginTop": "12px"},
     )
 
@@ -689,7 +691,7 @@ def _build_circadian(circadian: list[dict]) -> go.Figure:
 def _build_events_table(events: list[dict]):
     if not events:
         return html.P("No events found.",
-                      style={"color": "#484f58", "fontSize": "0.85rem"})
+                      style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})
 
     rows = []
     for ev in events[:500]:

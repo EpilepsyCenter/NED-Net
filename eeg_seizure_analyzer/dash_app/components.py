@@ -225,36 +225,70 @@ def no_recording_placeholder() -> html.Div:
 
 # ── Plotly figure defaults ────────────────────────────────────────────
 
+_FONT = "IBM Plex Sans, sans-serif"
+
+_PLOTLY_DARK = {
+    "paper_bgcolor": "#1c2128",
+    "plot_bgcolor": "#0f1117",
+    "font_color": "#e6edf3",
+    "gridcolor": "#2d333b",
+    "colorway": [
+        "#58a6ff", "#3fb950", "#d29922", "#f85149",
+        "#bc8cff", "#f778ba", "#79c0ff", "#56d364",
+    ],
+}
+
+_PLOTLY_LIGHT = {
+    "paper_bgcolor": "#ffffff",
+    "plot_bgcolor": "#f6f8fa",
+    "font_color": "#1f2328",
+    "gridcolor": "#d0d7de",
+    "colorway": [
+        "#0969da", "#1a7f37", "#9a6700", "#cf222e",
+        "#8250df", "#bf3989", "#0550ae", "#116329",
+    ],
+}
+
+# Global mutable — toggled by the theme switch callback
+_current_theme = "light"
+
+
+def set_plotly_theme(theme: str):
+    """Set the active Plotly colour scheme ('dark' or 'light')."""
+    global _current_theme
+    _current_theme = theme
+
+
+def get_plotly_theme() -> str:
+    return _current_theme
+
+
+def _plotly_palette():
+    return _PLOTLY_DARK if _current_theme == "dark" else _PLOTLY_LIGHT
+
+
 PLOTLY_TEMPLATE = {
     "layout": {
         "paper_bgcolor": "#1c2128",
         "plot_bgcolor": "#0f1117",
-        "font": {"color": "#e6edf3", "family": "Inter, sans-serif", "size": 12},
-        "xaxis": {
-            "gridcolor": "#2d333b",
-            "zerolinecolor": "#2d333b",
-        },
-        "yaxis": {
-            "gridcolor": "#2d333b",
-            "zerolinecolor": "#2d333b",
-        },
+        "font": {"color": "#e6edf3", "family": _FONT, "size": 12},
+        "xaxis": {"gridcolor": "#2d333b", "zerolinecolor": "#2d333b"},
+        "yaxis": {"gridcolor": "#2d333b", "zerolinecolor": "#2d333b"},
         "margin": {"l": 60, "r": 20, "t": 40, "b": 40},
-        "colorway": [
-            "#58a6ff", "#3fb950", "#d29922", "#f85149",
-            "#bc8cff", "#f778ba", "#79c0ff", "#56d364",
-        ],
+        "colorway": _PLOTLY_DARK["colorway"],
     },
 }
 
 
 def apply_fig_theme(fig):
-    """Apply the NED-Net dark theme to a Plotly figure."""
+    """Apply the current NED-Net theme (dark or light) to a Plotly figure."""
+    p = _plotly_palette()
     fig.update_layout(
-        paper_bgcolor="#1c2128",
-        plot_bgcolor="#0f1117",
-        font=dict(color="#e6edf3", family="Inter, sans-serif", size=12),
-        xaxis=dict(gridcolor="#2d333b", zerolinecolor="#2d333b"),
-        yaxis=dict(gridcolor="#2d333b", zerolinecolor="#2d333b"),
+        paper_bgcolor=p["paper_bgcolor"],
+        plot_bgcolor=p["plot_bgcolor"],
+        font=dict(color=p["font_color"], family=_FONT, size=12),
+        xaxis=dict(gridcolor=p["gridcolor"], zerolinecolor=p["gridcolor"]),
+        yaxis=dict(gridcolor=p["gridcolor"], zerolinecolor=p["gridcolor"]),
         margin=dict(l=60, r=20, t=40, b=40),
     )
     return fig

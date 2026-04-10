@@ -12,6 +12,7 @@ import dash_ag_grid as dag
 from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
+    get_plotly_theme,
     metric_card,
     no_recording_placeholder,
     param_control,
@@ -433,7 +434,7 @@ def layout(sid: str | None) -> html.Div:
                         id="sz-method-badge",
                         children={o["value"]: o["label"] for o in _METHOD_OPTIONS}.get(
                             persisted_method, "Spike-Train"),
-                        style={"fontSize": "0.78rem", "color": "#8b949e",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                "border": "1px solid #2d333b", "borderRadius": "12px",
                                "padding": "2px 10px"},
                     ),
@@ -451,7 +452,7 @@ def layout(sid: str | None) -> html.Div:
                             html.Label(
                                 "Detection method",
                                 style={"fontSize": "0.82rem", "fontWeight": "500",
-                                       "color": "#8b949e", "margin": "0"},
+                                       "color": "var(--ned-text-muted)", "margin": "0"},
                             ),
                             dbc.Button(
                                 "?", id="sz-method-help-btn", size="sm",
@@ -499,7 +500,7 @@ def layout(sid: str | None) -> html.Div:
                         "Channels to analyze",
                         style={"fontSize": "0.82rem", "fontWeight": "500",
                                "marginBottom": "6px", "display": "block",
-                               "color": "#8b949e"},
+                               "color": "var(--ned-text-muted)"},
                     ),
                     dcc.Dropdown(
                         id="sz-channel-selector",
@@ -598,7 +599,7 @@ def layout(sid: str | None) -> html.Div:
                                size="sm",
                                style={"backgroundColor": "#d29922",
                                       "borderColor": "#d29922",
-                                      "color": "#0d1117",
+                                      "color": "var(--ned-bg)",
                                       "fontWeight": "600",
                                       "display": "inline-block" if has_results else "none"}),
                 ],
@@ -616,7 +617,8 @@ def layout(sid: str | None) -> html.Div:
 
             # Confidence filtering controls
             _confidence_filter_controls(has_results, rec, fv,
-                                        filter_enabled=filter_enabled),
+                                        filter_enabled=filter_enabled,
+                                        seizure_events=state.seizure_events),
 
             # Results area — pre-populated if results exist
             html.Div(id="sz-results", children=existing_results),
@@ -643,7 +645,7 @@ def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
     """A compact min–max input pair for filter controls."""
     _inp_style = {"width": "100%", "height": "28px", "fontSize": "0.78rem"}
     return dbc.Col([
-        html.Label(label, style={"fontSize": "0.75rem", "color": "#8b949e"}),
+        html.Label(label, style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
         html.Div(
             style={"display": "flex", "alignItems": "center", "gap": "4px"},
             children=[
@@ -654,7 +656,7 @@ def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
                     debounce=True, className="form-control",
                     style=_inp_style,
                 ),
-                html.Span("–", style={"color": "#8b949e", "fontSize": "0.8rem"}),
+                html.Span("–", style={"color": "var(--ned-text-muted)", "fontSize": "0.8rem"}),
                 dcc.Input(
                     id=fid_max, type="number",
                     min=min_val, max=max_val, step=step, value=value_max,
@@ -667,13 +669,36 @@ def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
     ], width=2)
 
 
+_METHOD_LABELS_FILTER = {
+    "spike_train": "Spike-Train",
+    "spectral_band": "Spectral Band",
+    "autocorrelation": "Autocorrelation",
+    "ensemble": "Ensemble",
+    "ml_unet": "ML U-Net",
+    "ml_unet_spike": "ML U-Net Spike",
+    "line_length_energy": "LL / Energy",
+}
+
+
+def _method_filter_options(events):
+    """Build dropdown options from the detection methods present in events."""
+    methods_seen = sorted({
+        (e.features or {}).get("detection_method", "")
+        for e in events
+        if (e.features or {}).get("detection_method")
+    })
+    return [{"label": _METHOD_LABELS_FILTER.get(m, m), "value": m} for m in methods_seen]
+
+
 def _confidence_filter_controls(visible: bool, rec=None, fv=None,
-                                filter_enabled: bool = True) -> html.Div:
+                                filter_enabled: bool = True,
+                                seizure_events=None) -> html.Div:
     fv = fv or dict(_FILTER_DEFAULTS)
     ch_options = []
     if rec is not None:
         ch_options = [{"label": rec.channel_names[i], "value": i}
                       for i in range(rec.n_channels)]
+    method_opts = _method_filter_options(seizure_events or [])
 
     return html.Div(
         id="sz-confidence-section",
@@ -686,7 +711,7 @@ def _confidence_filter_controls(visible: bool, rec=None, fv=None,
                 children=[
                     html.Span("Result Filters",
                               style={"fontSize": "0.82rem", "fontWeight": "600",
-                                     "color": "#8b949e"}),
+                                     "color": "var(--ned-text-muted)"}),
                     dbc.Switch(
                         id="sz-filter-enabled",
                         value=filter_enabled,
@@ -714,12 +739,22 @@ def _confidence_filter_controls(visible: bool, rec=None, fv=None,
                 _filter_range("Freq (Hz)", "sz-filter-min-freq", "sz-filter-max-freq",
                               0, 50, 0.5, fv.get("min_freq", 0), fv.get("max_freq")),
                 dbc.Col([
-                    html.Label("Channel", style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                    html.Label("Channel", style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     dcc.Dropdown(
                         id="sz-filter-channel",
                         options=ch_options,
                         value=fv.get("channel", None),
                         placeholder="All", clearable=True,
+                        style={"fontSize": "0.8rem"},
+                    ),
+                ], width=2),
+                dbc.Col([
+                    html.Label("Method", style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                    dcc.Dropdown(
+                        id="sz-filter-method",
+                        options=method_opts,
+                        value=fv.get("method", None),
+                        placeholder="All methods", clearable=True,
                         style={"fontSize": "0.8rem"},
                     ),
                 ], width=2),
@@ -783,7 +818,7 @@ def _inspector_controls(visible: bool, y_range: float, opts=None) -> html.Div:
                 children=[
                     html.Span("Inspector Options",
                               style={"fontSize": "0.82rem", "fontWeight": "600",
-                                     "color": "#8b949e"}),
+                                     "color": "var(--ned-text-muted)"}),
                     dbc.Checkbox(id="sz-insp-show-spikes", label="Spikes",
                                  value=opts.get("show_spikes", True),
                                  style={"fontSize": "0.8rem"}),
@@ -800,7 +835,7 @@ def _inspector_controls(visible: bool, y_range: float, opts=None) -> html.Div:
                         style={"display": "flex", "alignItems": "center", "gap": "6px"},
                         children=[
                             html.Label("Y range:",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "margin": "0"}),
                             dcc.Input(
                                 id="sz-insp-yrange", type="number",
@@ -860,7 +895,7 @@ def _baseline_params(_val, bl_method="percentile") -> html.Div:
         default_open=True,
         children=[
             html.Div([
-                html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                html.Label("Method", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                             "marginBottom": "4px"}),
                 dcc.Dropdown(
                     id="sz-bl-method",
@@ -875,9 +910,9 @@ def _baseline_params(_val, bl_method="percentile") -> html.Div:
             ], style={"marginBottom": "12px"}),
             param_control("Percentile", "sz-bl-pct", 1, 50, 1, _val("sz-bl-pct")),
             param_control("RMS window (s)", "sz-bl-rms", 1.0, 60.0, 1.0, _val("sz-bl-rms")),
-            html.Hr(style={"margin": "10px 0", "borderColor": "#30363d"}),
+            html.Hr(style={"margin": "10px 0", "borderColor": "var(--ned-border)"}),
             html.Span("Pre-ictal local baseline",
-                       style={"fontSize": "0.75rem", "color": "#8b949e",
+                       style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                               "display": "block", "marginBottom": "6px"}),
             param_control("Window start (s before onset)", "sz-lbl-start",
                           1.0, 120.0, 1.0, _val("sz-lbl-start")),
@@ -914,7 +949,7 @@ def _boundary_params(_val, bnd_method="signal") -> html.Div:
         default_open=True,
         children=[
             html.Div([
-                html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                html.Label("Method", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                             "marginBottom": "4px"}),
                 dcc.Dropdown(
                     id="sz-bnd-method",
@@ -934,7 +969,7 @@ def _boundary_params(_val, bnd_method="signal") -> html.Div:
 
 
 def _subtype_params(_val, classify_on=False) -> html.Div:
-    _sub_label = {"fontSize": "0.72rem", "color": "#8b949e",
+    _sub_label = {"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
                   "fontWeight": "600", "letterSpacing": "1px",
                   "marginBottom": "6px", "marginTop": "10px"}
     return collapsible_section(
@@ -992,9 +1027,9 @@ def _spectral_band_params(_val, sb_bnd_method="none") -> html.Div:
                 children=[
                     param_control("Baseline percentile", "sz-sb-bl-pct",
                                   1, 50, 1, _val("sz-sb-bl-pct")),
-                    html.Hr(style={"margin": "10px 0", "borderColor": "#30363d"}),
+                    html.Hr(style={"margin": "10px 0", "borderColor": "var(--ned-border)"}),
                     html.Span("Pre-ictal local baseline",
-                              style={"fontSize": "0.75rem", "color": "#8b949e",
+                              style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                                      "display": "block", "marginBottom": "6px"}),
                     param_control("Window start (s before onset)", "sz-sb-lbl-start",
                                   1.0, 120.0, 1.0, _val("sz-sb-lbl-start")),
@@ -1036,7 +1071,7 @@ def _spectral_band_params(_val, sb_bnd_method="none") -> html.Div:
                 default_open=True,
                 children=[
                     html.Div([
-                        html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                        html.Label("Method", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                                     "marginBottom": "4px"}),
                         dcc.Dropdown(
                             id="sz-sb-bnd-method",
@@ -1104,7 +1139,7 @@ def _autocorrelation_params(_val, ac_bl_method="percentile",
                 default_open=True,
                 children=[
                     html.Div([
-                        html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                        html.Label("Method", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                                     "marginBottom": "4px"}),
                         dcc.Dropdown(
                             id="sz-ac-bl-method",
@@ -1121,9 +1156,9 @@ def _autocorrelation_params(_val, ac_bl_method="percentile",
                                   1, 50, 1, _val("sz-ac-bl-pct")),
                     param_control("RMS window (s)", "sz-ac-bl-rms",
                                   1.0, 60.0, 1.0, _val("sz-ac-bl-rms")),
-                    html.Hr(style={"margin": "10px 0", "borderColor": "#30363d"}),
+                    html.Hr(style={"margin": "10px 0", "borderColor": "var(--ned-border)"}),
                     html.Span("Pre-ictal local baseline",
-                              style={"fontSize": "0.75rem", "color": "#8b949e",
+                              style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                                      "display": "block", "marginBottom": "6px"}),
                     param_control("Window start (s before onset)", "sz-ac-lbl-start",
                                   1.0, 120.0, 1.0, _val("sz-ac-lbl-start")),
@@ -1147,9 +1182,9 @@ def _autocorrelation_params(_val, ac_bl_method="percentile",
                                   1.0, 10.0, 0.5, _val("sz-ac-spike-amp")),
                     param_control("Refractory (ms)", "sz-ac-spike-refr",
                                   5.0, 200.0, 5.0, _val("sz-ac-spike-refr")),
-                    html.Hr(style={"margin": "8px 0", "borderColor": "#30363d"}),
+                    html.Hr(style={"margin": "8px 0", "borderColor": "var(--ned-border)"}),
                     html.Span("Autocorrelation",
-                              style={"fontSize": "0.75rem", "color": "#8b949e",
+                              style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                                      "display": "block", "marginBottom": "6px"}),
                     param_control("Sub-window (pts)", "sz-ac-subwin",
                                   10, 100, 5, _val("sz-ac-subwin"),
@@ -1174,7 +1209,7 @@ def _autocorrelation_params(_val, ac_bl_method="percentile",
                 default_open=True,
                 children=[
                     html.Div([
-                        html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                        html.Label("Method", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                                     "marginBottom": "4px"}),
                         dcc.Dropdown(
                             id="sz-ac-bnd-method",
@@ -1222,7 +1257,7 @@ def _ensemble_params(_val, selected_methods=None) -> html.Div:
                     children=[
                         html.Div([
                             html.Label("Methods to combine",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "marginBottom": "4px"}),
                             dbc.Checklist(
                                 id="sz-ens-methods",
@@ -1241,7 +1276,7 @@ def _ensemble_params(_val, selected_methods=None) -> html.Div:
                                       "Min methods that must agree for an event to survive."),
                         html.Div([
                             html.Label("Merge strategy",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "marginBottom": "4px"}),
                             dcc.Dropdown(
                                 id="sz-ens-merge",
@@ -1255,7 +1290,7 @@ def _ensemble_params(_val, selected_methods=None) -> html.Div:
                         ], style={"marginBottom": "12px"}),
                         html.Div([
                             html.Label("Confidence merge",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "marginBottom": "4px"}),
                             dcc.Dropdown(
                                 id="sz-ens-conf-merge",
@@ -1275,8 +1310,8 @@ def _ensemble_params(_val, selected_methods=None) -> html.Div:
                     "Individual method parameters are inherited from the other "
                     "tabs above. Switch to each method to tune its parameters, "
                     "then select Ensemble to combine results.",
-                    style={"fontSize": "0.78rem", "color": "#8b949e",
-                           "padding": "12px", "border": "1px solid #30363d",
+                    style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                           "padding": "12px", "border": "1px solid var(--ned-border)",
                            "borderRadius": "6px", "marginTop": "8px"},
                 ),
             ], width=6),
@@ -1418,6 +1453,7 @@ def toggle_help_modal(open_clicks, close_clicks, is_open):
     # Filter values (min + max)
     *[Input(fid, "value") for fid in _ALL_FILTER_IDS],
     Input("sz-filter-channel", "value"),
+    Input("sz-filter-method", "value"),
     Input("sz-filter-severity", "value"),
     # Filter enabled toggle
     Input("sz-filter-enabled", "value"),
@@ -1432,7 +1468,7 @@ def toggle_help_modal(open_clicks, close_clicks, is_open):
 )
 def auto_save_sz_extras(*args):
     """Save all non-MATCH seizure component values to server state on any change."""
-    # Unpack *args: 8 fixed + n_min + n_max filter IDs + 2 dropdowns + 1 toggle + 5 inspector + sid
+    # Unpack *args: 8 fixed + n_min + n_max filter IDs + 3 dropdowns + 1 toggle + 5 inspector + sid
     n_min = len(_ALL_FILTER_MIN_IDS)
     n_max = len(_ALL_FILTER_MAX_IDS)
     (channels, bl_method, bnd_method, classify, method_sel,
@@ -1440,8 +1476,9 @@ def auto_save_sz_extras(*args):
     filt_min_vals = args[8:8 + n_min]
     filt_max_vals = args[8 + n_min:8 + n_min + n_max]
     filt_channel = args[8 + n_min + n_max]
-    filt_severity = args[8 + n_min + n_max + 1]
-    filt_enabled = args[8 + n_min + n_max + 2]
+    filt_method = args[8 + n_min + n_max + 1]
+    filt_severity = args[8 + n_min + n_max + 2]
+    filt_enabled = args[8 + n_min + n_max + 3]
     insp_spikes, insp_baseline, insp_threshold, insp_bp, insp_yr = args[-6:-1]
     sid = args[-1]
 
@@ -1478,6 +1515,7 @@ def auto_save_sz_extras(*args):
     for k, v in zip(_max_keys, filt_max_vals):
         new_fv[k] = v
     new_fv["channel"] = filt_channel
+    new_fv["method"] = filt_method
     new_fv["severity"] = filt_severity
     existing_fv = state.extra.get("sz_filter_values", dict(_FILTER_DEFAULTS))
     for k, v in new_fv.items():
@@ -1538,12 +1576,14 @@ def auto_save_sz_extras(*args):
     Output("sz-clear-btn", "style"),
     Output("sz-confidence-section", "style"),
     Output("sz-inspector-controls", "style"),
+    Output("sz-filter-method", "options"),
     Input("sz-detect-btn", "n_clicks"),
     Input("sz-clear-btn", "n_clicks"),
     # Confidence filters — min + max (inputs trigger re-filter)
     *[Input(fid, "value") for fid in _ALL_FILTER_MIN_IDS],
     *[Input(fid, "value") for fid in _ALL_FILTER_MAX_IDS],
     Input("sz-filter-channel", "value"),
+    Input("sz-filter-method", "value"),
     Input("sz-filter-severity", "value"),
     Input("sz-filter-enabled", "value"),
     # Channel selector
@@ -1620,7 +1660,7 @@ def run_detection(
     filt_max_conf, filt_max_dur, filt_max_spikes, filt_max_amp,
     filt_max_lbl, filt_max_top_amp,
     filt_max_ll, filt_max_energy, filt_max_sigbl, filt_max_freq, filt_max_td,
-    filt_channel, filt_severity, filt_enabled,
+    filt_channel, filt_method, filt_severity, filt_enabled,
     selected_channels,
     bp_low, bp_high, spike_amp, spike_min_uv, spike_prom,
     spike_maxw, spike_minw, spike_refr,
@@ -1660,7 +1700,7 @@ def run_detection(
     rec = state.recording
 
     if rec is None:
-        return no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update
 
     show_style = {"display": "inline-block"}
     hide_style = {"display": "none"}
@@ -1680,7 +1720,7 @@ def run_detection(
         max_ll=filt_max_ll, max_energy=filt_max_energy,
         max_sigbl=filt_max_sigbl, max_freq=filt_max_freq,
         max_td=filt_max_td,
-        channel=filt_channel, severity=filt_severity,
+        channel=filt_channel, method=filt_method, severity=filt_severity,
     )
 
     # Clear
@@ -1689,7 +1729,7 @@ def run_detection(
         state.extra.pop("sz_selected_event_key", None)
         return (
             alert("Results cleared.", "info"),
-            html.Div(), hide_style, hide_style, hide_style,
+            html.Div(), hide_style, hide_style, hide_style, [],
         )
 
     # Filter change — re-filter existing results
@@ -1710,16 +1750,17 @@ def run_detection(
                                  n_total=n_total)
         n_shown = len(filtered)
         status = alert(f"Showing {n_shown} of {n_total} seizure(s) after filtering.", "info")
-        return status, results, show_style, block_style, insp_block
+        method_opts = _method_filter_options(state.seizure_events)
+        return status, results, show_style, block_style, insp_block, method_opts
 
     # Detect
     if trigger != "sz-detect-btn":
-        return no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update
 
     if not selected_channels:
         return (
             alert("Select at least one channel.", "warning"),
-            no_update, no_update, no_update, no_update,
+            no_update, no_update, no_update, no_update, no_update,
         )
 
     # Warn if Animal IDs not assigned
@@ -1732,7 +1773,7 @@ def run_detection(
                 "Go to the Load tab and fill in the Animal ID column before detecting.",
                 "warning",
             ),
-            no_update, no_update, no_update, no_update,
+            no_update, no_update, no_update, no_update, no_update,
         )
 
     try:
@@ -1848,7 +1889,7 @@ def run_detection(
         else:
             return (
                 alert(f"Unknown method: {method}", "danger"),
-                no_update, no_update, no_update, no_update,
+                no_update, no_update, no_update, no_update, no_update,
             )
 
         seizures = []
@@ -2085,8 +2126,25 @@ def run_detection(
                 import traceback
                 traceback.print_exc()
 
-        state.seizure_events = seizures
-        state.st_detection_info = detection_info
+        # Accumulate events across methods: remove old events from the
+        # same method(s) being run, then append the new ones.
+        _new_methods = {
+            (e.features or {}).get("detection_method", "")
+            for e in seizures
+        }
+        _kept = [
+            e for e in (state.seizure_events or [])
+            if (e.features or {}).get("detection_method", "") not in _new_methods
+        ]
+        # Re-assign IDs to avoid collisions
+        max_id = max((e.event_id for e in _kept), default=0)
+        for i, ev in enumerate(seizures, start=max_id + 1):
+            ev.event_id = i
+        state.seizure_events = _kept + seizures
+        # Merge detection_info (keyed by channel)
+        merged_info = dict(state.st_detection_info or {})
+        merged_info.update(detection_info)
+        state.st_detection_info = merged_info
         state.extra.pop("sz_selected_event_key", None)  # new detection, clear selection
 
         # ── Persist all method params to sz_params ──────────────────
@@ -2174,8 +2232,8 @@ def run_detection(
             if _src and _src.lower().endswith(".edf"):
                 save_detections(
                     edf_path=_src,
-                    events=seizures,
-                    detection_info=detection_info,
+                    events=state.seizure_events,
+                    detection_info=state.st_detection_info,
                     params_dict=state.extra.get("sz_params", {}),
                     detector_name=_DETECTOR_NAMES.get(method, "SpikeTrainSeizureDetector"),
                     channels=selected_channels,
@@ -2188,23 +2246,28 @@ def run_detection(
         except Exception:
             pass  # save failure must not break detection
 
-        # Apply any active filters
+        # Apply any active filters to the FULL accumulated list
+        all_events = state.seizure_events
         if filt_enabled:
-            filtered = _apply_filters(rec, seizures, classify_subtypes,
+            filtered = _apply_filters(rec, all_events, classify_subtypes,
                                       **filter_kwargs)
         else:
-            filtered = list(seizures)
+            filtered = list(all_events)
         # Update detected_events with filtered set so viewer shows only these
         state.detected_events = filtered + state.spike_events
         results = _build_results(rec, filtered, classify_subtypes,
                                  all_channels=selected_channels,
-                                 n_total=len(seizures))
+                                 n_total=len(all_events))
         n_ch = len(selected_channels)
+        n_new = len(seizures)
+        n_total = len(all_events)
 
+        method_opts = _method_filter_options(all_events)
         return (
             alert(f"[{({o['value']: o['label'] for o in _METHOD_OPTIONS}).get(method, method)}] "
-                  f"Found {len(seizures)} seizure(s) across {n_ch} channel(s).", "success"),
-            results, show_style, block_style, insp_block,
+                  f"Found {n_new} seizure(s) across {n_ch} channel(s). "
+                  f"Total: {n_total}.", "success"),
+            results, show_style, block_style, insp_block, method_opts,
         )
 
     except Exception as e:
@@ -2212,7 +2275,7 @@ def run_detection(
         traceback.print_exc()
         return (
             alert(f"Detection failed: {e}", "danger"),
-            html.Div(), hide_style, hide_style, hide_style,
+            html.Div(), hide_style, hide_style, hide_style, [],
         )
 
 
@@ -2228,9 +2291,13 @@ def _apply_filters(rec, seizures, classify_on, *,
                    max_lbl=None, max_top_amp=None,
                    max_ll=None, max_energy=None, max_sigbl=None,
                    max_freq=None, max_td=None,
-                   channel=None, severity=""):
+                   channel=None, severity="", method=None):
     """Apply min/max filters to seizure list."""
     filtered = list(seizures)
+    # --- Method ---
+    if method:
+        filtered = [e for e in filtered
+                    if (e.features or {}).get("detection_method") == method]
     min_conf = float(min_conf or 0)
     min_dur = float(min_dur or 0)
     min_spikes = int(min_spikes or 0)
@@ -2385,19 +2452,19 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
     summary = html.Div(
         style={"display": "flex", "alignItems": "center", "gap": "16px",
                "marginBottom": "12px", "padding": "8px 16px",
-               "background": "#161b22", "borderRadius": "8px",
-               "border": "1px solid #2d333b"},
+               "background": "var(--ned-sidebar)", "borderRadius": "8px",
+               "border": "1px solid var(--ned-border)"},
         children=[
             html.Span(
                 f"Total detected: {n_all}",
-                style={"fontSize": "0.88rem", "fontWeight": "600",
-                       "color": "#c9d1d9"},
+                style={"fontSize": "0.82rem", "fontWeight": "600",
+                       "color": "var(--ned-text)"},
             ),
-            html.Span("\u2022", style={"color": "#484f58"}),
+            html.Span("\u2022", style={"color": "var(--ned-text-muted)"}),
             html.Span(
                 f"Shown after filtering: {n_shown}",
-                style={"fontSize": "0.88rem", "fontWeight": "500",
-                       "color": "#58a6ff" if n_shown < n_all else "#c9d1d9"},
+                style={"fontSize": "0.82rem", "fontWeight": "500",
+                       "color": "var(--ned-accent)" if n_shown < n_all else "var(--ned-text)"},
             ),
         ],
     )
@@ -2514,7 +2581,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
             children=[
                 html.H6("Detected Seizures", style={"margin": "0"}),
                 html.Span("Click a row to inspect (use \u2191\u2193 arrows to navigate)",
-                          style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                          style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
             ],
         ),
         table,
@@ -2793,7 +2860,7 @@ def start_detect_all(n_clicks, sid):
             ),
             html.Span(
                 f"0/{n} files — starting...",
-                style={"color": "#8b949e", "fontSize": "0.82rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                        "whiteSpace": "nowrap"},
             ),
         ],
@@ -2866,7 +2933,7 @@ def poll_detect_all(n_intervals, sid, is_running, refresh):
             ),
             html.Span(
                 f"{current}/{total} files — {short_name}  ({events} events)",
-                style={"color": "#8b949e", "fontSize": "0.82rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                        "whiteSpace": "nowrap"},
             ),
         ],
@@ -2997,10 +3064,11 @@ def _render_inspector(rec, event, det_info, state, *,
         row_heights=row_heights, vertical_spacing=0.05,
     )
 
+    _eeg_color = "#1b2a4a" if get_plotly_theme() == "light" else "#58a6ff"
     fig_eeg.add_trace(go.Scattergl(
         x=time_axis, y=data,
         mode="lines", name=ch_name,
-        line=dict(width=0.8, color="#58a6ff"),
+        line=dict(width=0.8, color=_eeg_color),
     ), row=1, col=1)
 
     # Event shadow
@@ -3237,7 +3305,7 @@ def _render_inspector(rec, event, det_info, state, *,
             method_plots.append(html.Div([
                 html.Div("Spectral Band Index (SBI)",
                          style={"fontSize": "0.82rem", "fontWeight": "600",
-                                "color": "#8b949e", "marginBottom": "4px",
+                                "color": "var(--ned-text-muted)", "marginBottom": "4px",
                                 "marginTop": "12px"}),
                 dcc.Graph(figure=fig_sbi, config={"scrollZoom": True}),
             ]))
@@ -3294,7 +3362,7 @@ def _render_inspector(rec, event, det_info, state, *,
             method_plots.append(html.Div([
                 html.Div("Autocorrelation Metrics",
                          style={"fontSize": "0.82rem", "fontWeight": "600",
-                                "color": "#8b949e", "marginBottom": "4px",
+                                "color": "var(--ned-text-muted)", "marginBottom": "4px",
                                 "marginTop": "12px"}),
                 dcc.Graph(figure=fig_acorr, config={"scrollZoom": True}),
             ]))
@@ -3355,9 +3423,9 @@ def _render_inspector(rec, event, det_info, state, *,
                         children=[
                             html.Label("Video", style={"fontSize": "0.82rem",
                                                         "fontWeight": "600",
-                                                        "color": "#8b949e"}),
+                                                        "color": "var(--ned-text-muted)"}),
                             html.Span(vname, style={"fontSize": "0.78rem",
-                                                     "color": "#484f58"}),
+                                                     "color": "var(--ned-text-muted)"}),
                         ],
                     ),
                     html.Video(
@@ -3378,12 +3446,12 @@ def _render_inspector(rec, event, det_info, state, *,
         graph_id = "sz-insp-eeg-graph"
 
     return html.Div([
-        html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0"}),
+        html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0"}),
         html.H5("Event Inspector",
-                 style={"marginBottom": "16px", "color": "#58a6ff"}),
+                 style={"marginBottom": "16px", "color": "var(--ned-accent)"}),
         detail_metrics,
         html.Div("EEG Trace", style={"fontSize": "0.82rem", "fontWeight": "600",
-                                      "color": "#8b949e", "marginBottom": "4px"}),
+                                      "color": "var(--ned-text-muted)", "marginBottom": "4px"}),
         dcc.Graph(id=graph_id, figure=fig_eeg,
                   config={"scrollZoom": True, "displayModeBar": True}),
         *method_plots,
@@ -3391,13 +3459,13 @@ def _render_inspector(rec, event, det_info, state, *,
         dbc.Row([
             dbc.Col([
                 html.Div("Spectrogram", style={"fontSize": "0.82rem", "fontWeight": "600",
-                                                "color": "#8b949e", "marginBottom": "4px",
+                                                "color": "var(--ned-text-muted)", "marginBottom": "4px",
                                                 "marginTop": "16px"}),
                 dcc.Graph(figure=fig_spec, config={"scrollZoom": True}),
             ], width=6),
             dbc.Col([
                 html.Div("Power Over Time", style={"fontSize": "0.82rem", "fontWeight": "600",
-                                                    "color": "#8b949e", "marginBottom": "4px",
+                                                    "color": "var(--ned-text-muted)", "marginBottom": "4px",
                                                     "marginTop": "16px"}),
                 dcc.Graph(figure=fig_bp, config={"scrollZoom": True}),
             ], width=6),

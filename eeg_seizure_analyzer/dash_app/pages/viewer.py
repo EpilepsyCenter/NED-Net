@@ -61,7 +61,7 @@ def _activity_controls(state, act_ymin=0.0, act_ymax=1.0) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Activity Y min",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dcc.Input(
                         id="viewer-act-ymin", type="number",
                         value=act_ymin, step=0.1, debounce=True,
@@ -70,7 +70,7 @@ def _activity_controls(state, act_ymin=0.0, act_ymax=1.0) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Activity Y max",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dcc.Input(
                         id="viewer-act-ymax", type="number",
                         value=act_ymax, step=0.1, debounce=True,
@@ -181,7 +181,7 @@ def layout(sid: str | None) -> html.Div:
                        "alignItems": "center", "gap": "8px", "flexWrap": "wrap"},
                 children=[
                     html.Label("Channels:",
-                               style={"fontSize": "0.78rem", "color": "#8b949e",
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                       "margin": "0", "fontWeight": "500"}),
                     dbc.Checklist(
                         id="viewer-channel-checks",
@@ -194,10 +194,10 @@ def layout(sid: str | None) -> html.Div:
                         style={"fontSize": "0.8rem"},
                     ),
                     html.A("All", id="viewer-ch-all", href="#",
-                           style={"fontSize": "0.75rem", "color": "#58a6ff",
+                           style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
                                   "cursor": "pointer", "marginLeft": "4px"}),
                     html.A("None", id="viewer-ch-none", href="#",
-                           style={"fontSize": "0.75rem", "color": "#58a6ff",
+                           style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
                                   "cursor": "pointer"}),
                 ],
             ),
@@ -206,7 +206,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row(
                 [
                     dbc.Col([
-                        html.Label("Window (s)", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("Window (s)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Input(
                             id="viewer-window-input", type="number",
                             min=1, max=600, step=1, value=v_window,
@@ -215,7 +215,7 @@ def layout(sid: str | None) -> html.Div:
                         ),
                     ], width=2),
                     dbc.Col([
-                        html.Label("Start (s)", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("Start (s)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Input(
                             id="viewer-start-input", type="number",
                             min=0, max=rec.duration_sec, step=1, value=v_start,
@@ -225,7 +225,7 @@ def layout(sid: str | None) -> html.Div:
                     ], width=2),
                     dbc.Col([
                         html.Label(f"Y range ({unit_label})" if unit_label else "Y range",
-                                   style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Input(
                             id="viewer-yrange-input", type="number",
                             min=0, step=0.01,
@@ -235,7 +235,7 @@ def layout(sid: str | None) -> html.Div:
                         ),
                     ], width=2),
                     dbc.Col([
-                        html.Label("Height (px)", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("Height (px)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Input(
                             id="viewer-height-input", type="number",
                             min=300, max=3000, step=50, value=v_height,
@@ -244,7 +244,7 @@ def layout(sid: str | None) -> html.Div:
                         ),
                     ], width=2),
                     dbc.Col([
-                        html.Label("Filters", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("Filters", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         html.Div([
                             dbc.Checkbox(id="viewer-bp-check", label="Bandpass", value=v_bp_on,
                                          style={"fontSize": "0.8rem"}),
@@ -253,7 +253,7 @@ def layout(sid: str | None) -> html.Div:
                         ]),
                     ], width=2),
                     dbc.Col([
-                        html.Label("Overlays", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("Overlays", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         html.Div([
                             dbc.Checkbox(id="viewer-show-events", label="Seizures", value=v_show_events,
                                          style={"fontSize": "0.8rem"}),
@@ -278,17 +278,17 @@ def layout(sid: str | None) -> html.Div:
             dbc.Collapse(
                 dbc.Row([
                     dbc.Col([
-                        html.Label("BP Low (Hz)", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("BP Low (Hz)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Input(id="viewer-bp-low", type="number", min=0.5, max=500,
                                   step=0.5, value=v_bp_low, debounce=True, className="form-control"),
                     ], width=2),
                     dbc.Col([
-                        html.Label("BP High (Hz)", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("BP High (Hz)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Input(id="viewer-bp-high", type="number", min=1, max=1000,
                                   step=1, value=v_bp_high, debounce=True, className="form-control"),
                     ], width=2),
                     dbc.Col([
-                        html.Label("Notch (Hz)", style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        html.Label("Notch (Hz)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                         dcc.Dropdown(
                             id="viewer-notch-freq",
                             options=[{"label": "50 Hz", "value": 50},
@@ -363,9 +363,9 @@ def _video_player(state, sid, start_sec):
                 children=[
                     html.Label("Video", style={"fontSize": "0.85rem",
                                                 "fontWeight": "600",
-                                                "color": "#c9d1d9"}),
+                                                "color": "var(--ned-text)"}),
                     html.Span(fname, style={"fontSize": "0.78rem",
-                                             "color": "#8b949e"}),
+                                             "color": "var(--ned-text-muted)"}),
                     dbc.Button("Sync to EEG", id="viewer-video-sync",
                                size="sm", className="btn-ned-secondary"),
                 ],

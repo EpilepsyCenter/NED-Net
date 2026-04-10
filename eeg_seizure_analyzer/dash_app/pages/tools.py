@@ -40,7 +40,7 @@ def layout(sid: str | None) -> html.Div:
             html.P(
                 "Merge LabChart Record WMV files into a single MP4 for "
                 "time-synced video playback alongside EEG.",
-                style={"color": "#8b949e", "fontSize": "0.9rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "24px"},
             ),
 
@@ -50,7 +50,7 @@ def layout(sid: str | None) -> html.Div:
 
             # Input folder
             html.Label("Video folder", style={"fontSize": "0.82rem",
-                                               "color": "#8b949e"}),
+                                               "color": "var(--ned-text-muted)"}),
             dbc.InputGroup([
                 dbc.Input(
                     id="vc-folder-input",
@@ -66,7 +66,7 @@ def layout(sid: str | None) -> html.Div:
 
             # Output path
             html.Label("Output MP4 path", style={"fontSize": "0.82rem",
-                                                   "color": "#8b949e"}),
+                                                   "color": "var(--ned-text-muted)"}),
             dbc.Input(
                 id="vc-output-input",
                 placeholder="/path/to/Recording.mp4",
@@ -105,7 +105,7 @@ def _check_ffmpeg():
     if shutil.which("ffmpeg") and shutil.which("ffprobe"):
         return html.Div(
             "ffmpeg found",
-            style={"color": "#3fb950", "fontSize": "0.82rem",
+            style={"color": "var(--ned-success)", "fontSize": "0.82rem",
                    "marginBottom": "12px"},
         )
     return alert(
@@ -344,7 +344,7 @@ def start_convert(n_clicks, folder, output_path, sid):
     t.start()
 
     return html.Div("Conversion started...",
-                     style={"color": "#58a6ff"}), False, True
+                     style={"color": "var(--ned-accent)"}), False, True
 
 
 def _run_conversion(sid: str, files: list[tuple[int, str]], output_path: str):
@@ -491,5 +491,5 @@ def update_progress(n_intervals, sid):
 
     return html.Div([
         bar,
-        html.Div(status, style={"fontSize": "0.85rem", "color": "#8b949e"}),
+        html.Div(status, style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"}),
     ]), False, True

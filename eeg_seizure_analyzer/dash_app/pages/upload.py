@@ -180,7 +180,7 @@ def _landing_layout() -> html.Div:
                 "interictal spikes in long-term EEG recordings.",
                 style={
                     "fontSize": "1.05rem",
-                    "color": "#8b949e",
+                    "color": "var(--ned-text-muted)",
                     "maxWidth": "520px",
                     "marginBottom": "36px",
                     "lineHeight": "1.6",
@@ -208,7 +208,7 @@ def _landing_layout() -> html.Div:
                 style={
                     "marginTop": "48px",
                     "fontSize": "0.75rem",
-                    "color": "#484f58",
+                    "color": "var(--ned-text-muted)",
                 },
             ),
         ],
@@ -254,14 +254,14 @@ def _upload_layout() -> html.Div:
             html.H4("Load Recording", style={"marginBottom": "8px"}),
             html.P(
                 "Supported files: EDF and ADICHT (Windows only)",
-                style={"fontSize": "0.85rem", "color": "#8b949e",
+                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                        "marginBottom": "8px"},
             ),
             html.P(
                 "Note: ADICHT files can be opened for viewing only. "
                 "Detection, training, ML, and saving results require EDF. "
                 "Convert first via Tools \u2192 ADICHT \u2192 EDF.",
-                style={"fontSize": "0.82rem", "color": "#d29922",
+                style={"fontSize": "0.82rem", "color": "var(--ned-warning)",
                        "marginBottom": "24px"},
             ),
 
@@ -333,21 +333,21 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                                 f"Ch{p.eeg_index} {p.eeg_label}",
                                 style={
                                     "fontWeight": "500",
-                                    "color": "#58a6ff",
+                                    "color": "var(--ned-accent)",
                                 },
                             ),
                             html.Span(
                                 "\u2194",
                                 style={
                                     "fontSize": "1.1rem",
-                                    "color": "#8b949e",
+                                    "color": "var(--ned-text-muted)",
                                 },
                             ),
                             html.Span(
                                 f"Ch{p.activity_index} {p.activity_label}",
                                 style={
                                     "fontWeight": "500",
-                                    "color": "#3fb950",
+                                    "color": "var(--ned-success)",
                                 },
                             ),
                         ],
@@ -356,7 +356,7 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
             else:
                 pairing_rows.append(
                     html.Div(
-                        style={"padding": "4px 0", "color": "#8b949e"},
+                        style={"padding": "4px 0", "color": "var(--ned-text-muted)"},
                         children=f"Ch{p.eeg_index} {p.eeg_label} \u2014 no activity pair",
                     )
                 )
@@ -382,7 +382,7 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                                 "EEG (Biopot)",
                                 style={
                                     "fontSize": "0.75rem",
-                                    "color": "#58a6ff",
+                                    "color": "var(--ned-accent)",
                                     "border": "1px solid #58a6ff",
                                     "borderRadius": "4px",
                                     "padding": "2px 8px",
@@ -392,7 +392,7 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                                 "Activity",
                                 style={
                                     "fontSize": "0.75rem",
-                                    "color": "#3fb950",
+                                    "color": "var(--ned-success)",
                                     "border": "1px solid #3fb950",
                                     "borderRadius": "4px",
                                     "padding": "2px 8px",
@@ -403,8 +403,8 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                     html.Div(pairing_rows),
                 ]),
                 style={
-                    "backgroundColor": "#161b22",
-                    "border": "1px solid #30363d",
+                    "backgroundColor": "var(--ned-sidebar)",
+                    "border": "1px solid var(--ned-border)",
                     "marginTop": "16px",
                 },
             ),
@@ -540,7 +540,7 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                     html.H6("Loaded Channels", style={"marginBottom": "4px"}),
                     html.P(
                         "Assign an Animal ID to each channel (editable, saved automatically).",
-                        style={"color": "#8b949e", "fontSize": "0.82rem",
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                                "marginBottom": "12px"},
                     ),
                     dag.AgGrid(
@@ -552,7 +552,7 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                             {"field": "unit", "headerName": "Unit", "width": 80},
                             {"field": "animal_id", "headerName": "Animal ID",
                              "editable": True, "width": 180,
-                             "cellStyle": {"color": "#58a6ff",
+                             "cellStyle": {"color": "var(--ned-accent)",
                                            "fontWeight": "500"}},
                         ],
                         className="ag-theme-alpine-dark",
@@ -571,10 +571,10 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                     html.Div([
                         html.Div(
                             [
-                                html.Span("\u25B6 ", style={"color": "#3fb950"}),
+                                html.Span("\u25B6 ", style={"color": "var(--ned-success)"}),
                                 f"Video: {os.path.basename(state.extra['video_path'])}",
                             ],
-                            style={"color": "#3fb950", "fontSize": "0.85rem"},
+                            style={"color": "var(--ned-success)", "fontSize": "0.85rem"},
                         ),
                         # Hidden placeholders for callback
                         dbc.Input(id="upload-video-path", type="hidden"),
@@ -584,7 +584,7 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                 ] if state.extra.get("video_path") else [
                     html.Div(
                         "No video file auto-detected.",
-                        style={"color": "#8b949e", "fontSize": "0.85rem",
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem",
                                "marginBottom": "8px"},
                     ),
                     dbc.InputGroup([
@@ -632,13 +632,13 @@ def _batch_browse_layout(state: server_state.SessionState) -> html.Div:
             html.P(
                 "Select a folder containing EDF recordings. Each file will be "
                 "scanned for existing detections, annotations, and channel IDs.",
-                style={"fontSize": "0.85rem", "color": "#8b949e",
+                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                        "marginBottom": "24px"},
             ),
 
             # Folder input + Browse + Scan
             html.Label("Recordings folder",
-                       style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
             dbc.InputGroup([
                 dbc.Input(
                     id="batch-folder-input",
@@ -707,7 +707,7 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                 style={"marginBottom": "16px", "maxWidth": "500px"},
                 children=[
                     html.Label("Active file",
-                               style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dcc.Dropdown(
                         id="batch-file-selector",
                         options=file_options,
@@ -742,7 +742,7 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                     html.H6("Loaded Channels", style={"marginBottom": "4px"}),
                     html.P(
                         "Assign an Animal ID to each channel (editable, saved automatically).",
-                        style={"color": "#8b949e", "fontSize": "0.82rem",
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                                "marginBottom": "12px"},
                     ),
                     dag.AgGrid(
@@ -754,7 +754,7 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                             {"field": "unit", "headerName": "Unit", "width": 80},
                             {"field": "animal_id", "headerName": "Animal ID",
                              "editable": True, "width": 180,
-                             "cellStyle": {"color": "#58a6ff",
+                             "cellStyle": {"color": "var(--ned-accent)",
                                            "fontWeight": "500"}},
                         ],
                         className="ag-theme-alpine-dark",
@@ -773,10 +773,10 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                     html.Div([
                         html.Div(
                             [
-                                html.Span("\u25B6 ", style={"color": "#3fb950"}),
+                                html.Span("\u25B6 ", style={"color": "var(--ned-success)"}),
                                 f"Video: {os.path.basename(state.extra['video_path'])}",
                             ],
-                            style={"color": "#3fb950", "fontSize": "0.85rem"},
+                            style={"color": "var(--ned-success)", "fontSize": "0.85rem"},
                         ),
                         dbc.Input(id="upload-video-path", type="hidden"),
                         html.Div(dbc.Button(id="upload-video-link-btn",
@@ -785,7 +785,7 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                 ] if state.extra.get("video_path") else [
                     html.Div(
                         "No video file auto-detected.",
-                        style={"color": "#8b949e", "fontSize": "0.85rem",
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem",
                                "marginBottom": "8px"},
                     ),
                     dbc.InputGroup([
@@ -1327,7 +1327,7 @@ def on_channel_id_edit(cell_changed, row_data, sid):
     n_assigned = len(mapping)
     return html.Div(
         f"Saved {n_assigned} animal ID{'s' if n_assigned != 1 else ''}.",
-        style={"color": "#3fb950", "fontSize": "0.78rem"},
+        style={"color": "var(--ned-success)", "fontSize": "0.78rem"},
     )
 
 

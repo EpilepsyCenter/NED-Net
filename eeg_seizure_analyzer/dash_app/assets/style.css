@@ -1,6 +1,31 @@
 /* ── NED-Net Theme ──────────────────────────────────────────────────── */
 
+/* ── Google Fonts import ───────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
 :root {
+    --ned-bg: #f6f8fa;
+    --ned-sidebar: #ffffff;
+    --ned-surface: #ffffff;
+    --ned-surface-hover: #f0f2f5;
+    --ned-border: #d0d7de;
+    --ned-text: #1f2328;
+    --ned-text-muted: #656d76;
+    --ned-accent: #0969da;
+    --ned-accent-hover: #0550ae;
+    --ned-success: #1a7f37;
+    --ned-warning: #9a6700;
+    --ned-danger: #cf222e;
+    --ned-purple: #8250df;
+    --ned-radius: 8px;
+    --ned-transition: 0.2s ease;
+    --ned-font: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ned-font-size: 0.92rem;
+}
+
+/* ── Dark theme overrides ──────────────────────────────────────────── */
+
+[data-theme="dark"] {
     --ned-bg: #0f1117;
     --ned-sidebar: #161b22;
     --ned-surface: #1c2128;
@@ -14,8 +39,6 @@
     --ned-warning: #d29922;
     --ned-danger: #f85149;
     --ned-purple: #bc8cff;
-    --ned-radius: 8px;
-    --ned-transition: 0.2s ease;
 }
 
 /* ── Global ────────────────────────────────────────────────────────── */
@@ -23,7 +46,8 @@
 body {
     background-color: var(--ned-bg) !important;
     color: var(--ned-text) !important;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    font-family: var(--ned-font) !important;
+    font-size: var(--ned-font-size) !important;
     margin: 0;
     padding: 0;
     overflow-x: hidden;
@@ -210,20 +234,20 @@ body {
     background: var(--ned-surface) !important;
     border: 1px solid var(--ned-border) !important;
     border-radius: var(--ned-radius) !important;
-    padding: 16px 20px;
+    padding: 10px 14px;
     text-align: center;
 }
 
 .metric-card .metric-label {
-    font-size: 0.72rem;
+    font-size: 0.65rem;
     text-transform: uppercase;
     letter-spacing: 1px;
     color: var(--ned-text-muted);
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .metric-card .metric-value {
-    font-size: 1.5rem;
+    font-size: 1.05rem;
     font-weight: 700;
     color: var(--ned-text);
 }
@@ -247,15 +271,15 @@ body {
 }
 
 .blinding-badge.on {
-    background: rgba(63, 185, 80, 0.15);
+    background: rgba(26, 127, 55, 0.12);
     color: var(--ned-success);
-    border: 1px solid rgba(63, 185, 80, 0.3);
+    border: 1px solid rgba(26, 127, 55, 0.3);
 }
 
 .blinding-badge.off {
-    background: rgba(248, 81, 73, 0.15);
+    background: rgba(207, 34, 46, 0.12);
     color: var(--ned-danger);
-    border: 1px solid rgba(248, 81, 73, 0.3);
+    border: 1px solid rgba(207, 34, 46, 0.3);
 }
 
 /* ── Section headers ───────────────────────────────────────────────── */
@@ -385,8 +409,8 @@ input[type="number"],
 
 /* Multi-select value chips */
 .dash-dropdown-value-item {
-    background-color: rgba(88, 166, 255, 0.15) !important;
-    border: 1px solid rgba(88, 166, 255, 0.3) !important;
+    background-color: rgba(9, 105, 218, 0.1) !important;
+    border: 1px solid rgba(9, 105, 218, 0.25) !important;
     color: var(--ned-accent) !important;
     border-radius: 3px !important;
 }
@@ -415,7 +439,7 @@ input[type="number"],
     background-color: var(--ned-surface) !important;
     border: 1px solid var(--ned-border) !important;
     border-radius: 6px !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12) !important;
     z-index: 200 !important;
 }
 
@@ -450,7 +474,7 @@ input[type="number"],
 }
 .dash-dropdown-option[data-selected="true"],
 .dash-dropdown-option[aria-selected="true"] {
-    background-color: rgba(88, 166, 255, 0.2) !important;
+    background-color: rgba(9, 105, 218, 0.12) !important;
     color: var(--ned-accent) !important;
 }
 
@@ -479,12 +503,47 @@ input[type="number"],
     background-color: inherit;
 }
 
+/* ── Bootstrap DARKLY overrides for light theme ───────────────────── */
+/* The app loads dbc.themes.DARKLY which defaults all text to white.
+   Override form components so they respect our CSS-var theme. */
+
+.form-check-label,
+.form-switch .form-check-label,
+label,
+.form-label,
+legend,
+.card-text,
+.card-title,
+.card-header,
+.list-group-item,
+.modal-body,
+.modal-title,
+.accordion-button,
+.alert,
+p, span, div, h1, h2, h3, h4, h5, h6 {
+    color: var(--ned-text);
+}
+
+.form-check-input {
+    border-color: var(--ned-border) !important;
+    background-color: var(--ned-surface) !important;
+}
+
+.form-check-input:checked {
+    background-color: var(--ned-accent) !important;
+    border-color: var(--ned-accent) !important;
+}
+
+.form-text, .text-muted {
+    color: var(--ned-text-muted) !important;
+}
+
 /* ── Buttons ───────────────────────────────────────────────────────── */
 
 .btn-ned-primary {
     background: var(--ned-accent) !important;
     border: none !important;
-    color: #000 !important;
+    color: #fff !important;
     font-weight: 600 !important;
     border-radius: 6px !important;
     padding: 8px 20px !important;
@@ -515,14 +574,14 @@ input[type="number"],
 .btn-ned-secondary.active,
 .btn-ned-secondary:active:focus {
     border-color: var(--ned-accent) !important;
-    background: rgba(88, 166, 255, 0.15) !important;
+    background: rgba(9, 105, 218, 0.1) !important;
     color: var(--ned-accent) !important;
-    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25) !important;
+    box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2) !important;
 }
 
 .btn-ned-danger {
     background: transparent !important;
-    border: 1px solid rgba(248, 81, 73, 0.4) !important;
+    border: 1px solid rgba(207, 34, 46, 0.4) !important;
     color: var(--ned-danger) !important;
     font-weight: 500 !important;
     border-radius: 6px !important;
@@ -531,7 +590,7 @@ input[type="number"],
 }
 
 .btn-ned-danger:hover {
-    background: rgba(248, 81, 73, 0.1) !important;
+    background: rgba(207, 34, 46, 0.08) !important;
 }
 
 /* ── Upload area ───────────────────────────────────────────────────── */
@@ -548,7 +607,7 @@ input[type="number"],
 
 .upload-area:hover {
     border-color: var(--ned-accent);
-    background: rgba(88, 166, 255, 0.05);
+    background: rgba(9, 105, 218, 0.04);
 }
 
 .upload-area .upload-icon {
@@ -601,7 +660,7 @@ input[type="number"],
 }
 
 .channel-chip.selected {
-    background: rgba(88, 166, 255, 0.15);
+    background: rgba(9, 105, 218, 0.1);
     border-color: var(--ned-accent);
     color: var(--ned-accent);
 }
@@ -617,15 +676,17 @@ input[type="number"],
     --ag-header-background-color: var(--ned-sidebar) !important;
     --ag-odd-row-background-color: var(--ned-surface) !important;
     --ag-row-hover-color: var(--ned-surface-hover) !important;
-    --ag-selected-row-background-color: rgba(88, 166, 255, 0.12) !important;
+    --ag-selected-row-background-color: rgba(9, 105, 218, 0.08) !important;
     --ag-border-color: var(--ned-border) !important;
     --ag-header-foreground-color: var(--ned-text-muted) !important;
     --ag-foreground-color: var(--ned-text) !important;
-    --ag-font-size: 0.82rem !important;
+    --ag-font-size: 0.78rem !important;
+    --ag-font-family: var(--ned-font) !important;
     --ag-row-border-color: var(--ned-border) !important;
     border-radius: var(--ned-radius) !important;
     border: 1px solid var(--ned-border) !important;
     overflow: hidden;
+    font-family: var(--ned-font) !important;
 }
 
 /* ── Plotly graph container ────────────────────────────────────────── */
@@ -720,7 +781,8 @@ input[type="number"],
     border-top: none;
     border-radius: 0 0 6px 6px;
     margin-bottom: 12px;
-    background: rgba(28, 33, 40, 0.5);
+    background: var(--ned-surface);
+    opacity: 0.95;
 }
 
 /* ── Status indicators ─────────────────────────────────────────────── */
@@ -844,6 +906,70 @@ input[type="number"],
     max-height: 280px;
     overflow-y: auto;
 }
+
+/* ── Dark-theme-specific adjustments ──────────────────────────────── */
+
+[data-theme="dark"] .dash-dropdown-content {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+
+[data-theme="dark"] .blinding-badge.on {
+    background: rgba(63, 185, 80, 0.15);
+    border-color: rgba(63, 185, 80, 0.3);
+}
+[data-theme="dark"] .blinding-badge.off {
+    background: rgba(248, 81, 73, 0.15);
+    border-color: rgba(248, 81, 73, 0.3);
+}
+
+[data-theme="dark"] .upload-area:hover {
+    background: rgba(88, 166, 255, 0.05);
+}
+
+[data-theme="dark"] .btn-ned-primary {
+    color: #000 !important;
+}
+
+[data-theme="dark"] .btn-ned-secondary.active,
+[data-theme="dark"] .btn-ned-secondary:active:focus {
+    background: rgba(88, 166, 255, 0.15) !important;
+    border-color: var(--ned-accent) !important;
+    color: var(--ned-accent) !important;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25) !important;
+}
+
+[data-theme="dark"] .dash-dropdown-value-item {
+    background-color: rgba(88, 166, 255, 0.15) !important;
+    border: 1px solid rgba(88, 166, 255, 0.3) !important;
+    color: var(--ned-accent) !important;
+}
+
+[data-theme="dark"] .ag-theme-alpine-dark {
+    --ag-selected-row-background-color: rgba(88, 166, 255, 0.12) !important;
+}
+
+[data-theme="dark"] .channel-chip.selected {
+    background: rgba(88, 166, 255, 0.15);
+    border-color: var(--ned-accent);
+    color: var(--ned-accent);
+}
+
+/* ── Theme toggle in sidebar ──────────────────────────────────────── */
+
+.theme-toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.theme-toggle-container .form-check-label {
+    font-size: 0.75rem;
+    color: var(--ned-text-muted);
+    letter-spacing: 0.3px;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────── */
 
 @media (max-width: 1200px) {
     #sidebar {

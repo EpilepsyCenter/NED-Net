@@ -94,7 +94,7 @@ def layout(sid: str | None) -> html.Div:
                     ),
                     html.Span(
                         "Requires adi-reader package (pip install adi-reader)",
-                        style={"color": "#8b949e", "fontSize": "0.82rem"},
+                        style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem"},
                     ),
                 ],
                 style={"marginBottom": "16px"},
@@ -104,7 +104,7 @@ def layout(sid: str | None) -> html.Div:
                 "Convert LabChart .adicht files to EDF+ format. "
                 "EDF is required for detection, training, ML inference, "
                 "and saving/loading results.",
-                style={"color": "#8b949e", "fontSize": "0.9rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "24px"},
             ),
 
@@ -113,7 +113,7 @@ def layout(sid: str | None) -> html.Div:
 
             # Input files
             html.Label("ADICHT files", style={"fontSize": "0.82rem",
-                                                "color": "#8b949e"}),
+                                                "color": "var(--ned-text-muted)"}),
             dbc.InputGroup([
                 dbc.Textarea(
                     id="ac-file-list",
@@ -131,7 +131,7 @@ def layout(sid: str | None) -> html.Div:
 
             # Output folder
             html.Label("Output folder (leave empty to save next to originals)",
-                       style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
             dbc.Input(
                 id="ac-output-folder",
                 placeholder="/path/to/output/folder (optional)",
@@ -164,7 +164,7 @@ def _platform_check():
             import adi  # noqa: F401
             return html.Div(
                 "adi-reader found — ready to convert",
-                style={"color": "#3fb950", "fontSize": "0.82rem",
+                style={"color": "var(--ned-success)", "fontSize": "0.82rem",
                        "marginBottom": "12px"},
             )
         except ImportError:
@@ -270,7 +270,7 @@ def start_convert(n_clicks, file_list, output_folder, sid):
     t.start()
 
     return (
-        html.Div("Conversion started...", style={"color": "#58a6ff"}),
+        html.Div("Conversion started...", style={"color": "var(--ned-accent)"}),
         False,
         True,
     )
@@ -367,5 +367,5 @@ def update_progress(n_intervals, sid):
 
     return html.Div([
         bar,
-        html.Div(status, style={"fontSize": "0.85rem", "color": "#8b949e"}),
+        html.Div(status, style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"}),
     ]), False, True

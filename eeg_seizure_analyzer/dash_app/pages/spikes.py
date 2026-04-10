@@ -144,7 +144,7 @@ def layout(sid: str | None) -> html.Div:
                         "Channels to analyze",
                         style={"fontSize": "0.82rem", "fontWeight": "500",
                                "marginBottom": "6px", "display": "block",
-                               "color": "#8b949e"},
+                               "color": "var(--ned-text-muted)"},
                     ),
                     dcc.Dropdown(
                         id="sp-channel-selector",
@@ -197,7 +197,7 @@ def layout(sid: str | None) -> html.Div:
                                size="sm",
                                style={"backgroundColor": "#d29922",
                                       "borderColor": "#d29922",
-                                      "color": "#0d1117",
+                                      "color": "var(--ned-bg)",
                                       "fontWeight": "600",
                                       "display": "inline-block" if has_results else "none"}),
                 ],
@@ -263,7 +263,7 @@ def _baseline_params(_val, bl_method="percentile") -> html.Div:
         default_open=True,
         children=[
             html.Div([
-                html.Label("Method", style={"fontSize": "0.78rem", "color": "#8b949e",
+                html.Label("Method", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                             "marginBottom": "4px"}),
                 dcc.Dropdown(
                     id="sp-bl-method",
@@ -294,7 +294,7 @@ def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
     """A compact min–max input pair for filter controls."""
     _inp_style = {"width": "100%", "height": "28px", "fontSize": "0.78rem"}
     return dbc.Col([
-        html.Label(label, style={"fontSize": "0.75rem", "color": "#8b949e"}),
+        html.Label(label, style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
         html.Div(
             style={"display": "flex", "alignItems": "center", "gap": "4px"},
             children=[
@@ -305,7 +305,7 @@ def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
                     debounce=True, className="form-control",
                     style=_inp_style,
                 ),
-                html.Span("–", style={"color": "#8b949e", "fontSize": "0.8rem"}),
+                html.Span("–", style={"color": "var(--ned-text-muted)", "fontSize": "0.8rem"}),
                 dcc.Input(
                     id=fid_max, type="number",
                     min=min_val, max=max_val, step=step, value=value_max,
@@ -337,7 +337,7 @@ def _spike_filter_controls(visible, rec=None, fv=None,
                 children=[
                     html.Span("Result Filters",
                               style={"fontSize": "0.82rem", "fontWeight": "600",
-                                     "color": "#8b949e"}),
+                                     "color": "var(--ned-text-muted)"}),
                     dbc.Switch(
                         id="sp-filter-enabled",
                         value=filter_enabled,
@@ -359,7 +359,7 @@ def _spike_filter_controls(visible, rec=None, fv=None,
                 _filter_range("Sharpness", "sp-filter-min-sharp", "sp-filter-max-sharp",
                               0, 20, 0.1, fv.get("min_sharp", 0), fv.get("max_sharp")),
                 dbc.Col([
-                    html.Label("Channel", style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                    html.Label("Channel", style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     dcc.Dropdown(
                         id="sp-filter-channel",
                         options=ch_options,
@@ -387,7 +387,7 @@ def _sp_inspector_controls(visible: bool, opts=None) -> html.Div:
                 children=[
                     html.Span("Inspector Options",
                               style={"fontSize": "0.82rem", "fontWeight": "600",
-                                     "color": "#8b949e"}),
+                                     "color": "var(--ned-text-muted)"}),
                     dbc.Checkbox(id="sp-insp-show-baseline", label="Baseline",
                                  value=opts.get("show_baseline", True),
                                  style={"fontSize": "0.8rem"}),
@@ -401,7 +401,7 @@ def _sp_inspector_controls(visible: bool, opts=None) -> html.Div:
                         style={"display": "flex", "alignItems": "center", "gap": "6px"},
                         children=[
                             html.Label("X range (s):",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "margin": "0"}),
                             dcc.Input(
                                 id="sp-insp-xrange", type="number",
@@ -415,7 +415,7 @@ def _sp_inspector_controls(visible: bool, opts=None) -> html.Div:
                         style={"display": "flex", "alignItems": "center", "gap": "6px"},
                         children=[
                             html.Label("Y range (mV):",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "margin": "0"}),
                             dcc.Input(
                                 id="sp-insp-yrange", type="number",
@@ -906,7 +906,7 @@ def _build_results(rec, all_spikes, spikes, total_count=None):
 
     return html.Div([
         metrics,
-        html.Div(caption, style={"fontSize": "0.78rem", "color": "#8b949e",
+        html.Div(caption, style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                   "marginBottom": "8px"}) if caption else None,
         table,
     ]), dcc.Graph(figure=rate_fig, style={"marginTop": "20px", "borderRadius": "8px"})
@@ -947,7 +947,7 @@ def show_spike_inspector(selected_rows, show_baseline, show_threshold,
         return html.Div()
 
     if idx >= len(state.spike_events):
-        return html.Div("Spike not found.", style={"color": "#f85149"})
+        return html.Div("Spike not found.", style={"color": "var(--ned-danger)"})
 
     event = state.spike_events[idx]
     ch = event.channel
@@ -1059,9 +1059,9 @@ def show_spike_inspector(selected_rows, show_baseline, show_threshold,
     ], className="g-3 mb-3")
 
     return html.Div([
-        html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0"}),
+        html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0"}),
         html.H5("Spike Inspector",
-                 style={"marginBottom": "16px", "color": "#58a6ff"}),
+                 style={"marginBottom": "16px", "color": "var(--ned-accent)"}),
         detail_metrics,
         detail_metrics_2,
         dcc.Graph(figure=fig, config={"scrollZoom": True, "displayModeBar": True}),

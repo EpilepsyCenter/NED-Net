@@ -14,6 +14,7 @@ from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
     empty_state,
+    get_plotly_theme,
     metric_card,
     no_recording_placeholder,
 )
@@ -401,9 +402,9 @@ def _build_annotation_counts(counts, counts_filtered, progress_pct,
                         f"{counts_filtered['pending']} pending"
                         + (f" (of {counts['total']} total)"
                            if filter_on else ""),
-                        style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     html.Span(f"{progress_pct}%",
-                              style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                              style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                 ],
             ),
             dbc.Progress(
@@ -420,8 +421,8 @@ def _build_annotation_counts(counts, counts_filtered, progress_pct,
                 children=[
                     html.Span(
                         f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
-                        style={"fontSize": "0.72rem", "color": "#8b949e",
-                               "border": "1px solid #2d333b",
+                        style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                               "border": "1px solid var(--ned-border)",
                                "borderRadius": "8px", "padding": "1px 8px"},
                     )
                     for ch_name, cc in ch_counts.items()
@@ -527,9 +528,9 @@ def _training_video_player(state, sid, onset_sec):
                 children=[
                     html.Label("Video", style={"fontSize": "0.82rem",
                                                 "fontWeight": "600",
-                                                "color": "#8b949e"}),
+                                                "color": "var(--ned-text-muted)"}),
                     html.Span(vname, style={"fontSize": "0.78rem",
-                                             "color": "#484f58"}),
+                                             "color": "var(--ned-text-muted)"}),
                 ],
             ),
             html.Video(
@@ -561,7 +562,7 @@ def _initial_spectral_row(rec, current_event, state):
         dbc.Col([
             html.Div("Spectrogram",
                      style={"fontSize": "0.82rem", "fontWeight": "600",
-                            "color": "#8b949e", "marginBottom": "4px",
+                            "color": "var(--ned-text-muted)", "marginBottom": "4px",
                             "marginTop": "16px"}),
             dcc.Graph(id="tr-spectrogram", figure=fig_spec,
                       config={"scrollZoom": True}),
@@ -569,7 +570,7 @@ def _initial_spectral_row(rec, current_event, state):
         dbc.Col([
             html.Div("Power Over Time",
                      style={"fontSize": "0.82rem", "fontWeight": "600",
-                            "color": "#8b949e", "marginBottom": "4px",
+                            "color": "var(--ned-text-muted)", "marginBottom": "4px",
                             "marginTop": "16px"}),
             dcc.Graph(id="tr-band-power", figure=fig_bp,
                       config={"scrollZoom": True}),
@@ -625,10 +626,11 @@ def _build_review_figure(rec, event: AnnotatedEvent, state,
     else:
         fig = go.Figure()
 
+    _eeg_color = "#1b2a4a" if get_plotly_theme() == "light" else "#58a6ff"
     trace = go.Scattergl(
         x=ds_time, y=ds_data,
         mode="lines", name=ch_name,
-        line=dict(width=0.8, color="#58a6ff"),
+        line=dict(width=0.8, color=_eeg_color),
     )
     if has_act:
         fig.add_trace(trace, row=1, col=1)
@@ -1089,7 +1091,11 @@ def layout(sid: str | None) -> html.Div:
                     and bool(state.channel_pairings))
 
     # Build filtered list for review mode
+    method_filter = state.extra.get("tr_method_filter", None)
     filtered = _filter_by_channel(annotations, channel_filter)
+    if method_filter:
+        filtered = [a for a in filtered
+                    if a.features.get("detection_method") == method_filter]
     if tr_filter_on:
         filtered = _apply_annotation_filters(
             filtered, min_conf=tr_min_conf, min_dur=tr_min_dur, min_lbl=tr_min_lbl,
@@ -1115,6 +1121,27 @@ def layout(sid: str | None) -> html.Div:
         {"label": rec.channel_names[i], "value": i}
         for i in range(rec.n_channels)
     ]
+
+    # Method options (derived from annotations' detection_method feature)
+    _method_labels = {
+        "spike_train": "Spike-Train",
+        "spectral_band": "Spectral Band",
+        "autocorrelation": "Autocorrelation",
+        "ensemble": "Ensemble",
+        "ml_unet": "ML U-Net",
+        "ml_unet_spike": "ML U-Net Spike",
+        "line_length_energy": "LL / Energy",
+    }
+    _methods_seen = sorted({
+        a.features.get("detection_method", "")
+        for a in annotations
+        if a.features.get("detection_method")
+    })
+    method_options = [
+        {"label": _method_labels.get(m, m), "value": m}
+        for m in _methods_seen
+    ]
+    method_filter = state.extra.get("tr_method_filter", None)
 
     # Clamp index
     if current_idx >= len(filtered):
@@ -1164,8 +1191,8 @@ def layout(sid: str | None) -> html.Div:
                     html.H4("Seizure Annotation", style={"margin": "0"}),
                     html.Span(
                         "Training data",
-                        style={"fontSize": "0.78rem", "color": "#8b949e",
-                               "border": "1px solid #2d333b", "borderRadius": "12px",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                               "border": "1px solid var(--ned-border)", "borderRadius": "12px",
                                "padding": "2px 10px"},
                     ),
                     html.Div(style={"flex": "1"}),
@@ -1191,7 +1218,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Annotator",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dcc.Input(
                         id="tr-annotator", type="text",
                         value=annotator, debounce=True,
@@ -1208,12 +1235,24 @@ def layout(sid: str | None) -> html.Div:
                 ], style={"display": "none"}),
                 dbc.Col([
                     html.Label("Channel",
-                               style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     dcc.Dropdown(
                         id="tr-channel-filter",
                         options=ch_options,
                         value=channel_filter,
                         placeholder="All channels",
+                        clearable=True,
+                        style={"fontSize": "0.82rem"},
+                    ),
+                ], width=2),
+                dbc.Col([
+                    html.Label("Method",
+                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                    dcc.Dropdown(
+                        id="tr-method-filter",
+                        options=method_options,
+                        value=method_filter,
+                        placeholder="All methods",
                         clearable=True,
                         style={"fontSize": "0.82rem"},
                     ),
@@ -1226,7 +1265,7 @@ def layout(sid: str | None) -> html.Div:
                                  dbc.Switch(id="tr-filter-toggle", value=tr_filter_on,
                                             style={"fontSize": "0.78rem"}),
                                  html.Span("Filters",
-                                           style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                           style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                              ]),
                 ], width=1),
                 # Hidden: browse annotate channel (used by browse callback)
@@ -1243,7 +1282,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Confidence",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-conf", type="number", min=0, max=1,
@@ -1251,7 +1290,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-conf", type="number", min=0, max=1,
                                   step=0.05, value=tr_max_conf, placeholder="max",
@@ -1262,7 +1301,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Duration (s)",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-dur", type="number", min=0, max=300,
@@ -1270,7 +1309,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-dur", type="number", min=0, max=300,
                                   step=0.5, value=tr_max_dur, placeholder="max",
@@ -1281,7 +1320,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Local BL",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-lbl", type="number", min=0, max=20,
@@ -1289,7 +1328,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-lbl", type="number", min=0, max=20,
                                   step=0.1, value=tr_max_lbl, placeholder="max",
@@ -1300,7 +1339,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Spikes",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-spikes", type="number", min=0, max=100,
@@ -1308,7 +1347,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-spikes", type="number", min=0, max=100,
                                   step=1, value=tr_max_spikes, placeholder="max",
@@ -1319,7 +1358,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Amp (xBL)",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-amp", type="number", min=0, max=50,
@@ -1327,7 +1366,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-amp", type="number", min=0, max=50,
                                   step=0.5, value=tr_max_amp, placeholder="max",
@@ -1338,7 +1377,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=2),
                 dbc.Col([
                     html.Label("Top Amp",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-top-amp", type="number", min=0, max=20,
@@ -1346,7 +1385,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-top-amp", type="number", min=0, max=20,
                                   step=0.5, value=tr_max_top_amp, placeholder="max",
@@ -1361,7 +1400,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Freq (Hz)",
-                               style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                     html.Div(style={"display": "flex", "alignItems": "center",
                                     "gap": "3px"}, children=[
                         dcc.Input(id="tr-min-freq", type="number", min=0, max=50,
@@ -1369,7 +1408,7 @@ def layout(sid: str | None) -> html.Div:
                                   debounce=True, className="form-control",
                                   style={"width": "50%", "height": "28px",
                                          "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "#8b949e",
+                        html.Span("–", style={"color": "var(--ned-text-muted)",
                                               "fontSize": "0.8rem"}),
                         dcc.Input(id="tr-max-freq", type="number", min=0, max=50,
                                   step=0.5, value=tr_max_freq, placeholder="max",
@@ -1480,7 +1519,7 @@ def layout(sid: str | None) -> html.Div:
                                 children=[
                                     html.Label("Y range",
                                                style={"fontSize": "0.72rem",
-                                                      "color": "#8b949e"}),
+                                                      "color": "var(--ned-text-muted)"}),
                                     dcc.Input(
                                         id="tr-yrange", type="number",
                                         min=0, step=0.01,
@@ -1492,7 +1531,7 @@ def layout(sid: str | None) -> html.Div:
                                 ] + ([
                                     html.Label("Act Y",
                                                style={"fontSize": "0.72rem",
-                                                      "color": "#8b949e",
+                                                      "color": "var(--ned-text-muted)",
                                                       "marginLeft": "8px"}),
                                     dcc.Input(
                                         id="tr-act-ymin", type="number",
@@ -1503,7 +1542,7 @@ def layout(sid: str | None) -> html.Div:
                                     ),
                                     html.Span("\u2013",
                                               style={"fontSize": "0.72rem",
-                                                     "color": "#8b949e"}),
+                                                     "color": "var(--ned-text-muted)"}),
                                     dcc.Input(
                                         id="tr-act-ymax", type="number",
                                         value=tr_act_ymax, step=0.1,
@@ -1565,7 +1604,7 @@ def layout(sid: str | None) -> html.Div:
                                "marginTop": "8px", "marginBottom": "4px"},
                         children=[
                             html.Label("Onset (s)",
-                                       style={"fontSize": "0.72rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"}),
                             dcc.Input(
                                 id="tr-onset-input", type="number",
                                 value=round(current_event.onset_sec, 3) if current_event else 0,
@@ -1575,7 +1614,7 @@ def layout(sid: str | None) -> html.Div:
                                        "fontSize": "0.78rem"},
                             ),
                             html.Label("Offset (s)",
-                                       style={"fontSize": "0.72rem", "color": "#8b949e",
+                                       style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
                                               "marginLeft": "8px"}),
                             dcc.Input(
                                 id="tr-offset-input", type="number",
@@ -1589,7 +1628,7 @@ def layout(sid: str | None) -> html.Div:
                                 id="tr-duration-display",
                                 children=f"({current_event.offset_sec - current_event.onset_sec:.2f}s)"
                                 if current_event else "",
-                                style={"fontSize": "0.72rem", "color": "#8b949e"},
+                                style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"},
                             ),
                         ],
                     ),
@@ -1609,17 +1648,17 @@ def layout(sid: str | None) -> html.Div:
                         style={"marginBottom": "16px"},
                         children=[
                             html.Label("Notes",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dcc.Textarea(
                                 id="tr-notes",
                                 value=current_event.notes if current_event else "",
                                 placeholder="Optional notes for this event...",
                                 style={
                                     "width": "100%", "height": "60px",
-                                    "backgroundColor": "#1c2128",
-                                    "border": "1px solid #2d333b",
+                                    "backgroundColor": "var(--ned-surface)",
+                                    "border": "1px solid var(--ned-border)",
                                     "borderRadius": "6px",
-                                    "color": "#e6edf3",
+                                    "color": "var(--ned-text)",
                                     "fontSize": "0.85rem",
                                     "padding": "8px",
                                     "resize": "vertical",
@@ -1642,7 +1681,7 @@ def layout(sid: str | None) -> html.Div:
                     dbc.Row([
                         dbc.Col([
                             html.Label("Window (s)",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dcc.Input(
                                 id="tr-browse-window", type="number",
                                 min=1, max=600, step=1, value=browse_window,
@@ -1652,7 +1691,7 @@ def layout(sid: str | None) -> html.Div:
                         ], width=2),
                         dbc.Col([
                             html.Label("Start (s)",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             dcc.Input(
                                 id="tr-browse-start", type="number",
                                 min=0, max=rec.duration_sec, step=1,
@@ -1663,7 +1702,7 @@ def layout(sid: str | None) -> html.Div:
                         ], width=2),
                         dbc.Col([
                             html.Label("Channel (for manual add)",
-                                       style={"fontSize": "0.75rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
                             dcc.Dropdown(
                                 id="tr-browse-annotate-channel-vis",
                                 options=ch_options,
@@ -1703,7 +1742,7 @@ def layout(sid: str | None) -> html.Div:
                                "flexWrap": "wrap"},
                         children=[
                             html.Label("Channels:",
-                                       style={"fontSize": "0.78rem", "color": "#8b949e",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                                               "margin": "0", "fontWeight": "500"}),
                             dbc.Checklist(
                                 id="tr-browse-channel-checks",
@@ -1716,10 +1755,10 @@ def layout(sid: str | None) -> html.Div:
                                 style={"fontSize": "0.8rem"},
                             ),
                             html.A("All", id="tr-browse-ch-all", href="#",
-                                   style={"fontSize": "0.75rem", "color": "#58a6ff",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
                                           "cursor": "pointer", "marginLeft": "4px"}),
                             html.A("None", id="tr-browse-ch-none", href="#",
-                                   style={"fontSize": "0.75rem", "color": "#58a6ff",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
                                           "cursor": "pointer"}),
                         ],
                     ),
@@ -1761,7 +1800,7 @@ def layout(sid: str | None) -> html.Div:
                                "flexWrap": "wrap", "alignItems": "center"},
                         children=[
                             html.Span("Legend:",
-                                      style={"fontSize": "0.72rem", "color": "#8b949e",
+                                      style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
                                              "fontWeight": "600"}),
                             *[
                                 html.Span(
@@ -1811,7 +1850,7 @@ def layout(sid: str | None) -> html.Div:
             ),
 
             # ── Annotation Counts (at end of page) ─────────────────────
-            html.Hr(style={"borderColor": "#2d333b", "margin": "24px 0 12px 0"}),
+            html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0 12px 0"}),
             html.Div(
                 id="tr-annotation-counts",
                 children=_build_annotation_counts(
@@ -1908,6 +1947,20 @@ def save_channel_filter(val, sid):
     return val
 
 
+@callback(
+    Output("tr-method-filter", "value"),
+    Input("tr-method-filter", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def save_method_filter(val, sid):
+    """Persist method filter."""
+    state = server_state.get_session(sid)
+    state.extra["tr_method_filter"] = val
+    state.extra["tr_current_idx"] = 0
+    return val
+
+
 # ── Review Mode Callbacks ─────────────────────────────────────────────
 
 
@@ -1927,6 +1980,7 @@ def save_channel_filter(val, sid):
     Output("tr-band-power", "figure"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
+    Input("tr-method-filter", "value"),
     Input("tr-filter-toggle", "value"),
     Input("tr-min-conf", "value"),
     Input("tr-min-dur", "value"),
@@ -1961,7 +2015,7 @@ def save_channel_filter(val, sid):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
+def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, min_lbl,
                   max_conf, max_dur, max_lbl,
                   min_spikes, max_spikes, min_amp, max_amp,
                   min_top_amp, max_top_amp, min_freq, max_freq,
@@ -2049,6 +2103,9 @@ def update_review(mode, ch_filter, filt_on, min_conf, min_dur, min_lbl,
     rec = state.recording
     annotations = _get_annotations(state)
     filtered = _filter_by_channel(annotations, ch_filter)
+    if method_filter:
+        filtered = [a for a in filtered
+                    if a.features.get("detection_method") == method_filter]
     if filt_on:
         filtered = _apply_annotation_filters(
             filtered, min_conf=min_conf, min_dur=min_dur, min_lbl=min_lbl,
@@ -2418,10 +2475,10 @@ def save_notes(notes_val, ch_filter, sid):
     # Return existing style unchanged
     return {
         "width": "100%", "height": "60px",
-        "backgroundColor": "#1c2128",
-        "border": "1px solid #2d333b",
+        "backgroundColor": "var(--ned-surface)",
+        "border": "1px solid var(--ned-border)",
         "borderRadius": "6px",
-        "color": "#e6edf3",
+        "color": "var(--ned-text)",
         "fontSize": "0.85rem",
         "padding": "8px",
         "resize": "vertical",

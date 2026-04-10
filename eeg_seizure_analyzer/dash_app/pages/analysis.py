@@ -153,7 +153,7 @@ def layout(sid: str | None) -> html.Div:
             html.P(
                 "Run CNN detection on single files, batches, or "
                 "monitor a folder for new recordings in real time.",
-                style={"color": "#8b949e", "fontSize": "0.9rem",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "16px"},
             ),
 
@@ -174,7 +174,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Trained model",
-                               style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dcc.Dropdown(
                         id="an-model",
                         options=models,
@@ -187,7 +187,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=6),
                 dbc.Col([
                     html.Label("Confidence threshold",
-                               style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dcc.Slider(
                         id="an-threshold",
                         min=0.1, max=1.0, step=0.01,
@@ -202,7 +202,7 @@ def layout(sid: str | None) -> html.Div:
             dbc.Row([
                 dbc.Col([
                     html.Label("Min event duration (s)",
-                               style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dcc.Slider(
                         id="an-min-duration",
                         min=1, max=30, step=0.5,
@@ -213,7 +213,7 @@ def layout(sid: str | None) -> html.Div:
                 ], width=5),
                 dbc.Col([
                     html.Label("Merge gap (s)",
-                               style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dcc.Slider(
                         id="an-merge-gap",
                         min=0.5, max=10, step=0.5,
@@ -233,56 +233,56 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("HVSW — max dominant freq (Hz)",
                                        className="param-label",
-                                       style={"fontSize": "0.8rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
                                 id="an-hvsw-freq", type="number",
                                 value=prev_hvsw_freq, min=1, max=10, step=0.5,
                                 size="sm",
-                                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                                       "border": "1px solid #30363d"},
+                                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                                       "border": "1px solid var(--ned-border)"},
                             ),
                         ], width=3),
                         dbc.Col([
                             html.Label("HVSW — min slow-wave index",
                                        className="param-label",
-                                       style={"fontSize": "0.8rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
                                 id="an-hvsw-swi", type="number",
                                 value=prev_hvsw_swi, min=0, max=1, step=0.05,
                                 size="sm",
-                                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                                       "border": "1px solid #30363d"},
+                                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                                       "border": "1px solid var(--ned-border)"},
                             ),
                         ], width=3),
                         dbc.Col([
                             html.Label("HPD — min dominant freq (Hz)",
                                        className="param-label",
-                                       style={"fontSize": "0.8rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
                                 id="an-hpd-freq", type="number",
                                 value=prev_hpd_freq, min=5, max=50, step=1,
                                 size="sm",
-                                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                                       "border": "1px solid #30363d"},
+                                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                                       "border": "1px solid var(--ned-border)"},
                             ),
                         ], width=3),
                         dbc.Col([
                             html.Label("HPD — min HF index",
                                        className="param-label",
-                                       style={"fontSize": "0.8rem", "color": "#8b949e"}),
+                                       style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
                                 id="an-hpd-hfi", type="number",
                                 value=prev_hpd_hfi, min=0, max=1, step=0.05,
                                 size="sm",
-                                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                                       "border": "1px solid #30363d"},
+                                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                                       "border": "1px solid var(--ned-border)"},
                             ),
                         ], width=3),
                     ], className="g-3"),
                     html.Div(
                         "HVSW: slow, high-amplitude waves (< max freq, high slow-wave index). "
                         "HPD: fast periodic discharges (> min freq, high HF index).",
-                        style={"fontSize": "0.75rem", "color": "#484f58",
+                        style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                                "marginTop": "8px"},
                     ),
                 ],
@@ -294,7 +294,7 @@ def layout(sid: str | None) -> html.Div:
             html.Hr(style={"borderColor": "#21262d"}),
 
             # ── Mode selector ──────────────────────────────────────
-            html.Label("Mode", style={"fontSize": "0.82rem", "color": "#8b949e",
+            html.Label("Mode", style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
                                        "marginBottom": "4px"}),
             dbc.RadioItems(
                 id="an-mode",
@@ -334,14 +334,14 @@ def _single_panel(loaded_path: str, store: dict) -> list:
     prev_path = store.get("single_file_path", loaded_path)
     return [
         html.Label("EDF file",
-                   style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                   style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
         dbc.InputGroup([
             dbc.Input(
                 id="an-single-path",
                 value=prev_path,
                 placeholder="Path to EDF file...",
-                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                       "border": "1px solid #30363d"},
+                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                       "border": "1px solid var(--ned-border)"},
             ),
             dbc.Button("Browse", id="an-single-browse",
                        outline=True, color="secondary", size="sm"),
@@ -372,14 +372,14 @@ def _batch_panel(store: dict) -> list:
     prev_meta = store.get("batch_metadata_path", "")
     return [
         html.Label("Folder",
-                   style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                   style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
         dbc.InputGroup([
             dbc.Input(
                 id="an-batch-folder",
                 value=prev_folder,
                 placeholder="Path to folder with EDF files...",
-                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                       "border": "1px solid #30363d"},
+                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                       "border": "1px solid var(--ned-border)"},
             ),
             dbc.Button("Browse", id="an-batch-browse",
                        outline=True, color="secondary", size="sm"),
@@ -394,15 +394,15 @@ def _batch_panel(store: dict) -> list:
 
         # Batch metadata Excel
         html.Label("Batch metadata (optional)",
-                   style={"fontSize": "0.82rem", "color": "#8b949e",
+                   style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
                           "marginTop": "4px"}),
         dbc.InputGroup([
             dbc.Input(
                 id="an-batch-meta-path",
                 value=prev_meta,
                 placeholder="batch_metadata.xlsx — cohort, group, animal IDs",
-                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                       "border": "1px solid #30363d"},
+                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                       "border": "1px solid var(--ned-border)"},
                 size="sm",
             ),
             dbc.Button("Browse", id="an-batch-meta-browse",
@@ -411,13 +411,13 @@ def _batch_panel(store: dict) -> list:
                        outline=True, color="info", size="sm"),
         ], className="mb-1"),
         html.Div(id="an-batch-meta-status",
-                 style={"fontSize": "0.78rem", "color": "#484f58",
+                 style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                         "marginBottom": "12px"}),
 
         dbc.Button("Scan folder", id="an-batch-scan",
                    outline=True, color="info", size="sm", className="me-2"),
         html.Div(id="an-batch-scan-result", className="mb-3",
-                 style={"fontSize": "0.85rem", "color": "#8b949e"}),
+                 style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"}),
 
         dbc.ButtonGroup([
             dbc.Button("Run batch analysis", id="an-batch-run",
@@ -443,14 +443,14 @@ def _live_panel(store: dict) -> list:
     prev_backlog = store.get("live_process_backlog", True)
     return [
         html.Label("Watch folder",
-                   style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                   style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
         dbc.InputGroup([
             dbc.Input(
                 id="an-live-folder",
                 value=prev_folder,
                 placeholder="Path to shared folder...",
-                style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                       "border": "1px solid #30363d"},
+                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                       "border": "1px solid var(--ned-border)"},
             ),
             dbc.Button("Browse", id="an-live-browse",
                        outline=True, color="secondary", size="sm"),
@@ -466,17 +466,17 @@ def _live_panel(store: dict) -> list:
         dbc.Row([
             dbc.Col([
                 html.Label("Wait before processing (seconds)",
-                           style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                           style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                 dbc.Input(
                     id="an-live-wait", type="number",
                     value=prev_wait, min=5, max=300, step=5,
-                    style={"backgroundColor": "#0d1117", "color": "#c9d1d9",
-                           "border": "1px solid #30363d"},
+                    style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                           "border": "1px solid var(--ned-border)"},
                     size="sm",
                 ),
                 html.Small(
                     "Wait for LabChart to finish writing before reading",
-                    style={"color": "#484f58", "fontSize": "0.72rem"},
+                    style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem"},
                 ),
             ], width=4),
         ], className="mb-3"),
@@ -506,11 +506,11 @@ def _results_summary() -> list:
         summary = db.get_summary()
     except Exception:
         return [html.P("No analysis run yet.",
-                       style={"color": "#484f58", "fontSize": "0.85rem"})]
+                       style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})]
 
     if summary["n_files"] == 0:
         return [html.P("No analysis run yet.",
-                       style={"color": "#484f58", "fontSize": "0.85rem"})]
+                       style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})]
 
     n_total = summary["total_events"]
     n_conv = summary["n_convulsive"]
@@ -524,7 +524,7 @@ def _results_summary() -> list:
 
     return [
         html.H6("Results — last analysis run",
-                style={"color": "#58a6ff", "marginBottom": "12px"}),
+                style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
         dbc.Row([
             dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
             dbc.Col(metric_card("Animals", str(summary["n_animals"])), width=2),
@@ -629,11 +629,11 @@ def show_model_info(model_name):
             html.Div(
                 f"Trained: {meta.get('created', '—')[:10]}  —  "
                 f"Window: {dc.get('window_sec', 60)}s @ {dc.get('target_fs', 250)}Hz",
-                style={"fontSize": "0.78rem", "color": "#484f58",
+                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                        "marginTop": "8px"},
             ),
         ]),
-        style={"backgroundColor": "#161b22", "border": "1px solid #21262d"},
+        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid #21262d"},
     )
 
 
@@ -689,7 +689,7 @@ def generate_batch_template(n, folder, include_sub):
             style={"color": "#2ea043"},
         )
     except Exception as e:
-        return html.Span(f"Error: {e}", style={"color": "#f85149"})
+        return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
 
 
 @callback(
@@ -838,7 +838,7 @@ def run_single(n_clicks, edf_path, model_name, threshold,
             style={"height": "24px", "marginBottom": "8px"},
         ),
         html.Div("Starting analysis...",
-                 style={"fontSize": "0.85rem", "color": "#8b949e",
+                 style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                         "textAlign": "center"}),
     ])
 
@@ -866,7 +866,7 @@ def scan_batch_folder(n, folder, include_sub):
         html.Span(f"Already processed: {scan['already_processed']}"),
         html.Br(),
         html.Span(f"To process: {scan['to_process']}",
-                  style={"color": "#58a6ff"}),
+                  style={"color": "var(--ned-accent)"}),
     ])
 
 
@@ -958,7 +958,7 @@ def run_batch(n, folder, include_sub, model_name, threshold,
         dbc.Progress(value=0, striped=True, animated=True,
                      style={"height": "24px", "marginBottom": "8px"}),
         html.Div("Starting batch...",
-                 style={"fontSize": "0.85rem", "color": "#8b949e",
+                 style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                         "textAlign": "center"}),
     ])
     return progress, False, True, False, False  # enable poll, disable run, enable pause/cancel
@@ -1135,7 +1135,7 @@ def poll_progress(n):
                 ),
                 html.Div(
                     f"Processing {status.get('current_file', '')}... ({pct}%)",
-                    style={"fontSize": "0.85rem", "color": "#8b949e",
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                            "textAlign": "center"},
                 ),
             ])
@@ -1180,7 +1180,7 @@ def poll_progress(n):
                 html.Div(
                     f"Current: {status.get('current_file', '')}"
                     f"  ({file_cur}/{file_total} windows){remaining}",
-                    style={"fontSize": "0.85rem", "color": "#8b949e",
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                            "textAlign": "center"},
                 ),
             ])
@@ -1195,7 +1195,7 @@ def poll_progress(n):
                              style={"height": "24px", "marginBottom": "8px"}),
                 *([] if not err else [
                     html.Div(f"Last error: {err}",
-                             style={"fontSize": "0.8rem", "color": "#d29922"}),
+                             style={"fontSize": "0.8rem", "color": "var(--ned-warning)"}),
                 ]),
             ])
             disable_poll = True
@@ -1224,16 +1224,16 @@ def poll_progress(n):
                           className="me-2"),
                 html.Span(
                     f"Monitoring: {current}" if is_running else "Stopped",
-                    style={"fontSize": "0.85rem", "color": "#8b949e"},
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"},
                 ),
             ], className="mb-2"),
             html.Div(f"Chunks processed: {processed}  |  Uptime: {elapsed}",
-                     style={"fontSize": "0.82rem", "color": "#8b949e"}),
+                     style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
         ]
         if err:
             live_items.append(
                 html.Div(f"Last error: {err}",
-                         style={"fontSize": "0.8rem", "color": "#d29922",
+                         style={"fontSize": "0.8rem", "color": "var(--ned-warning)",
                                 "marginTop": "4px"}),
             )
 

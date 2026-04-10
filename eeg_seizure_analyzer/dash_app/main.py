@@ -12,6 +12,7 @@ from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app.components import (
     blinding_badge,
     section_header,
+    set_plotly_theme,
     sidebar_divider,
 )
 from eeg_seizure_analyzer.io.persistence import detection_json_path, spike_detection_json_path
@@ -188,9 +189,22 @@ def _sidebar():
             html.Div(
                 id="sidebar-footer",
                 children=[
-                    html.Span("NED-Net v0.1"),
-                    html.Span(" \u00B7 ", style={"opacity": "0.4"}),
-                    html.Span("EEG Analysis Platform"),
+                    html.Div(
+                        className="theme-toggle-container",
+                        children=[
+                            dbc.Switch(
+                                id="theme-toggle",
+                                label="Dark mode",
+                                value=False,
+                                style={"fontSize": "0.75rem"},
+                            ),
+                        ],
+                    ),
+                    html.Div([
+                        html.Span("NED-Net v0.1"),
+                        html.Span(" \u00B7 ", style={"opacity": "0.4"}),
+                        html.Span("EEG Analysis Platform"),
+                    ]),
                 ],
             ),
         ],
@@ -330,6 +344,8 @@ app.layout = html.Div(
         dcc.Store(id="store-sp-extras", data={}),
         # Subtab click relay
         dcc.Store(id="subtab-click", data=""),
+        # Theme store (persists across tab switches)
+        dcc.Store(id="theme-store", data="light"),
 
         # Sidebar
         _sidebar(),
@@ -363,6 +379,34 @@ def init_session(sid):
     if sid:
         return sid
     return server_state.create_session()
+
+
+# ── Theme toggle ─────────────────────────────────────────────────────
+
+# Clientside: flip data-theme on <html> immediately (no server round-trip)
+app.clientside_callback(
+    """
+    function(isDark) {
+        var theme = isDark ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", theme);
+        return theme;
+    }
+    """,
+    Output("theme-store", "data"),
+    Input("theme-toggle", "value"),
+)
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("theme-store", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def on_theme_change(theme, refresh):
+    """Re-render tab content when theme changes so Plotly figures update."""
+    set_plotly_theme(theme or "dark")
+    return (refresh or 0) + 1
 
 
 # ── Tab switching ─────────────────────────────────────────────────────
@@ -617,8 +661,8 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
     state = server_state.get_session(sid)
     rec = state.recording
 
-    _muted = {"fontSize": "0.75rem", "color": "#8b949e"}
-    _dim = {"fontSize": "0.75rem", "color": "#484f58"}
+    _muted = {"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}
+    _dim = {"fontSize": "0.82rem", "color": "var(--ned-text-muted)", "opacity": "0.6"}
 
     if rec is None:
         return (
@@ -651,18 +695,18 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
                            "padding": "1px 0"},
                     children=[
                         html.Span(eeg_label,
-                                  style={"fontSize": "0.72rem", "color": "#58a6ff",
+                                  style={"fontSize": "0.78rem", "color": "var(--ned-accent)",
                                          "fontWeight": "500"}),
                         html.Span("\u2194",
-                                  style={"fontSize": "0.7rem", "color": "#484f58"}),
+                                  style={"fontSize": "0.76rem", "color": "var(--ned-text-muted)"}),
                         html.Span(act_label,
-                                  style={"fontSize": "0.72rem", "color": "#3fb950"}),
+                                  style={"fontSize": "0.78rem", "color": "#3fb950"}),
                     ],
                 ))
             else:
                 channel_items.append(html.Div(
                     eeg_label,
-                    style={"fontSize": "0.72rem", "color": "#58a6ff", "padding": "1px 0"},
+                    style={"fontSize": "0.78rem", "color": "var(--ned-accent)", "padding": "1px 0"},
                 ))
 
     # Add any EEG channels not in pairings
@@ -671,18 +715,18 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
             ch_name = rec.channel_names[i] if i < len(rec.channel_names) else f"Ch{i}"
             channel_items.append(html.Div(
                 ch_name,
-                style={"fontSize": "0.72rem", "color": "#8b949e", "padding": "1px 0"},
+                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)", "padding": "1px 0"},
             ))
 
     file_info = html.Div([
         html.Div(fname, className="file-info",
-                 style={"fontWeight": "600", "fontSize": "0.82rem",
+                 style={"fontWeight": "600", "fontSize": "0.88rem",
                         "wordBreak": "break-all"}),
         html.Div(
             f"{rec.n_channels} ch \u00B7 {rec.fs:.0f} Hz \u00B7 "
             f"{rec.duration_sec:.0f}s ({dur_h:.1f}h)",
             className="file-info",
-            style={"fontSize": "0.78rem", "color": "#8b949e", "marginTop": "4px"},
+            style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)", "marginTop": "4px"},
         ),
         html.Div(
             channel_items,
@@ -697,14 +741,17 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
     # Detection file
     has_det_file = False
     n_det = 0
+    seizure_list = []
     if rec.source_path:
         det_path = detection_json_path(rec.source_path)
         has_det_file = det_path.is_file()
     # Also count in-memory detections
     if state.seizure_events:
-        n_det = len(state.seizure_events)
+        seizure_list = state.seizure_events
+        n_det = len(seizure_list)
     elif state.detected_events:
-        n_det = len([e for e in state.detected_events if e.event_type == "seizure"])
+        seizure_list = [e for e in state.detected_events if e.event_type == "seizure"]
+        n_det = len(seizure_list)
 
     if has_det_file or n_det > 0:
         det_icon = "\u2705" if has_det_file else "\u26A0\uFE0F"
@@ -712,6 +759,40 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
         if has_det_file:
             det_label += " (saved)"
         status_items.append(html.Div(det_label, style=_muted))
+        # Per-method breakdown
+        _method_counts: dict[str, int] = {}
+        _mlabels = {
+            "spike_train": "Spike-Train",
+            "spectral_band": "Spectral Band",
+            "autocorrelation": "Autocorrelation",
+            "ensemble": "Ensemble",
+            "ml_unet": "ML U-Net",
+            "line_length_energy": "LL / Energy",
+        }
+        for ev in seizure_list:
+            feat = ev.features if hasattr(ev, "features") else {}
+            m = (feat or {}).get("detection_method", "unknown")
+            _method_counts[m] = _method_counts.get(m, 0) + 1
+        if _method_counts and not (list(_method_counts.keys()) == ["unknown"]):
+            _parts = []
+            for m, c in sorted(_method_counts.items()):
+                _parts.append(html.Span([
+                    html.Span(f"{_mlabels.get(m, m)} ",
+                              style={"color": "var(--ned-text-muted)"}),
+                    html.Span(str(c), style={"fontWeight": "600"}),
+                ]))
+            # Join with separator
+            _breakdown_children = []
+            for i, part in enumerate(_parts):
+                if i > 0:
+                    _breakdown_children.append(html.Span(
+                        " \u00B7 ", style={"color": "var(--ned-text-muted)",
+                                           "opacity": "0.5"}))
+                _breakdown_children.append(part)
+            status_items.append(html.Div(
+                _breakdown_children,
+                style={"fontSize": "0.78rem", "marginLeft": "20px"},
+            ))
     else:
         status_items.append(html.Div("\u2B55 No detections yet", style=_dim))
 
@@ -770,8 +851,8 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
         if parts:
             status_items.append(html.Div(
                 "  ".join(parts),
-                style={"fontSize": "0.72rem", "color": "#6e7681",
-                       "marginLeft": "20px"},
+                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                       "marginLeft": "20px", "opacity": "0.8"},
             ))
     elif has_ann_file:
         status_items.append(html.Div("\U0001F4DD Annotations: saved to disk", style=_muted))
@@ -799,7 +880,7 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
     if flash:
         status_items.append(html.Div(
             flash,
-            style={"fontSize": "0.75rem", "color": "#3fb950", "marginTop": "4px"},
+            style={"fontSize": "0.82rem", "color": "#3fb950", "marginTop": "4px"},
         ))
 
     analysis_status = html.Div(
