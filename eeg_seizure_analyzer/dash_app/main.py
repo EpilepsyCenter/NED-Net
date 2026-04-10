@@ -365,6 +365,7 @@ app.layout = html.Div(
                 # File selector bar (shown when multiple files loaded)
                 html.Div(
                     id="file-selector-bar",
+                    className="file-selector-bar",
                     style={"display": "none"},
                 ),
                 html.Div(id="tab-content"),
@@ -963,28 +964,25 @@ def update_file_selector_bar(_refresh, sid):
         label = f"{fname}  {status}" if status else fname
         options.append({"label": label, "value": i})
 
-    bar = html.Div(
-        className="file-selector-bar",
-        children=[
-            html.Span(
-                f"\U0001F4C1 {n_files} files",
-                className="file-selector-count",
-            ),
-            dcc.Dropdown(
-                id="file-bar-dropdown",
-                options=options,
-                value=active_idx,
-                clearable=False,
-                style={"width": "360px", "fontSize": "0.82rem"},
-            ),
-            html.Span(
-                os.path.basename(folder),
-                className="file-selector-folder",
-            ),
-        ],
-    )
+    bar_children = [
+        html.Span(
+            f"\U0001F4C1 {n_files} files",
+            className="file-selector-count",
+        ),
+        dcc.Dropdown(
+            id="file-bar-dropdown",
+            options=options,
+            value=active_idx,
+            clearable=False,
+            style={"width": "360px", "fontSize": "0.82rem"},
+        ),
+        html.Span(
+            os.path.basename(folder),
+            className="file-selector-folder",
+        ),
+    ]
 
-    return [bar], {"display": "block"}
+    return bar_children, {"display": "flex"}
 
 
 @callback(
