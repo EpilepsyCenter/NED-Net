@@ -430,10 +430,11 @@ The status bar shows progress. When complete, a summary banner shows the number 
 
 Each detected seizure event carries a set of automatically computed features and quality metrics. These are visible in the inspector, used for filtering, and included in CSV exports.
 
-#### Event features
+#### Event features (shared across methods)
 
 | Feature | Description |
 |---------|-------------|
+| **seizure_subtype** | Classification: HVSW, HPD, electroclinical, or unclassified |
 | **n_spikes** | Total number of individual spikes detected within the seizure |
 | **mean_spike_frequency_hz** | Average spike rate during the event (spikes per second) |
 | **max_amplitude_x_baseline** | Peak spike amplitude expressed as a multiple of baseline |
@@ -441,6 +442,42 @@ Each detected seizure event carries a set of automatically computed features and
 | **spike_regularity** | Coefficient of variation of ISI — lower values indicate more regular (rhythmic) spiking |
 | **mean_amplitude_uv** | Mean spike amplitude in microvolts |
 | **max_amplitude_uv** | Maximum spike amplitude in microvolts |
+
+#### Spike-Train method features
+
+| Feature | Description |
+|---------|-------------|
+| **mean_amplitude_x_baseline** | Mean spike amplitude as multiple of baseline |
+| **isi_cv** | Coefficient of variation of inter-spike intervals |
+| **amplitude_trend** | Slope of spike amplitude over time (positive = increasing) |
+| **frequency_trend** | Slope of ISI over time (negative = accelerating) |
+| **has_postictal_suppression** | Whether post-ictal suppression was detected |
+| **first_half_freq_hz** | Spike frequency in first half of event (HPD classification) |
+| **second_half_freq_hz** | Spike frequency in second half of event (HPD classification) |
+
+#### Spectral Band method features
+
+| Feature | Description |
+|---------|-------------|
+| **sbi_peak** | Peak spectral band index value |
+| **sbi_mean** | Mean spectral band index value |
+| **sbi_threshold** | Spectral band index threshold used for detection |
+| **band_hz** | Frequency band used (e.g. "17-25") |
+
+#### Autocorrelation method features
+
+| Feature | Description |
+|---------|-------------|
+| **peak_acorr** | Peak autocorrelation value |
+| **mean_acorr** | Mean autocorrelation value |
+| **acorr_threshold** | Autocorrelation threshold used for detection |
+
+#### Ensemble method features
+
+| Feature | Description |
+|---------|-------------|
+| **contributing_methods** | Which detection methods agreed on this event |
+| **n_methods** | Number of methods that detected this event |
 
 #### Quality metrics
 
@@ -538,11 +575,11 @@ Both the Seizure and Interictal Spike detection tabs provide CSV export. The exp
 | Group | Columns included |
 |-------|-----------------|
 | **Core** | event_id, onset_sec, offset_sec, duration_sec, channel, channel_name, animal_id, detection_method, confidence, severity, movement_flag |
-| **Features** | n_spikes, mean_spike_frequency_hz, max_amplitude_x_baseline, mean_isi_ms, spike_regularity, mean_amplitude_uv, max_amplitude_uv |
+| **Features** | Shared: seizure_subtype, n_spikes, mean_spike_frequency_hz, max_amplitude_x_baseline, mean_isi_ms, spike_regularity, mean_amplitude_uv, max_amplitude_uv. Spike-Train: mean_amplitude_x_baseline, isi_cv, amplitude_trend, frequency_trend, has_postictal_suppression, first/second_half_freq_hz. Spectral Band: sbi_peak, sbi_mean, sbi_threshold, band_hz. Autocorrelation: peak_acorr, mean_acorr, acorr_threshold. Ensemble: contributing_methods, n_methods |
 | **Quality** | local_baseline_ratio, top_spike_amplitude_x, peak_ll_zscore, peak_energy_zscore, signal_to_baseline_ratio, theta_delta_ratio, activity_zscore |
 | **Spectral** | delta/theta/alpha/beta/gamma power (absolute and relative), total_power, dominant_freq_hz, spectral_entropy — computed on-the-fly from the raw EEG signal |
 
-> **Note:** Spectral fields are computed at export time using Welch's method on each event's raw EEG segment. This adds a small delay for large numbers of events but does not require the spectral data to have been pre-computed during detection.
+> **Note:** Feature columns are included for all methods — fields that don't apply to a given method appear as blank. Spectral fields are computed at export time using Welch's method on each event's raw EEG segment.
 
 ### 8.2 Interictal spike export
 

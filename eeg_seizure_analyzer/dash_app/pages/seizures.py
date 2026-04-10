@@ -2799,9 +2799,10 @@ def export_csv(n_clicks, methods, channel, fields, filename, sid):
                 "movement_flag": ev.movement_flag,
             })
 
-        # Feature fields
+        # Feature fields — shared across methods
         if "features" in fields:
             row.update({
+                "seizure_subtype": feat.get("seizure_subtype", ""),
                 "n_spikes": feat.get("n_spikes"),
                 "mean_spike_frequency_hz": _round_or_none(feat.get("mean_spike_frequency_hz")),
                 "max_amplitude_x_baseline": _round_or_none(feat.get("max_amplitude_x_baseline")),
@@ -2809,6 +2810,26 @@ def export_csv(n_clicks, methods, channel, fields, filename, sid):
                 "spike_regularity": _round_or_none(feat.get("spike_regularity")),
                 "mean_amplitude_uv": _round_or_none(feat.get("mean_amplitude_uv")),
                 "max_amplitude_uv": _round_or_none(feat.get("max_amplitude_uv")),
+                # Spike-train specific
+                "mean_amplitude_x_baseline": _round_or_none(feat.get("mean_amplitude_x_baseline")),
+                "isi_cv": _round_or_none(feat.get("isi_cv")),
+                "amplitude_trend": _round_or_none(feat.get("amplitude_trend")),
+                "frequency_trend": _round_or_none(feat.get("frequency_trend")),
+                "has_postictal_suppression": feat.get("has_postictal_suppression"),
+                "first_half_freq_hz": _round_or_none(feat.get("first_half_freq_hz")),
+                "second_half_freq_hz": _round_or_none(feat.get("second_half_freq_hz")),
+                # Spectral band specific
+                "sbi_peak": _round_or_none(feat.get("sbi_peak")),
+                "sbi_mean": _round_or_none(feat.get("sbi_mean")),
+                "sbi_threshold": _round_or_none(feat.get("sbi_threshold")),
+                "band_hz": feat.get("band_hz"),
+                # Autocorrelation specific
+                "peak_acorr": _round_or_none(feat.get("peak_acorr")),
+                "mean_acorr": _round_or_none(feat.get("mean_acorr")),
+                "acorr_threshold": _round_or_none(feat.get("acorr_threshold")),
+                # Ensemble specific
+                "contributing_methods": ", ".join(feat.get("contributing_methods", [])) if feat.get("contributing_methods") else None,
+                "n_methods": feat.get("n_methods"),
             })
 
         # Quality metric fields

@@ -37,6 +37,48 @@ from eeg_seizure_analyzer.io.base import EEGRecording
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 
 
+def _build_acorr_features(
+    event_spikes: list[Spike],
+    seg_spike_freq: list[float],
+    seg_acorr: list[float],
+    acorr_threshold: float,
+    bl_mean: float,
+    bl_std: float,
+    threshold: float,
+) -> dict:
+    """Build features dict for an autocorrelation event."""
+    # ISI stats
+    isis_ms = []
+    for i in range(len(event_spikes) - 1):
+        isi = (event_spikes[i + 1].time_sec - event_spikes[i].time_sec) * 1000
+        isis_ms.append(isi)
+    mean_isi = float(np.mean(isis_ms)) if isis_ms else 0.0
+    isi_cv = float(np.std(isis_ms) / np.mean(isis_ms)) if isis_ms and np.mean(isis_ms) > 0 else 0.0
+
+    raw_amps = [s.amplitude for s in event_spikes]
+
+    return {
+        "detection_method": "autocorrelation",
+        "seizure_subtype": "seizure",
+        "n_spikes": len(event_spikes),
+        "mean_spike_frequency_hz": round(float(np.mean(seg_spike_freq)), 2),
+        "mean_isi_ms": round(mean_isi, 2),
+        "spike_regularity": round(isi_cv, 3),
+        "mean_amplitude_uv": round(float(np.mean(raw_amps)), 2) if raw_amps else 0.0,
+        "max_amplitude_uv": round(float(np.max(raw_amps)), 2) if raw_amps else 0.0,
+        "max_amplitude_x_baseline": round(float(np.max([s.amplitude for s in event_spikes]) / bl_mean), 2) if event_spikes and bl_mean > 0 else 0.0,
+        "peak_acorr": round(float(np.max(seg_acorr)), 4),
+        "mean_acorr": round(float(np.mean(seg_acorr)), 4),
+        "acorr_threshold": round(acorr_threshold, 4),
+        "spike_times": [s.time_sec for s in event_spikes],
+        "spike_amplitudes": [s.amplitude for s in event_spikes],
+        "spike_samples": [s.sample_idx for s in event_spikes],
+        "baseline_mean": bl_mean,
+        "baseline_std": bl_std,
+        "threshold": threshold,
+    }
+
+
 class AutocorrelationDetector(DetectorBase):
     """Detect seizures using range autocorrelation + spike frequency."""
 
@@ -196,21 +238,10 @@ class AutocorrelationDetector(DetectorBase):
                     event_type="seizure",
                     confidence=round(max(0.1, confidence), 3),
                     severity=_classify_severity(duration),
-                    features={
-                        "detection_method": "autocorrelation",
-                        "seizure_subtype": "seizure",
-                        "n_spikes": len(event_spikes),
-                        "mean_spike_frequency_hz": round(float(np.mean(seg_spike_freq)), 2),
-                        "peak_acorr": round(float(np.max(seg_acorr)), 4),
-                        "mean_acorr": round(float(np.mean(seg_acorr)), 4),
-                        "acorr_threshold": round(acorr_threshold, 4),
-                        "spike_times": [s.time_sec for s in event_spikes],
-                        "spike_amplitudes": [s.amplitude for s in event_spikes],
-                        "spike_samples": [s.sample_idx for s in event_spikes],
-                        "baseline_mean": bl_mean,
-                        "baseline_std": bl_std,
-                        "threshold": threshold,
-                    },
+                    features=_build_acorr_features(
+                        event_spikes, seg_spike_freq, seg_acorr,
+                        acorr_threshold, bl_mean, bl_std, threshold,
+                    ),
                 )
             )
 

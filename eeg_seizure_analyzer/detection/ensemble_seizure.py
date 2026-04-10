@@ -7,6 +7,8 @@ results via temporal overlap voting.  An event survives if at least
 
 from __future__ import annotations
 
+import numpy as np
+
 from eeg_seizure_analyzer.config import EnsembleParams
 from eeg_seizure_analyzer.detection.base import DetectedEvent, DetectorBase
 from eeg_seizure_analyzer.io.base import EEGRecording
@@ -228,20 +230,48 @@ def _merge_voted_events(
                 event_type="seizure",
                 confidence=round(confidence, 3),
                 severity=severity,
-                features={
-                    "detection_method": "ensemble",
-                    "seizure_subtype": "seizure",
-                    "contributing_methods": sorted(group_methods),
-                    "n_methods": len(group_methods),
-                    "n_spikes": n_spikes,
-                    "spike_times": all_spike_times,
-                    "spike_amplitudes": all_spike_amps,
-                    "spike_samples": all_spike_samples,
-                },
+                features=_build_ensemble_features(
+                    group_methods, n_spikes,
+                    all_spike_times, all_spike_amps, all_spike_samples,
+                ),
             )
         )
 
     return merged
+
+
+def _build_ensemble_features(
+    group_methods: set[str],
+    n_spikes: int,
+    spike_times: list[float],
+    spike_amps: list[float],
+    spike_samples: list[int],
+) -> dict:
+    """Build features dict for an ensemble event."""
+    # ISI stats from merged spike times
+    isis_ms = []
+    if len(spike_times) > 1:
+        sorted_times = sorted(spike_times)
+        for i in range(len(sorted_times) - 1):
+            isis_ms.append((sorted_times[i + 1] - sorted_times[i]) * 1000)
+    mean_isi = float(np.mean(isis_ms)) if isis_ms else 0.0
+    isi_cv = float(np.std(isis_ms) / np.mean(isis_ms)) if isis_ms and np.mean(isis_ms) > 0 else 0.0
+
+    return {
+        "detection_method": "ensemble",
+        "seizure_subtype": "seizure",
+        "contributing_methods": sorted(group_methods),
+        "n_methods": len(group_methods),
+        "n_spikes": n_spikes,
+        "mean_spike_frequency_hz": round(float(n_spikes / max(1e-6, sorted(spike_times)[-1] - sorted(spike_times)[0])), 2) if len(spike_times) > 1 else 0.0,
+        "mean_isi_ms": round(mean_isi, 2),
+        "spike_regularity": round(isi_cv, 3),
+        "mean_amplitude_uv": round(float(np.mean(spike_amps)), 2) if spike_amps else 0.0,
+        "max_amplitude_uv": round(float(np.max(spike_amps)), 2) if spike_amps else 0.0,
+        "spike_times": spike_times,
+        "spike_amplitudes": spike_amps,
+        "spike_samples": spike_samples,
+    }
 
 
 def _dedupe_spikes(
