@@ -104,7 +104,10 @@ def _model_options(model_type: str = "seizure") -> list[dict]:
     for m in models:
         f1 = m.get("best_event_f1", 0)
         ds = m.get("dataset", "")
-        label = f"{m['name']}  —  F1: {f1:.3f}  ({ds})" if ds else f"{m['name']}  —  F1: {f1:.3f}"
+        arch = m.get("architecture", "unet").upper()
+        arch_tag = f" [{arch}]" if arch != "UNET" else ""
+        label = (f"{m['name']}{arch_tag}  —  F1: {f1:.3f}  ({ds})"
+                 if ds else f"{m['name']}{arch_tag}  —  F1: {f1:.3f}")
         options.append({"label": label, "value": m["name"]})
     return options
 

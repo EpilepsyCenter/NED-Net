@@ -25,6 +25,7 @@ from eeg_seizure_analyzer.config import (
     SpectralBandParams,
     AutocorrelationParams,
     EnsembleParams,
+    BENDRParams,
 )
 
 # Detection method labels
@@ -33,6 +34,7 @@ _METHOD_OPTIONS = [
     {"label": "Spectral Band (17–25 Hz)", "value": "spectral_band"},
     {"label": "Autocorrelation", "value": "autocorrelation"},
     {"label": "Ensemble", "value": "ensemble"},
+    {"label": "BENDR", "value": "bendr"},
 ]
 
 _DETECTOR_NAMES = {
@@ -40,6 +42,7 @@ _DETECTOR_NAMES = {
     "spectral_band": "SpectralBandDetector",
     "autocorrelation": "AutocorrelationDetector",
     "ensemble": "EnsembleDetector",
+    "bendr": "BENDR (ML)",
 }
 
 # ── Default parameter values ────────────────────────────────────────
@@ -255,6 +258,28 @@ Individual method parameters are inherited from the other method tabs. \
 Switch to each method to tune its parameters, then select Ensemble to combine.
 
 Best for maximum specificity - reduces false positives by requiring agreement.
+
+---
+
+## BENDR (ML)
+
+A self-supervised EEG foundation model (Kostas et al., 2021) adapted for \
+rodent seizure detection. BENDR uses a 6-layer convolutional encoder and \
+8-layer transformer contextualizer, pre-trained on unlabelled EEG via \
+contrastive masked prediction (wav2vec 2.0), then fine-tuned on annotated \
+seizures using the Training tab.
+
+**Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| **Model** | Select a trained BENDR model. Models are trained in the Training tab → Dataset/Model section. |
+| **Threshold** | Probability threshold for seizure detection (0.1–0.9). Lower = more sensitive, higher = more specific. |
+| **Min duration** | Discard predicted events shorter than this (seconds). |
+| **Merge gap** | Merge predicted segments closer than this (seconds). |
+
+No rule-based parameters — BENDR is a learned model. To improve detection, \
+annotate more data and re-train via the Training tab.
 
 ---
 
@@ -555,6 +580,13 @@ def layout(sid: str | None) -> html.Div:
                 style={"display": "block" if persisted_method == "ensemble" else "none"},
                 children=[_ensemble_params(_ens_val, state.extra.get("sz_ens_methods",
                           ["spike_train", "spectral_band"]))],
+            ),
+
+            # ── BENDR params (shown/hidden) ───────────────────────
+            html.Div(
+                id="sz-params-bendr",
+                style={"display": "block" if persisted_method == "bendr" else "none"},
+                children=[_bendr_params(state)],
             ),
 
             # Hidden: subtype params (kept for callback compatibility —
@@ -1457,6 +1489,99 @@ def _ensemble_params(_val, selected_methods=None) -> html.Div:
     ])
 
 
+def _bendr_params(state) -> html.Div:
+    """Build BENDR (ML) parameter controls: model selector + inference params."""
+    try:
+        from eeg_seizure_analyzer.ml.train import list_models
+        all_models = list_models()
+        bendr_models = [m for m in all_models if m.get("architecture") == "bendr"]
+    except Exception:
+        bendr_models = []
+
+    if bendr_models:
+        model_options = [
+            {
+                "label": (f"{m['name']} — F1: {m['best_event_f1']:.2f}"
+                          if m.get("best_event_f1") else m["name"]),
+                "value": m["name"],
+            }
+            for m in bendr_models
+        ]
+        default_model = state.extra.get("sz_bendr_model", model_options[0]["value"])
+    else:
+        model_options = []
+        default_model = None
+
+    # Persisted slider values
+    bendr_p = state.extra.get("sz_bendr_params", {})
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col([
+                collapsible_section(
+                    "BENDR Model", "sz-bendr-cfg",
+                    default_open=True,
+                    children=[
+                        html.Div([
+                            html.Label("Trained model",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)",
+                                              "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="sz-bendr-model",
+                                options=model_options,
+                                value=default_model,
+                                clearable=False,
+                                placeholder="No BENDR models available — train one first",
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], style={"marginBottom": "12px"}),
+                        param_control(
+                            "Threshold", "sz-bendr-threshold",
+                            0.1, 0.9, 0.05,
+                            bendr_p.get("threshold", 0.5),
+                            "Probability threshold. Lower = more sensitive.",
+                        ),
+                        param_control(
+                            "Min duration (s)", "sz-bendr-min-dur",
+                            1.0, 30.0, 0.5,
+                            bendr_p.get("min_duration_sec", 3.0),
+                            "Discard events shorter than this.",
+                        ),
+                        param_control(
+                            "Merge gap (s)", "sz-bendr-merge-gap",
+                            0.5, 10.0, 0.5,
+                            bendr_p.get("merge_gap_sec", 2.0),
+                            "Merge segments closer than this.",
+                        ),
+                    ],
+                ),
+            ], width=6),
+            dbc.Col([
+                html.Div([
+                    html.Div(
+                        "\U0001f9e0 BENDR is a learned model — no rule-based parameters to tune.",
+                        style={"fontSize": "0.82rem", "fontWeight": "500",
+                               "marginBottom": "8px"},
+                    ),
+                    html.Div(
+                        "To improve detection accuracy, annotate more seizures in the "
+                        "Training tab and re-train the model. BENDR uses a self-supervised "
+                        "pre-trained encoder fine-tuned on your annotations.",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
+                    ),
+                    html.Hr(style={"margin": "12px 0", "borderColor": "var(--ned-border)"}),
+                    html.Div(
+                        id="sz-bendr-model-info",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
+                    ),
+                ], style={"padding": "12px", "border": "1px solid var(--ned-border)",
+                          "borderRadius": "6px", "marginTop": "8px"}),
+            ], width=6),
+        ], className="g-3 mb-3"),
+    ])
+
+
 # ── Collapse toggle callbacks ─────────────────────────────────────────
 
 _ALL_COLLAPSE_SECTIONS = [
@@ -1467,6 +1592,8 @@ _ALL_COLLAPSE_SECTIONS = [
     "sz-ac-baseline", "sz-ac-spike", "sz-ac-boundary", "sz-ac-grp",
     # Ensemble
     "sz-ens-cfg",
+    # BENDR
+    "sz-bendr-cfg",
 ]
 
 for section_id in _ALL_COLLAPSE_SECTIONS:
@@ -1536,6 +1663,7 @@ def toggle_ac_boundary_controls(method):
     Output("sz-params-spectral-band", "style"),
     Output("sz-params-autocorrelation", "style"),
     Output("sz-params-ensemble", "style"),
+    Output("sz-params-bendr", "style"),
     Output("sz-method-badge", "children"),
     Input("sz-method-selector", "value"),
     prevent_initial_call=True,
@@ -1548,6 +1676,7 @@ def toggle_method_params(method):
     styles = {
         "spike_train": hide, "spectral_band": hide,
         "autocorrelation": hide, "ensemble": hide,
+        "bendr": hide,
     }
     styles[method] = show
     return (
@@ -1555,6 +1684,7 @@ def toggle_method_params(method):
         styles["spectral_band"],
         styles["autocorrelation"],
         styles["ensemble"],
+        styles["bendr"],
         labels.get(method, "Spike-Train"),
     )
 
@@ -1588,6 +1718,8 @@ def toggle_help_modal(open_clicks, close_clicks, is_open):
     Input("sz-sb-bnd-method", "value"),
     Input("sz-ac-bl-method", "value"),
     Input("sz-ac-bnd-method", "value"),
+    # BENDR model selector
+    Input("sz-bendr-model", "value"),
     # Filter values (min + max)
     *[Input(fid, "value") for fid in _ALL_FILTER_IDS],
     Input("sz-filter-channel", "value"),
@@ -1606,17 +1738,17 @@ def toggle_help_modal(open_clicks, close_clicks, is_open):
 )
 def auto_save_sz_extras(*args):
     """Save all non-MATCH seizure component values to server state on any change."""
-    # Unpack *args: 8 fixed + n_min + n_max filter IDs + 3 dropdowns + 1 toggle + 5 inspector + sid
+    # Unpack *args: 9 fixed + n_min + n_max filter IDs + 3 dropdowns + 1 toggle + 5 inspector + sid
     n_min = len(_ALL_FILTER_MIN_IDS)
     n_max = len(_ALL_FILTER_MAX_IDS)
     (channels, bl_method, bnd_method, classify, method_sel,
-     sb_bnd_method, ac_bl_method, ac_bnd_method) = args[0:8]
-    filt_min_vals = args[8:8 + n_min]
-    filt_max_vals = args[8 + n_min:8 + n_min + n_max]
-    filt_channel = args[8 + n_min + n_max]
-    filt_method = args[8 + n_min + n_max + 1]
-    filt_severity = args[8 + n_min + n_max + 2]
-    filt_enabled = args[8 + n_min + n_max + 3]
+     sb_bnd_method, ac_bl_method, ac_bnd_method, bendr_model_sel) = args[0:9]
+    filt_min_vals = args[9:9 + n_min]
+    filt_max_vals = args[9 + n_min:9 + n_min + n_max]
+    filt_channel = args[9 + n_min + n_max]
+    filt_method = args[9 + n_min + n_max + 1]
+    filt_severity = args[9 + n_min + n_max + 2]
+    filt_enabled = args[9 + n_min + n_max + 3]
     insp_spikes, insp_baseline, insp_threshold, insp_bp, insp_yr = args[-6:-1]
     sid = args[-1]
 
@@ -1640,6 +1772,8 @@ def auto_save_sz_extras(*args):
         state.extra["sz_ac_bl_method"] = ac_bl_method
     if ac_bnd_method is not None:
         state.extra["sz_ac_bnd_method"] = ac_bnd_method
+    if bendr_model_sel is not None:
+        state.extra["sz_bendr_model"] = bendr_model_sel
     # Merge filter values — only update keys with non-None values
     _min_keys = ["min_conf", "min_dur", "min_spikes", "min_amp", "min_lbl",
                  "min_top_amp", "min_ll", "min_energy", "min_sigbl",
@@ -1786,6 +1920,11 @@ def auto_save_sz_extras(*args):
     State("sz-ens-methods", "value"),
     State("sz-ens-merge", "value"),
     State("sz-ens-conf-merge", "value"),
+    # ── BENDR params ──
+    State("sz-bendr-model", "value"),
+    State({"type": "param-slider", "key": "sz-bendr-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-bendr-min-dur"}, "value"),
+    State({"type": "param-slider", "key": "sz-bendr-merge-gap"}, "value"),
     # Session
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -1830,6 +1969,8 @@ def run_detection(
     # Ensemble
     ens_vote_thr,
     ens_methods, ens_merge, ens_conf_merge,
+    # BENDR
+    bendr_model, bendr_threshold, bendr_min_dur, bendr_merge_gap,
     sid,
 ):
     """Run seizure detection (multi-method), clear results, or apply filters."""
@@ -2024,6 +2165,11 @@ def run_detection(
         elif method == "ensemble":
             detector = None  # handled separately below
             params = None
+
+        elif method == "bendr":
+            detector = None  # handled separately below
+            params = None
+
         else:
             return (
                 alert(f"Unknown method: {method}", "danger"),
@@ -2035,7 +2181,42 @@ def run_detection(
 
         _src = getattr(rec, "source_path", "") or ""
 
-        if method == "ensemble":
+        if method == "bendr":
+            # ── BENDR ML detection ────────────────────────────────
+            if not bendr_model:
+                return (
+                    alert("No BENDR model selected. Train one in the Training tab first.",
+                          "warning"),
+                    no_update, no_update, no_update, no_update, no_update,
+                )
+            from eeg_seizure_analyzer.ml.predict import predict_seizures
+
+            _edf_path = _src
+            if not _edf_path or not _edf_path.lower().endswith(".edf"):
+                return (
+                    alert("BENDR detection requires an EDF file. Load an EDF recording first.",
+                          "warning"),
+                    no_update, no_update, no_update, no_update, no_update,
+                )
+
+            # Persist BENDR params
+            state.extra["sz_bendr_model"] = bendr_model
+            state.extra["sz_bendr_params"] = {
+                "threshold": float(bendr_threshold or 0.5),
+                "min_duration_sec": float(bendr_min_dur or 3.0),
+                "merge_gap_sec": float(bendr_merge_gap or 2.0),
+            }
+
+            seizures = predict_seizures(
+                edf_path=_edf_path,
+                model_name=bendr_model,
+                channels=selected_channels,
+                threshold=float(bendr_threshold or 0.5),
+                min_duration_sec=float(bendr_min_dur or 3.0),
+                merge_gap_sec=float(bendr_merge_gap or 2.0),
+            )
+
+        elif method == "ensemble":
             # Run each selected sub-detector and pass results to ensemble
             ens_method_list = ens_methods or ["spike_train", "spectral_band"]
             method_events = {}

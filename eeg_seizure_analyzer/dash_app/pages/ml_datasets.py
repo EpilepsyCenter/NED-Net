@@ -146,14 +146,76 @@ def layout(sid: str | None) -> html.Div:
                     html.H5("Train Model",
                             style={"marginBottom": "12px", "color": "var(--ned-accent)"}),
 
-                    # Model name
-                    html.Label("Model name",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dbc.Input(
-                        id="ml-model-name",
-                        placeholder="e.g. study1_v1",
-                        type="text",
-                        style={"maxWidth": "300px", "marginBottom": "12px"},
+                    # Model name + architecture
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Model name",
+                                       style={"fontSize": "0.82rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dbc.Input(
+                                id="ml-model-name",
+                                placeholder="e.g. study1_v1",
+                                type="text",
+                                style={"marginBottom": "12px"},
+                            ),
+                        ], width=4),
+                        dbc.Col([
+                            html.Label("Architecture",
+                                       style={"fontSize": "0.82rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dbc.RadioItems(
+                                id="ml-architecture",
+                                options=[
+                                    {"label": "U-Net", "value": "unet"},
+                                    {"label": "BENDR", "value": "bendr"},
+                                ],
+                                value="unet",
+                                inline=True,
+                                style={"fontSize": "0.82rem", "marginBottom": "12px"},
+                            ),
+                        ], width=4),
+                    ], className="g-2"),
+
+                    # BENDR-specific training params (shown/hidden)
+                    html.Div(
+                        id="ml-bendr-train-params",
+                        style={"display": "none"},
+                        children=[
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Encoder LR",
+                                               style={"fontSize": "0.78rem",
+                                                      "color": "var(--ned-text-muted)"}),
+                                    dbc.Input(
+                                        id="ml-encoder-lr", type="number",
+                                        value=0.00001, min=0.000001, max=0.001,
+                                        step=0.000001,
+                                        className="form-control", size="sm",
+                                    ),
+                                ], width=2),
+                                dbc.Col([
+                                    html.Label("Freeze encoder (epochs)",
+                                               style={"fontSize": "0.78rem",
+                                                      "color": "var(--ned-text-muted)"}),
+                                    dbc.Input(
+                                        id="ml-freeze-epochs", type="number",
+                                        value=5, min=0, max=50, step=1,
+                                        className="form-control", size="sm",
+                                    ),
+                                ], width=2),
+                                dbc.Col([
+                                    html.Label("Pre-trained weights",
+                                               style={"fontSize": "0.78rem",
+                                                      "color": "var(--ned-text-muted)"}),
+                                    dcc.Dropdown(
+                                        id="ml-pretrained-weights",
+                                        options=[],
+                                        placeholder="None (train from scratch)",
+                                        style={"fontSize": "0.82rem"},
+                                    ),
+                                ], width=4),
+                            ], className="g-2 mb-3"),
+                        ],
                     ),
 
                     # Config row
@@ -619,6 +681,26 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
 
 
 @callback(
+    Output("ml-bendr-train-params", "style"),
+    Output("ml-pretrained-weights", "options"),
+    Input("ml-architecture", "value"),
+    prevent_initial_call=True,
+)
+def toggle_bendr_train_params(architecture):
+    """Show/hide BENDR-specific training params and populate weights dropdown."""
+    if architecture == "bendr":
+        # Scan for pre-trained weights files
+        from pathlib import Path
+        pretrained_dir = Path.home() / ".eeg_seizure_analyzer" / "pretrained"
+        options = []
+        if pretrained_dir.exists():
+            for f in sorted(pretrained_dir.glob("*.pt")):
+                options.append({"label": f.stem, "value": str(f)})
+        return {"display": "block"}, options
+    return {"display": "none"}, []
+
+
+@callback(
     Output("ml-train-progress", "children"),
     Output("ml-train-poll", "disabled"),
     Output("ml-train-running", "data"),
@@ -635,12 +717,17 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
     State("ml-patience", "value"),
     State("ml-pos-weight", "value"),
     State("ml-neg-ratio", "value"),
+    State("ml-architecture", "value"),
+    State("ml-encoder-lr", "value"),
+    State("ml-freeze-epochs", "value"),
+    State("ml-pretrained-weights", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
                    ann_type, epochs, batch_size, lr, patience, pos_weight,
-                   neg_ratio, sid):
+                   neg_ratio, architecture, encoder_lr, freeze_epochs,
+                   pretrained_weights, sid):
     """Start model training in a background thread."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -673,13 +760,20 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
     dataset_config = DatasetConfig(
         neg_pos_ratio=float(neg_ratio or 2.0),
     )
+    _arch = architecture or "unet"
     train_config = TrainConfig(
         epochs=int(epochs or 50),
         batch_size=int(batch_size or 8),
         learning_rate=float(lr or 1e-3),
         patience=int(patience or 10),
         pos_weight=float(pos_weight or 5.0),
+        architecture=_arch,
     )
+    if _arch == "bendr":
+        train_config.encoder_lr = float(encoder_lr or 1e-5)
+        train_config.freeze_encoder_epochs = int(freeze_epochs or 5)
+        if pretrained_weights:
+            train_config.pretrained_path = pretrained_weights
 
     # Clear old progress
     p = _progress_path(sid)
