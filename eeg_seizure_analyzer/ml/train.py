@@ -1,4 +1,4 @@
-"""Training loop for the seizure detection U-Net.
+"""Training loop for seizure detection models (U-Net and BENDR).
 
 Handles:
 - Training with mixed-precision (if GPU available)
@@ -6,6 +6,8 @@ Handles:
 - Validation with per-event metrics (not just per-sample)
 - Model checkpointing and early stopping
 - Progress reporting via callback (for UI integration)
+- Architecture selection: U-Net (from scratch) or BENDR (fine-tuning
+  from pre-trained self-supervised weights)
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from eeg_seizure_analyzer.ml.dataset import (
     split_by_animal,
 )
 from eeg_seizure_analyzer.ml.model import SeizureUNet, build_model
+from eeg_seizure_analyzer.ml.bendr_model import BENDRSeizureModel, build_bendr_model
 
 # ---------------------------------------------------------------------------
 # Model storage
@@ -247,6 +250,17 @@ class TrainConfig:
     dropout: float = 0.2
     num_workers: int = 0  # DataLoader workers (0 = main process)
 
+    # Architecture selection: "unet" or "bendr"
+    architecture: str = "unet"
+
+    # BENDR-specific settings (ignored for U-Net)
+    pretrained_path: str = ""  # path to pre-trained BENDR weights
+    encoder_h: int = 512  # BENDR encoder hidden dimension
+    context_layers: int = 8  # BENDR transformer layers
+    context_heads: int = 8  # BENDR attention heads
+    encoder_lr: float = 1e-5  # lower LR for pre-trained encoder
+    freeze_encoder_epochs: int = 5  # freeze encoder for first N epochs
+
 
 # ---------------------------------------------------------------------------
 # Training loop
@@ -286,6 +300,11 @@ def train_model(
         model_name = dataset_def.get("name", "unnamed")
 
     # ── Build datasets ───────────────────────────────────────────
+    # BENDR uses 256 Hz; U-Net uses 250 Hz
+    if train_config.architecture == "bendr" and dataset_config.target_fs == 250:
+        dataset_config.target_fs = 256
+        print("BENDR: target_fs set to 256 Hz")
+
     train_ds, val_ds, dataset_config = build_datasets(
         dataset_def, dataset_config
     )
@@ -346,30 +365,66 @@ def train_model(
     print(f"Using device: {device}")
 
     # ── Model ────────────────────────────────────────────────────
-    model = build_model(
-        n_eeg_channels=n_eeg_channels,
-        include_activity=dataset_config.include_activity,
-        n_activity_channels=n_act_channels,
-        base_filters=train_config.base_filters,
-        depth=train_config.depth,
-        dropout=train_config.dropout,
-        n_classes=2,
-    )
+    is_bendr = train_config.architecture == "bendr"
+
+    if is_bendr:
+        pretrained = train_config.pretrained_path or None
+        in_channels = n_eeg_channels + n_act_channels
+        model = build_bendr_model(
+            n_eeg_channels=in_channels,
+            encoder_h=train_config.encoder_h,
+            n_classes=2,
+            context_layers=train_config.context_layers,
+            context_heads=train_config.context_heads,
+            pretrained_path=pretrained,
+            freeze_encoder=train_config.freeze_encoder_epochs > 0,
+            finetuning=True,
+            decoder_dropout=train_config.dropout,
+        )
+        print(f"Architecture: BENDR (encoder_h={train_config.encoder_h})")
+        if pretrained:
+            print(f"Pre-trained weights: {pretrained}")
+    else:
+        model = build_model(
+            n_eeg_channels=n_eeg_channels,
+            include_activity=dataset_config.include_activity,
+            n_activity_channels=n_act_channels,
+            base_filters=train_config.base_filters,
+            depth=train_config.depth,
+            dropout=train_config.dropout,
+            n_classes=2,
+        )
+        print(f"Architecture: U-Net (base_filters={train_config.base_filters})")
+
     model = model.to(device)
 
     # Count parameters
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model parameters: {n_params:,}")
+    n_params_total = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {n_params:,} trainable / {n_params_total:,} total")
 
     # ── Loss, optimizer, scheduler ───────────────────────────────
     criterion = DiceBCELoss(pos_weight=train_config.pos_weight)
     criterion = criterion.to(device)
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=train_config.learning_rate,
-        weight_decay=train_config.weight_decay,
-    )
+    if is_bendr and train_config.pretrained_path:
+        # Differential learning rate: lower LR for pre-trained encoder,
+        # higher LR for new decoder head
+        encoder_params = list(model.encoder.parameters()) + list(model.contextualizer.parameters())
+        decoder_params = list(model.decoder.parameters())
+        optimizer = torch.optim.AdamW([
+            {"params": encoder_params, "lr": train_config.encoder_lr},
+            {"params": decoder_params, "lr": train_config.learning_rate},
+        ], weight_decay=train_config.weight_decay)
+        print(f"Differential LR: encoder={train_config.encoder_lr:.1e}, "
+              f"decoder={train_config.learning_rate:.1e}")
+    else:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=train_config.learning_rate,
+            weight_decay=train_config.weight_decay,
+        )
+
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5,
     )
@@ -387,6 +442,37 @@ def train_model(
 
     for epoch in range(1, train_config.epochs + 1):
         t0 = time.time()
+
+        # Unfreeze encoder after initial frozen epochs (BENDR only)
+        if (
+            is_bendr
+            and train_config.freeze_encoder_epochs > 0
+            and epoch == train_config.freeze_encoder_epochs + 1
+        ):
+            model.unfreeze_all()
+            # Rebuild optimizer with all params trainable
+            if train_config.pretrained_path:
+                encoder_params = (
+                    list(model.encoder.parameters())
+                    + list(model.contextualizer.parameters())
+                )
+                decoder_params = list(model.decoder.parameters())
+                optimizer = torch.optim.AdamW([
+                    {"params": encoder_params, "lr": train_config.encoder_lr},
+                    {"params": decoder_params, "lr": train_config.learning_rate},
+                ], weight_decay=train_config.weight_decay)
+            else:
+                optimizer = torch.optim.AdamW(
+                    model.parameters(),
+                    lr=train_config.learning_rate,
+                    weight_decay=train_config.weight_decay,
+                )
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode="min", factor=0.5, patience=5,
+            )
+            n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"  → Encoder unfrozen at epoch {epoch}. "
+                  f"Trainable params: {n_params:,}")
 
         # --- Train ---
         model.train()
@@ -484,6 +570,7 @@ def train_model(
     # Save training metadata
     metadata = {
         "model_name": model_name,
+        "architecture": train_config.architecture,  # "unet" or "bendr"
         "dataset_name": dataset_def.get("name", ""),
         "dataset_folder": dataset_def.get("folder", ""),
         "created": datetime.now(timezone.utc).isoformat(),
@@ -549,6 +636,7 @@ def list_models() -> list[dict]:
                 meta = json.load(f)
             models.append({
                 "name": meta.get("model_name", d.name),
+                "architecture": meta.get("architecture", "unet"),
                 "dataset": meta.get("dataset_name", ""),
                 "created": meta.get("created", ""),
                 "best_event_f1": meta.get("best_metrics", {}).get("event_f1", 0),
@@ -562,8 +650,13 @@ def list_models() -> list[dict]:
     return models
 
 
-def load_trained_model(model_name: str) -> tuple[SeizureUNet, dict]:
+def load_trained_model(
+    model_name: str,
+) -> tuple[SeizureUNet | BENDRSeizureModel, dict]:
     """Load a trained model and its metadata.
+
+    Supports both U-Net and BENDR architectures.  The architecture is
+    determined from the saved metadata.
 
     Parameters
     ----------
@@ -579,15 +672,32 @@ def load_trained_model(model_name: str) -> tuple[SeizureUNet, dict]:
     with open(meta_path) as f:
         metadata = json.load(f)
 
-    model = build_model(
-        n_eeg_channels=metadata["n_eeg_channels"],
-        include_activity=metadata.get("include_activity", False),
-        n_activity_channels=metadata.get("n_activity_channels", 0),
-        base_filters=metadata.get("train_config", {}).get("base_filters", 32),
-        depth=metadata.get("train_config", {}).get("depth", 4),
-        dropout=0.0,  # no dropout at inference
-        n_classes=metadata.get("n_classes", 1),  # backward compat: old models have 1
-    )
+    architecture = metadata.get("architecture", "unet")
+    tc = metadata.get("train_config", {})
+
+    if architecture == "bendr":
+        n_in = metadata.get("n_eeg_channels", 1)
+        if metadata.get("include_activity", False):
+            n_in += metadata.get("n_activity_channels", 0)
+        model = build_bendr_model(
+            n_eeg_channels=n_in,
+            encoder_h=tc.get("encoder_h", 512),
+            n_classes=metadata.get("n_classes", 2),
+            context_layers=tc.get("context_layers", 8),
+            context_heads=tc.get("context_heads", 8),
+            finetuning=False,  # no masking at inference
+            decoder_dropout=0.0,  # no dropout at inference
+        )
+    else:
+        model = build_model(
+            n_eeg_channels=metadata["n_eeg_channels"],
+            include_activity=metadata.get("include_activity", False),
+            n_activity_channels=metadata.get("n_activity_channels", 0),
+            base_filters=tc.get("base_filters", 32),
+            depth=tc.get("depth", 4),
+            dropout=0.0,  # no dropout at inference
+            n_classes=metadata.get("n_classes", 1),
+        )
 
     weights_path = model_dir / "best_model.pt"
     state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)

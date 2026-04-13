@@ -66,6 +66,7 @@ def predict_seizures(
     # Load model
     model, metadata = load_trained_model(model_name)
 
+    architecture = metadata.get("architecture", "unet")
     target_fs = metadata.get("target_fs", 250)
     window_sec = metadata.get("window_sec", 60)
     include_activity = metadata.get("include_activity", False)
@@ -194,6 +195,7 @@ def predict_seizures(
             animal_id=animal_id,
             start_event_id=event_id,
             convulsive_probs=avg_conv,
+            architecture=architecture,
         )
         event_id += len(ch_events)
         all_events.extend(ch_events)
@@ -214,6 +216,7 @@ def _extract_events(
     animal_id: str = "",
     start_event_id: int = 1,
     convulsive_probs: np.ndarray | None = None,
+    architecture: str = "unet",
 ) -> list[DetectedEvent]:
     """Convert binary prediction array to DetectedEvent list.
 
@@ -274,8 +277,9 @@ def _extract_events(
         confidence = float(np.mean(seg_probs))
 
         # Convulsive prediction for this segment
+        method = "ml_bendr" if architecture == "bendr" else "ml_unet"
         feat = {
-            "detection_method": "ml_unet",
+            "detection_method": method,
             "peak_probability": round(float(np.max(seg_probs)), 3),
             "mean_probability": round(confidence, 3),
         }

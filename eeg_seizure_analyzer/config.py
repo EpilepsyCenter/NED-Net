@@ -257,6 +257,20 @@ class EnsembleParams:
 
 
 @dataclass
+class BENDRParams:
+    """Parameters for BENDR-based seizure detection.
+
+    Used when running a fine-tuned BENDR model in the Detection tab.
+    """
+
+    model_name: str = ""            # trained model to use for detection
+    threshold: float = 0.5          # probability threshold for seizure
+    min_duration_sec: float = 3.0   # discard events shorter than this
+    merge_gap_sec: float = 2.0      # merge events closer than this
+    overlap_sec: float = 15.0       # sliding window overlap
+
+
+@dataclass
 class PreprocessParams:
     """Preprocessing parameters."""
 
