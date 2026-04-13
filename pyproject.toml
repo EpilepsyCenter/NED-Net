@@ -21,6 +21,7 @@ dev = ["pytest>=7.0", "pytest-cov"]
 
 [project.scripts]
 eeg-convert = "eeg_seizure_analyzer.io.adicht_to_edf:main"
+eeg-bendr-pretrain = "eeg_seizure_analyzer.ml.bendr_pretrain:main"
 
 [build-system]
 requires = ["setuptools>=42"]
