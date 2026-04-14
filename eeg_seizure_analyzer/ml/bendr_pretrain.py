@@ -58,18 +58,26 @@ class EdfStreamDataset(IterableDataset):
     Uses pyedflib's ``readSignal(ch, start, n)`` for memory-efficient
     random-access reads.  Each worker handles a shard of the file list.
 
+    Each channel is treated as an **independent** training example, yielding
+    tensors of shape ``(1, segment_samples)``.  This means an 8-channel EDF
+    file effectively produces 8× the training data, each channel contributing
+    its own single-channel segments.  This matches BENDR's single-channel
+    encoder architecture and maximises the use of multi-channel recordings.
+
     Parameters
     ----------
     edf_paths : list[str]
         Paths to EDF files.
     channels : list[int]
         Channel indices to read (typically EEG channels only).
+        Each channel is yielded as a separate ``(1, segment_samples)``
+        training example.
     segment_sec : float
         Length of each training segment in seconds.
     target_fs : float
         Target sampling rate.  Files at different rates are resampled.
     segments_per_file : int or None
-        Number of random segments to draw per file per epoch.
+        Number of random segments to draw per file **per channel** per epoch.
         If None, computed from file duration to cover ~80% of data.
     shuffle : bool
         Shuffle file order within each worker's shard.
@@ -109,13 +117,13 @@ class EdfStreamDataset(IterableDataset):
             print(f"Warning: skipping {path}: {e}", file=sys.stderr)
             return None
 
-    def _read_segment(
-        self, path: str, fs: float, start_sample: int,
+    def _read_single_channel(
+        self, path: str, ch: int, fs: float, start_sample: int,
     ) -> np.ndarray | None:
-        """Read a single segment from an EDF file.
+        """Read a single-channel segment from an EDF file.
 
-        Returns array of shape ``(n_channels, segment_samples)`` at
-        ``target_fs``, or None if reading fails.
+        Returns array of shape ``(1, segment_samples)`` at
+        ``target_fs``, or None if reading fails or the signal is bad.
         """
         try:
             import pyedflib
@@ -123,11 +131,11 @@ class EdfStreamDataset(IterableDataset):
 
             f = pyedflib.EdfReader(path)
             try:
-                data = np.zeros((len(self.channels), n_read), dtype=np.float32)
-                for i, ch in enumerate(self.channels):
-                    data[i] = f.readSignal(ch, start_sample, n_read).astype(np.float32)
+                raw = f.readSignal(ch, start_sample, n_read).astype(np.float32)
             finally:
                 f.close()
+
+            data = raw.reshape(1, -1)
 
             # Resample if needed
             if abs(fs - self.target_fs) > 0.5:
@@ -140,7 +148,7 @@ class EdfStreamDataset(IterableDataset):
                     data = data[:, :self.segment_samples]
                 else:
                     pad = np.zeros(
-                        (data.shape[0], self.segment_samples - data.shape[1]),
+                        (1, self.segment_samples - data.shape[1]),
                         dtype=np.float32,
                     )
                     data = np.concatenate([data, pad], axis=1)
@@ -157,7 +165,7 @@ class EdfStreamDataset(IterableDataset):
             return None
 
     def __iter__(self):
-        """Yield ``(n_channels, segment_samples)`` tensors."""
+        """Yield ``(1, segment_samples)`` tensors — one per channel per segment."""
         # Handle multi-worker sharding
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None:
@@ -180,7 +188,7 @@ class EdfStreamDataset(IterableDataset):
             n_samples = info["n_samples"]
             segment_samples_native = int(self.segment_sec * fs)
 
-            # How many segments can we draw from this file?
+            # How many segments can we draw from this file per channel?
             max_segments = max(1, (n_samples - segment_samples_native) // segment_samples_native)
             if self.segments_per_file is not None:
                 n_segments = min(self.segments_per_file, max_segments)
@@ -188,16 +196,22 @@ class EdfStreamDataset(IterableDataset):
                 # Cover ~80% of the file
                 n_segments = max(1, int(max_segments * 0.8))
 
-            # Random start positions
+            # Random start positions (shared across channels for this file)
             max_start = n_samples - segment_samples_native
             if max_start <= 0:
                 continue
             starts = np.random.randint(0, max_start, size=n_segments)
 
+            # Yield each channel independently as a (1, samples) example.
+            # Shuffle channels within each segment for better mixing.
+            ch_order = list(self.channels)
             for start in starts:
-                segment = self._read_segment(path, fs, int(start))
-                if segment is not None:
-                    yield torch.from_numpy(segment)
+                if self.shuffle:
+                    np.random.shuffle(ch_order)
+                for ch in ch_order:
+                    segment = self._read_single_channel(path, ch, fs, int(start))
+                    if segment is not None:
+                        yield torch.from_numpy(segment)
 
 
 def find_edf_files(data_dir: str, recursive: bool = True) -> list[str]:
@@ -246,6 +260,8 @@ def pretrain_bendr(
         Directory for checkpoints and logs.
     channels : list[int], optional
         EEG channel indices to use.  If None, uses channel 0.
+        Each channel is treated as an independent single-channel
+        training example (8 channels = 8× the training data).
     segment_sec : float
         Training segment length in seconds.
     target_fs : float
@@ -275,7 +291,9 @@ def pretrain_bendr(
     checkpoint_every : int
         Save checkpoint every N epochs.
     segments_per_file : int, optional
-        Random segments per file per epoch.  None = auto (~80% coverage).
+        Random segments per file per channel per epoch.  None = auto
+        (~80% coverage).  With 8 channels, each file yields
+        ``segments_per_file × 8`` training examples per epoch.
     val_fraction : float
         Fraction of files held out for validation.
     resume_from : str, optional
@@ -290,7 +308,15 @@ def pretrain_bendr(
 
     if channels is None:
         channels = [0]
-    n_channels = len(channels)
+
+    # Each channel is treated independently — the model always sees
+    # single-channel input (1, samples).  In typical rodent EEG setups,
+    # each channel corresponds to a separate animal, so they are
+    # genuinely independent recordings.
+    n_input_channels = 1
+
+    print(f"Using {len(channels)} channel(s) per file "
+          f"(each treated as independent single-channel input)")
 
     # ── Find EDF files ───────────────────────────────────────────
     all_paths = find_edf_files(data_dir)
@@ -345,7 +371,7 @@ def pretrain_bendr(
     print(f"Device: {device}")
 
     model = build_pretrain_model(
-        n_eeg_channels=n_channels,
+        n_eeg_channels=n_input_channels,
         encoder_h=encoder_h,
         context_layers=context_layers,
         context_heads=context_heads,
@@ -556,7 +582,10 @@ def main():
     )
     parser.add_argument(
         "--channels", type=int, nargs="+", default=None,
-        help="EEG channel indices to use (default: channel 0)",
+        help="EEG channel indices to use (default: channel 0). "
+             "Each channel is treated independently as a separate "
+             "training example, multiplying the effective dataset size. "
+             "E.g. --channels 0 1 2 3 4 5 6 7 gives 8× the data.",
     )
     parser.add_argument(
         "--segment-sec", type=float, default=60.0,
