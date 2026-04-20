@@ -1,6 +1,38 @@
 #!/bin/bash
-# NED-Net launcher — resolves repo root relative to the bundle, uses python3 from PATH
+# NED-Net launcher — finds a Python with dash+pywebview and runs the desktop entrypoint.
+# Logs to ~/Library/Logs/NED-Net.log so failures from Finder are diagnosable.
+
+LOG="$HOME/Library/Logs/NED-Net.log"
+mkdir -p "$(dirname "$LOG")"
+exec >"$LOG" 2>&1
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
-exec python3 -m eeg_seizure_analyzer.dash_app.desktop
+
+echo "[$(date)] NED-Net starting — repo: $REPO_ROOT"
+
+# Candidate interpreters, in order of preference.
+candidates=(
+    "$REPO_ROOT/.venv/bin/python"
+    "$(/bin/zsh -l -c 'command -v python3' 2>/dev/null)"
+    "$HOME/miniconda3/bin/python3"
+    "$HOME/anaconda3/bin/python3"
+    "$HOME/miniforge3/bin/python3"
+    "/opt/homebrew/bin/python3"
+    "/usr/local/bin/python3"
+    "/usr/bin/python3"
+)
+
+for py in "${candidates[@]}"; do
+    [ -z "$py" ] && continue
+    [ ! -x "$py" ] && continue
+    if "$py" -c "import webview, dash" >/dev/null 2>&1; then
+        echo "[$(date)] using python: $py"
+        exec "$py" -m eeg_seizure_analyzer.dash_app.desktop
+    fi
+done
+
+echo "[$(date)] ERROR: no Python with dash + pywebview found. Tried: ${candidates[*]}"
+osascript -e 'display dialog "NED-Net could not find a Python interpreter with dash and pywebview installed.\n\nSee ~/Library/Logs/NED-Net.log for details." buttons {"OK"} default button "OK" with icon stop with title "NED-Net"'
+exit 1
