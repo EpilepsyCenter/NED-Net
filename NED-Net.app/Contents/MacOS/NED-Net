@@ -1,0 +1,6 @@
+#!/bin/bash
+# NED-Net launcher — resolves repo root relative to the bundle, uses python3 from PATH
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+cd "$REPO_ROOT"
+exec python3 -m eeg_seizure_analyzer.dash_app.desktop
