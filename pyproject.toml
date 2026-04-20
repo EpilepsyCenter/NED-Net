@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 windows = ["adi-reader>=0.0.13", "cffi"]
 ml = ["torch>=2.0"]
+desktop = ["pywebview>=5.0"]
 dev = ["pytest>=7.0", "pytest-cov"]
 
 [project.scripts]
