@@ -91,6 +91,7 @@ class EdfStreamDataset(IterableDataset):
         target_fs: float = 256.0,
         segments_per_file: int | None = None,
         shuffle: bool = True,
+        bad_channels: dict[str, list[int]] | None = None,
     ):
         super().__init__()
         self.edf_paths = sorted(edf_paths)
@@ -100,6 +101,16 @@ class EdfStreamDataset(IterableDataset):
         self.segment_samples = int(segment_sec * target_fs)
         self.segments_per_file = segments_per_file
         self.shuffle = shuffle
+        # Map filename (basename) -> list of channel indices to exclude
+        self.bad_channels = bad_channels or {}
+
+    def _channels_for_file(self, path: str) -> list[int]:
+        """Return the channel list for a file with bad channels removed."""
+        basename = os.path.basename(path)
+        bad = set(self.bad_channels.get(basename, []))
+        if not bad:
+            return list(self.channels)
+        return [c for c in self.channels if c not in bad]
 
     def _scan_file(self, path: str) -> dict | None:
         """Get file metadata without loading data."""
@@ -204,7 +215,10 @@ class EdfStreamDataset(IterableDataset):
 
             # Yield each channel independently as a (1, samples) example.
             # Shuffle channels within each segment for better mixing.
-            ch_order = list(self.channels)
+            # Skip channels marked bad for this specific file.
+            ch_order = self._channels_for_file(path)
+            if not ch_order:
+                continue  # all channels bad in this file
             for start in starts:
                 if self.shuffle:
                     np.random.shuffle(ch_order)
@@ -249,6 +263,7 @@ def pretrain_bendr(
     segments_per_file: int | None = None,
     val_fraction: float = 0.05,
     resume_from: str | None = None,
+    bad_channels_file: str | None = None,
 ) -> dict:
     """Self-supervised pre-training of BENDR on unlabelled EDF files.
 
@@ -298,6 +313,12 @@ def pretrain_bendr(
         Fraction of files held out for validation.
     resume_from : str, optional
         Path to checkpoint to resume from.
+    bad_channels_file : str, optional
+        Path to a JSON file mapping EDF filenames (basenames) to lists
+        of channel indices to exclude for that file.  Example:
+        ``{"animal01.edf": [2, 5], "animal02.edf": [0]}``.
+        Files not listed use all channels.  Files where every channel
+        is excluded are skipped entirely.
 
     Returns
     -------
@@ -308,6 +329,19 @@ def pretrain_bendr(
 
     if channels is None:
         channels = [0]
+
+    # Load per-file bad channel exclusion map (if provided)
+    bad_channels: dict[str, list[int]] = {}
+    if bad_channels_file:
+        with open(bad_channels_file) as _f:
+            raw = json.load(_f)
+        # Normalise keys (basenames) and values (list of ints)
+        for k, v in raw.items():
+            bad_channels[os.path.basename(k)] = [int(c) for c in v]
+        n_excluded_files = sum(1 for v in bad_channels.values() if v)
+        n_total_excluded = sum(len(v) for v in bad_channels.values())
+        print(f"Loaded bad-channels map: {n_excluded_files} file(s) with "
+              f"{n_total_excluded} channel exclusion(s) total")
 
     # Each channel is treated independently — the model always sees
     # single-channel input (1, samples).  In typical rodent EEG setups,
@@ -342,6 +376,7 @@ def pretrain_bendr(
         target_fs=target_fs,
         segments_per_file=segments_per_file,
         shuffle=True,
+        bad_channels=bad_channels,
     )
     val_ds = EdfStreamDataset(
         val_paths, channels,
@@ -349,6 +384,7 @@ def pretrain_bendr(
         target_fs=target_fs,
         segments_per_file=max(1, (segments_per_file or 10) // 5),
         shuffle=False,
+        bad_channels=bad_channels,
     )
 
     train_loader = DataLoader(
@@ -625,6 +661,12 @@ def main():
                         help="Fraction of files for validation")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint to resume from")
+    parser.add_argument(
+        "--bad-channels", type=str, default=None,
+        help="JSON file mapping EDF filenames to lists of channel indices "
+             "to exclude. Example: {\"animal01.edf\": [2, 5]}. Files not "
+             "listed use all channels.",
+    )
 
     args = parser.parse_args()
 
@@ -650,6 +692,7 @@ def main():
         segments_per_file=args.segments_per_file,
         val_fraction=args.val_fraction,
         resume_from=args.resume,
+        bad_channels_file=args.bad_channels,
     )
 
 
