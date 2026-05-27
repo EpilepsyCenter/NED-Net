@@ -17,12 +17,20 @@ dependencies = [
 [project.optional-dependencies]
 windows = ["adi-reader>=0.0.13", "cffi"]
 ml = ["torch>=2.0"]
-desktop = ["pywebview>=5.0"]
 dev = ["pytest>=7.0", "pytest-cov"]
+# Native desktop window (pywebview) + production WSGI server.
+# Windows/macOS pull their webview backend automatically; Linux uses
+# pywebview's Qt backend, which bundles its own web engine.
+desktop = [
+    "waitress>=3.0",
+    "pywebview>=5.0; sys_platform != 'linux'",
+    "pywebview[qt]>=5.0; sys_platform == 'linux'",
+]
 
 [project.scripts]
 eeg-convert = "eeg_seizure_analyzer.io.adicht_to_edf:main"
 eeg-bendr-pretrain = "eeg_seizure_analyzer.ml.bendr_pretrain:main"
+nednet = "eeg_seizure_analyzer.dash_app.desktop:main"
 
 [build-system]
 requires = ["setuptools>=42"]

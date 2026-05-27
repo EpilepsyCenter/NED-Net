@@ -151,7 +151,17 @@ To directly open and convert ADICHT (LabChart) files:
 pip install -e ".[windows]"
 ```
 
-### 2.7 Verify the installation
+### 2.7 Install the desktop app (optional)
+
+By default NED-Net opens in your web browser. If you would rather run it as a **standalone desktop application** — its own window, with the NED-Net icon, no browser tab — install the desktop extra:
+
+```bash
+pip install -e ".[desktop]"
+```
+
+This adds **pywebview** (the native window) and **waitress** (a production-grade server, so you won't see the "development server" warning). The window technology is chosen automatically: WebView2 on Windows, WKWebView on macOS, and a bundled Qt web engine on Linux.
+
+### 2.8 Verify the installation
 
 Run the app to verify everything is working:
 
@@ -176,6 +186,16 @@ python -m eeg_seizure_analyzer.dash_app.main
 ```
 
 Then open **http://127.0.0.1:8050** in your browser (Chrome or Firefox recommended).
+
+**As a native desktop app (optional).** If you installed the desktop extra (section 2.7), you can instead open NED-Net in its own window — no browser, no terminal needed. Double-click the launcher for your system:
+
+| Platform | Launcher | First-run step |
+|----------|----------|----------------|
+| Windows | `Start NED-Net (Native).bat` | — |
+| macOS | `NED-Net.app` (double-click in Finder) | — |
+| Linux | `start-nednet-native.sh` | `chmod +x start-nednet-native.sh` |
+
+Or run it from the terminal with the `nednet` command (equivalent to `python -m eeg_seizure_analyzer.dash_app.desktop`). The desktop app uses port **8051** and picks another free port automatically if it is busy, so it can run at the same time as the browser version.
 
 ### 3.2 The interface
 

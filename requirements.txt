@@ -1,0 +1,28 @@
+# NED-Net runtime requirements (cross-platform).
+#
+#   pip install -r requirements.txt
+#
+# Equivalent to installing the package with the desktop extra:
+#   pip install -e ".[desktop]"
+
+# ── Core ──────────────────────────────────────────────────────────────
+numpy
+scipy
+pandas
+pyEDFlib
+plotly
+dash
+dash-bootstrap-components
+dash-ag-grid
+
+# ── Native desktop window + production WSGI server ────────────────────
+waitress>=3.0
+pywebview>=5.0; sys_platform != "linux"
+pywebview[qt]>=5.0; sys_platform == "linux"   # Qt backend bundles its web engine
+
+# ── Optional: machine learning (uncomment to enable training / CNN) ───
+# For CUDA builds, install torch separately per https://pytorch.org/get-started/locally/
+# torch
+
+# ── Optional: LabChart (ADICHT) support on Windows ────────────────────
+# adi-reader; sys_platform == "win32"

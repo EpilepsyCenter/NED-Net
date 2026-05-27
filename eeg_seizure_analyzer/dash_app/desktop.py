@@ -1,87 +1,147 @@
-"""Launch NED-Net as a standalone desktop window using pywebview.
+"""Native desktop window for NED-Net.
 
-Usage
------
+Serves the Dash app with a production WSGI server (waitress) on a background
+thread and displays it inside a native OS window — WebView2 on Windows,
+WKWebView on macOS, Qt WebKit on Linux — instead of a browser tab.
+
+Launch with:
     python -m eeg_seizure_analyzer.dash_app.desktop
-
-This opens NED-Net in its own native window (no browser needed).
+    nednet                      # console script (after `pip install -e ".[desktop]"`)
+or the platform launcher:
+    Windows : "Start NED-Net (Native).bat"
+    macOS   : NED-Net.app  (double-click in Finder)
+    Linux   : "start-nednet-native.sh"
 """
 
 from __future__ import annotations
 
+import logging
+import socket
 import sys
-import time
 import threading
+import time
 from pathlib import Path
 
+import webview
+from waitress import serve
 
-def _wait_for_server(url: str, timeout: float = 15.0):
-    """Block until the Dash server responds or timeout."""
-    import urllib.request
-    import urllib.error
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+from eeg_seizure_analyzer.dash_app.main import app
+
+HOST = "127.0.0.1"
+PREFERRED_PORT = 8051  # native app; falls back to a free port if busy
+TITLE = "NED-Net"
+WIN_WIDTH = 1440
+WIN_HEIGHT = 900
+MIN_SIZE = (960, 640)
+SERVER_THREADS = 8  # waitress worker threads
+
+_ASSETS = Path(__file__).parent / "assets"
+
+
+def _icon_path() -> str | None:
+    """Return the platform-appropriate window/dock icon, or None if missing.
+
+    Windows needs a real ``.ico``; macOS uses ``.icns`` (also used by the
+    NED-Net.app bundle); Linux loads the ``.png``.
+    """
+    if sys.platform.startswith("win"):
+        name = "nednet_icon.ico"
+    elif sys.platform == "darwin":
+        name = "nednet.icns"
+    else:
+        name = "nednet_icon.png"
+    icon = _ASSETS / name
+    return str(icon) if icon.is_file() else None
+
+
+def _set_macos_app_identity(icon: str | None) -> None:
+    """Set the macOS dock icon and app name when launched via ``python -m``.
+
+    (When launched from NED-Net.app, the bundle's Info.plist already does this,
+    but running the module directly otherwise shows up as a generic "Python".)
+    """
+    try:
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = TITLE
+            info["CFBundleDisplayName"] = TITLE
+    except ImportError:
+        pass
+
+    if icon:
         try:
-            urllib.request.urlopen(url, timeout=1)
-            return True
-        except (urllib.error.URLError, ConnectionError, OSError):
-            time.sleep(0.2)
+            from AppKit import NSApplication, NSImage
+            img = NSImage.alloc().initWithContentsOfFile_(icon)
+            if img:
+                NSApplication.sharedApplication().setApplicationIconImage_(img)
+        except ImportError:
+            pass
+
+
+def _pick_port(preferred: int) -> int:
+    """Return ``preferred`` if free, otherwise an OS-assigned free port.
+
+    Lets the native launcher coexist with the browser launcher (or a second
+    instance) instead of crashing on "address already in use".
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((HOST, preferred))
+            return preferred
+        except OSError:
+            pass  # taken — fall through to an ephemeral port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((HOST, 0))
+        return s.getsockname()[1]
+
+
+def _run_server(port: int) -> None:
+    """Serve the Dash WSGI app via waitress (blocking) — runs in a daemon thread."""
+    logging.getLogger("waitress").setLevel(logging.ERROR)  # quiet startup chatter
+    serve(app.server, host=HOST, port=port, threads=SERVER_THREADS)
+
+
+def _wait_until_up(host: str, port: int, timeout: float = 30.0) -> bool:
+    """Block until the server accepts TCP connections, or timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex((host, port)) == 0:
+                return True
+        time.sleep(0.15)
     return False
 
 
-def main():
-    import webview
-
-    # Resolve icon path
-    assets_dir = Path(__file__).parent / "assets"
-    icns_path = assets_dir / "nednet.icns"
-    png_path = assets_dir / "nednet_logo.png"
-    icon_path = str(icns_path if icns_path.exists() else png_path)
-
-    # Set macOS dock icon and app name
+def main() -> None:
+    icon = _icon_path()
     if sys.platform == "darwin":
-        try:
-            from Foundation import NSBundle
-            bundle = NSBundle.mainBundle()
-            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-            if info:
-                info["CFBundleName"] = "NED-Net"
-                info["CFBundleDisplayName"] = "NED-Net"
-        except ImportError:
-            pass
+        _set_macos_app_identity(icon)
 
-        try:
-            from AppKit import NSApplication, NSImage
-            ns_app = NSApplication.sharedApplication()
-            icon = NSImage.alloc().initWithContentsOfFile_(icon_path)
-            if icon:
-                ns_app.setApplicationIconImage_(icon)
-        except ImportError:
-            pass
-
-    # Start Dash server in a background thread
-    from eeg_seizure_analyzer.dash_app.main import app
+    port = _pick_port(PREFERRED_PORT)
 
     server_thread = threading.Thread(
-        target=lambda: app.run(debug=False, port=8050, use_reloader=False),
-        daemon=True,
+        target=_run_server, args=(port,), daemon=True, name="ned-net-server"
     )
     server_thread.start()
 
-    # Wait for server to be ready before opening the window
-    print("Waiting for server to start...")
-    if not _wait_for_server("http://127.0.0.1:8050"):
-        print("Warning: server did not respond in time, opening window anyway")
+    if not _wait_until_up(HOST, port):
+        raise RuntimeError(
+            f"NED-Net server did not come up on {HOST}:{port} within 30s."
+        )
 
-    # Open native window — this blocks until the window is closed
-    window = webview.create_window(
-        "NED-Net",
-        "http://127.0.0.1:8050",
-        width=1400,
-        height=900,
-        min_size=(1024, 700),
+    webview.create_window(
+        TITLE,
+        f"http://{HOST}:{port}",
+        width=WIN_WIDTH,
+        height=WIN_HEIGHT,
+        min_size=MIN_SIZE,
     )
-    webview.start(gui="cef" if sys.platform == "linux" else None)
+    # Blocks on the native GUI event loop; returns when the window is closed.
+    # The server thread is a daemon, so it dies with the process on return.
+    webview.start(icon=icon)
 
 
 if __name__ == "__main__":

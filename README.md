@@ -84,15 +84,46 @@ To directly open and convert ADICHT (LabChart) files on Windows:
 pip install -e ".[windows]"
 ```
 
+### Desktop app (native window)
+
+To run NED-Net as a standalone desktop app — its own window, no browser tab — install the desktop extra:
+
+```bash
+pip install -e ".[desktop]"
+```
+
+This adds **pywebview** (native window) and **waitress** (production WSGI server). The webview backend is automatic on Windows (WebView2) and macOS (WKWebView); on Linux the Qt backend is installed and bundles its own web engine.
+
 ---
 
 ## Quick start
+
+### In a browser
 
 ```bash
 python -m eeg_seizure_analyzer.dash_app.main
 ```
 
 Open http://127.0.0.1:8050 in your browser.
+
+### As a native desktop app
+
+After installing the desktop extra, launch a standalone window with:
+
+```bash
+nednet
+# or:  python -m eeg_seizure_analyzer.dash_app.desktop
+```
+
+Or double-click the launcher for your platform (no terminal needed):
+
+| Platform | Launcher |
+|---|---|
+| Windows | `Start NED-Net (Native).bat` |
+| macOS | `NED-Net.app` (double-click in Finder) |
+| Linux | `start-nednet-native.sh` (first run: `chmod +x` it) |
+
+The native app serves on `127.0.0.1:8051` (auto-selecting a free port if busy), so it can run alongside the browser version.
 
 ### Basic workflow
 
