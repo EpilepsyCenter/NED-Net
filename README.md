@@ -35,7 +35,7 @@ NED-Net combines multiple rule-based detection algorithms (Spike-Train, Spectral
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/marcoledri/NED-Net.git
+git clone https://github.com/EpilepsyCenter/NED-Net.git
 cd NED-Net
 ```
 
@@ -280,4 +280,4 @@ This project is currently under development. License information will be added i
 
 If you use NED-Net in your research, please cite:
 
-> Ledri, M. (2026). NED-Net: Neural Event Detection Network for automated seizure detection in rodent EEG. GitHub. https://github.com/marcoledri/NED-Net
+> Ledri, M. (2026). NED-Net: Neural Event Detection Network for automated seizure detection in rodent EEG. GitHub. https://github.com/EpilepsyCenter/NED-Net

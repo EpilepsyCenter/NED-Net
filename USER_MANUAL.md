@@ -76,7 +76,7 @@ Download or clone the NED-Net repository to your computer:
 
 **Option A — Git clone (recommended):**
 ```bash
-git clone https://github.com/marcoledri/NED-Net.git
+git clone https://github.com/EpilepsyCenter/NED-Net.git
 cd NED-Net
 ```
 
