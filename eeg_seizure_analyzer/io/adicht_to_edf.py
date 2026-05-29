@@ -12,7 +12,7 @@ import sys
 import numpy as np
 
 
-def convert_adicht_to_edf(adicht_path: str, edf_path: str) -> None:
+def convert_adicht_to_edf(adicht_path: str, edf_path: str, mode: str = "fast") -> None:
     """Convert a .adicht file to EDF+ with annotations preserved.
 
     Parameters
@@ -21,6 +21,11 @@ def convert_adicht_to_edf(adicht_path: str, edf_path: str) -> None:
         Input .adicht file path.
     edf_path : str
         Output .edf file path.
+    mode : {"fast", "blocked"}
+        "fast" hands the full per-channel arrays to pyedflib in a single
+        writeSamples call (C-level blocking, ~10-50x faster).
+        "blocked" keeps the original Python-side 1-second loop as a fallback
+        if the fast path misbehaves on a given recording.
     """
     if sys.platform != "win32":
         raise RuntimeError("adicht conversion is only available on Windows.")
@@ -63,21 +68,35 @@ def convert_adicht_to_edf(adicht_path: str, edf_path: str) -> None:
             writer.setDigitalMinimum(i, -32768)
             writer.setDigitalMaximum(i, 32767)
 
-        # Write data in 1-second blocks
-        samples_per_block = int(recording.fs)
-        n_blocks = int(np.ceil(recording.n_samples / samples_per_block))
+        if mode == "fast":
+            # Single C-level call; pyedflib handles internal block packing.
+            # EDF stores fixed-duration records, so pad each channel up to a
+            # whole-second multiple (matches the blocked path's behaviour).
+            samples_per_block = int(recording.fs)
+            remainder = recording.n_samples % samples_per_block
+            pad = (samples_per_block - remainder) if remainder else 0
+            if pad:
+                padded = np.pad(recording.data, ((0, 0), (0, pad)))
+            else:
+                padded = recording.data
+            writer.writeSamples([padded[ch] for ch in range(recording.n_channels)])
+        elif mode == "blocked":
+            # Original Python-side 1-second block loop (slow, kept as fallback).
+            samples_per_block = int(recording.fs)
+            n_blocks = int(np.ceil(recording.n_samples / samples_per_block))
 
-        for block_idx in range(n_blocks):
-            start = block_idx * samples_per_block
-            end = min(start + samples_per_block, recording.n_samples)
-            block_data = []
-            for ch in range(recording.n_channels):
-                segment = recording.data[ch, start:end]
-                # Pad last block if needed
-                if len(segment) < samples_per_block:
-                    segment = np.pad(segment, (0, samples_per_block - len(segment)))
-                block_data.append(segment)
-            writer.writeSamples(block_data)
+            for block_idx in range(n_blocks):
+                start = block_idx * samples_per_block
+                end = min(start + samples_per_block, recording.n_samples)
+                block_data = []
+                for ch in range(recording.n_channels):
+                    segment = recording.data[ch, start:end]
+                    if len(segment) < samples_per_block:
+                        segment = np.pad(segment, (0, samples_per_block - len(segment)))
+                    block_data.append(segment)
+                writer.writeSamples(block_data)
+        else:
+            raise ValueError(f"Unknown mode: {mode!r} (expected 'fast' or 'blocked')")
 
         # Write annotations
         for ann in recording.annotations:
@@ -87,7 +106,7 @@ def convert_adicht_to_edf(adicht_path: str, edf_path: str) -> None:
     finally:
         writer.close()
 
-    print(f"Converted: {adicht_path} -> {edf_path}")
+    print(f"Converted: {adicht_path} -> {edf_path} [mode={mode}]")
     print(f"  Channels: {recording.n_channels}")
     print(f"  Duration: {recording.duration_sec:.1f}s ({recording.duration_sec / 3600:.2f}h)")
     print(f"  Sampling rate: {recording.fs} Hz")
@@ -98,8 +117,15 @@ def main():
     parser = argparse.ArgumentParser(description="Convert .adicht to EDF+")
     parser.add_argument("input", help="Input .adicht file")
     parser.add_argument("output", help="Output .edf file")
+    parser.add_argument(
+        "--mode",
+        choices=("fast", "blocked"),
+        default="fast",
+        help="Write path: 'fast' (single C-level writeSamples, default) or "
+             "'blocked' (legacy 1-second Python loop, fallback if 'fast' fails).",
+    )
     args = parser.parse_args()
-    convert_adicht_to_edf(args.input, args.output)
+    convert_adicht_to_edf(args.input, args.output, mode=args.mode)
 
 
 if __name__ == "__main__":

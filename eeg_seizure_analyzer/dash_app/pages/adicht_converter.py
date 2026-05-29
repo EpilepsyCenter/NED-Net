@@ -139,6 +139,20 @@ def layout(sid: str | None) -> html.Div:
                 className="mb-3",
             ),
 
+            # Write mode
+            dbc.Checkbox(
+                id="ac-fast-write",
+                label="Fast write mode (single C-level call, ~10–50× faster)",
+                value=True,
+                className="mb-3",
+            ),
+            html.Div(
+                "Disable to fall back to the legacy 1-second block loop if "
+                "the fast path produces a malformed EDF.",
+                style={"color": "var(--ned-text-muted)", "fontSize": "0.78rem",
+                       "marginTop": "-8px", "marginBottom": "16px"},
+            ),
+
             # Convert button
             dbc.Button(
                 "Convert to EDF",
@@ -213,10 +227,11 @@ def browse_adicht(n_clicks, current):
     Input("ac-convert-btn", "n_clicks"),
     State("ac-file-list", "value"),
     State("ac-output-folder", "value"),
+    State("ac-fast-write", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def start_convert(n_clicks, file_list, output_folder, sid):
+def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
     if not n_clicks:
         return no_update, no_update, no_update
 
@@ -262,9 +277,10 @@ def start_convert(n_clicks, file_list, output_folder, sid):
         "results": [],
     }
 
+    mode = "fast" if fast_write else "blocked"
     t = threading.Thread(
         target=_run_conversions,
-        args=(sid, conversions),
+        args=(sid, conversions, mode),
         daemon=True,
     )
     t.start()
@@ -276,7 +292,7 @@ def start_convert(n_clicks, file_list, output_folder, sid):
     )
 
 
-def _run_conversions(sid: str, conversions: list[tuple[str, str]]):
+def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "fast"):
     """Background: convert each ADICHT file to EDF."""
     from eeg_seizure_analyzer.io.adicht_to_edf import convert_adicht_to_edf
 
@@ -287,7 +303,7 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]]):
         progress["current_file"] = os.path.basename(adicht_path)
 
         try:
-            convert_adicht_to_edf(adicht_path, edf_path)
+            convert_adicht_to_edf(adicht_path, edf_path, mode=mode)
             progress["results"].append({
                 "file": os.path.basename(adicht_path),
                 "output": edf_path,
