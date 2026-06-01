@@ -88,7 +88,7 @@ class EdfStreamDataset(IterableDataset):
         edf_paths: list[str],
         channels: list[int],
         segment_sec: float = 60.0,
-        target_fs: float = 256.0,
+        target_fs: float = 250.0,
         segments_per_file: int | None = None,
         shuffle: bool = True,
         bad_channels: dict[str, list[int]] | None = None,
@@ -253,7 +253,7 @@ def pretrain_bendr(
     output_dir: str,
     channels: list[int] | None = None,
     segment_sec: float = 60.0,
-    target_fs: float = 256.0,
+    target_fs: float = 250.0,
     encoder_h: int = 512,
     context_layers: int = 8,
     context_heads: int = 8,
@@ -287,7 +287,8 @@ def pretrain_bendr(
     segment_sec : float
         Training segment length in seconds.
     target_fs : float
-        Target sampling rate (256 Hz for BENDR).
+        Target sampling rate. Defaults to 250 Hz to match fine-tuning
+        and inference (dataset.py / predict.py).
     encoder_h : int
         Encoder hidden dimension.
     context_layers, context_heads : int
@@ -634,8 +635,8 @@ def main():
         "--segment-sec", type=float, default=60.0,
         help="Training segment length in seconds",
     )
-    parser.add_argument("--target-fs", type=float, default=256.0,
-                        help="Target sampling rate")
+    parser.add_argument("--target-fs", type=float, default=250.0,
+                        help="Target sampling rate (must match fine-tuning at 250 Hz)")
     parser.add_argument("--encoder-h", type=int, default=512,
                         help="Encoder hidden dimension")
     parser.add_argument("--context-layers", type=int, default=8,
