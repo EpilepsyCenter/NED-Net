@@ -15,6 +15,15 @@ import numpy as np
 ProgressCallback = Callable[[str, float], None]
 
 
+class ConversionCancelled(Exception):
+    """Raised by a ``progress_cb`` to request that conversion stop ASAP.
+
+    The conversion will abort at the next callback boundary (between EDF
+    write chunks). Callers should treat this as an expected outcome, not
+    an error.
+    """
+
+
 def convert_adicht_to_edf(
     adicht_path: str,
     edf_path: str,
@@ -44,6 +53,8 @@ def convert_adicht_to_edf(
             return
         try:
             progress_cb(stage, float(fraction))
+        except ConversionCancelled:
+            raise
         except Exception:
             pass
 
@@ -91,9 +102,10 @@ def convert_adicht_to_edf(
             writer.setDigitalMaximum(i, 32767)
 
         if mode == "fast":
-            # Single C-level call; pyedflib handles internal block packing.
-            # EDF stores fixed-duration records, so pad each channel up to a
-            # whole-second multiple (matches the blocked path's behaviour).
+            # Pad each channel up to a whole-second multiple (EDF records are
+            # fixed duration) then write in ~50 large chunks so progress emits
+            # during the operation. Still ~10-50x faster than the per-second
+            # blocked loop because each chunk contains many records.
             samples_per_block = int(recording.fs)
             remainder = recording.n_samples % samples_per_block
             pad = (samples_per_block - remainder) if remainder else 0
@@ -101,9 +113,19 @@ def convert_adicht_to_edf(
                 padded = np.pad(recording.data, ((0, 0), (0, pad)))
             else:
                 padded = recording.data
+
+            total_samples = padded.shape[1]
+            total_records = total_samples // samples_per_block
+            records_per_chunk = max(1, total_records // 50)
+            samples_per_chunk = records_per_chunk * samples_per_block
+
             _emit("writing", 0.0)
-            writer.writeSamples([padded[ch] for ch in range(recording.n_channels)])
-            _emit("writing", 1.0)
+            for start in range(0, total_samples, samples_per_chunk):
+                end = min(start + samples_per_chunk, total_samples)
+                writer.writeSamples(
+                    [padded[ch, start:end] for ch in range(recording.n_channels)]
+                )
+                _emit("writing", end / total_samples)
         elif mode == "blocked":
             # Original Python-side 1-second block loop (slow, kept as fallback).
             samples_per_block = int(recording.fs)

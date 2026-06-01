@@ -153,12 +153,19 @@ def layout(sid: str | None) -> html.Div:
                        "marginTop": "-8px", "marginBottom": "16px"},
             ),
 
-            # Convert button
+            # Convert / Stop buttons
             dbc.Button(
                 "Convert to EDF",
                 id="ac-convert-btn",
                 className="btn-ned-primary",
                 disabled=not _IS_WINDOWS,
+            ),
+            dbc.Button(
+                "Stop",
+                id="ac-stop-btn",
+                className="btn-ned-secondary",
+                style={"marginLeft": "8px"},
+                disabled=True,
             ),
 
             # Progress
@@ -224,6 +231,7 @@ def browse_adicht(n_clicks, current):
     Output("ac-status", "children"),
     Output("ac-progress-interval", "disabled"),
     Output("ac-convert-btn", "disabled"),
+    Output("ac-stop-btn", "disabled"),
     Input("ac-convert-btn", "n_clicks"),
     State("ac-file-list", "value"),
     State("ac-output-folder", "value"),
@@ -233,26 +241,26 @@ def browse_adicht(n_clicks, current):
 )
 def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
     if not n_clicks:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     if not _IS_WINDOWS:
-        return alert("Conversion is only available on Windows.", "danger"), True, False
+        return alert("Conversion is only available on Windows.", "danger"), True, False, True
 
     # Parse file list
     paths = [p.strip() for p in (file_list or "").split("\n") if p.strip()]
     if not paths:
-        return alert("No files specified.", "warning"), True, False
+        return alert("No files specified.", "warning"), True, False, True
 
     # Validate files exist and are .adicht
     for p in paths:
         if not os.path.isfile(p):
-            return alert(f"File not found: {p}", "danger"), True, False
+            return alert(f"File not found: {p}", "danger"), True, False, True
         if not p.lower().endswith(".adicht"):
-            return alert(f"Not an ADICHT file: {p}", "danger"), True, False
+            return alert(f"Not an ADICHT file: {p}", "danger"), True, False, True
 
     # Validate output folder if specified
     if output_folder and not os.path.isdir(output_folder):
-        return alert(f"Output folder not found: {output_folder}", "danger"), True, False
+        return alert(f"Output folder not found: {output_folder}", "danger"), True, False, True
 
     # Build conversion list: (adicht_path, edf_path)
     conversions = []
@@ -264,7 +272,7 @@ def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
             edf = str(Path(p).with_suffix(".edf"))
 
         if os.path.exists(edf):
-            return alert(f"Output already exists: {edf}", "warning"), True, False
+            return alert(f"Output already exists: {edf}", "warning"), True, False, True
         conversions.append((p, edf))
 
     # Init progress
@@ -276,6 +284,8 @@ def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
         "file_pct": 0.0,
         "done": False,
         "error": None,
+        "cancel_requested": False,
+        "cancelled": False,
         "results": [],
     }
 
@@ -291,20 +301,31 @@ def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
         html.Div("Conversion started...", style={"color": "var(--ned-accent)"}),
         False,
         True,
+        False,
     )
 
 
 def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "fast"):
     """Background: convert each ADICHT file to EDF."""
-    from eeg_seizure_analyzer.io.adicht_to_edf import convert_adicht_to_edf
+    from eeg_seizure_analyzer.io.adicht_to_edf import (
+        ConversionCancelled,
+        convert_adicht_to_edf,
+    )
 
     progress = _convert_progress[sid]
 
     def _cb(stage: str, fraction: float) -> None:
+        if progress.get("cancel_requested"):
+            raise ConversionCancelled()
         progress["file_stage"] = stage
         progress["file_pct"] = fraction
 
     for i, (adicht_path, edf_path) in enumerate(conversions):
+        if progress.get("cancel_requested"):
+            progress["cancelled"] = True
+            progress["done"] = True
+            return
+
         progress["current"] = i
         progress["current_file"] = os.path.basename(adicht_path)
         progress["file_stage"] = "starting"
@@ -317,6 +338,16 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "
                 "output": edf_path,
                 "status": "ok",
             })
+        except ConversionCancelled:
+            # Delete the partial output — it's almost certainly invalid.
+            try:
+                if os.path.exists(edf_path):
+                    os.remove(edf_path)
+            except OSError:
+                pass
+            progress["cancelled"] = True
+            progress["done"] = True
+            return
         except Exception as e:
             progress["error"] = f"{os.path.basename(adicht_path)}: {e}"
             progress["done"] = True
@@ -335,6 +366,7 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "
     Output("ac-progress", "children"),
     Output("ac-progress-interval", "disabled", allow_duplicate=True),
     Output("ac-convert-btn", "disabled", allow_duplicate=True),
+    Output("ac-stop-btn", "disabled", allow_duplicate=True),
     Input("ac-progress-interval", "n_intervals"),
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -342,7 +374,7 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "
 def update_progress(n_intervals, sid):
     progress = _convert_progress.get(sid)
     if not progress:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     total = progress["total"]
     current = progress["current"]
@@ -384,7 +416,26 @@ def update_progress(n_intervals, sid):
         return html.Div([
             bar,
             alert(f"Error: {progress['error']}", "danger"),
-        ]), True, False
+        ]), True, False, True
+
+    if progress.get("cancelled"):
+        results = progress["results"]
+        _convert_progress.pop(sid, None)
+        completed_msg = (
+            f"Stopped. {len(results)} file(s) finished before cancellation; "
+            f"the in-progress file's partial output was deleted."
+            if results
+            else "Stopped before any file completed. Partial output deleted."
+        )
+        return html.Div([
+            dbc.Progress(
+                value=overall_pct,
+                label=f"Cancelled at {overall_pct}%",
+                color="warning",
+                className="mb-2",
+            ),
+            alert(completed_msg, "warning"),
+        ]), True, False, True
 
     if progress["done"]:
         _convert_progress.pop(sid, None)
@@ -410,7 +461,7 @@ def update_progress(n_intervals, sid):
                 style={"width": "100%", "fontSize": "0.85rem",
                        "marginTop": "12px"},
             ) if rows else None,
-        ]), True, False
+        ]), True, False, True
 
     if progress["current_file"]:
         stage_label = {
@@ -423,6 +474,9 @@ def update_progress(n_intervals, sid):
     else:
         status = "Starting..."
 
+    if progress.get("cancel_requested"):
+        status = f"Stopping... ({status})"
+
     children = [bar]
     if file_bar is not None:
         children.append(file_bar)
@@ -430,4 +484,26 @@ def update_progress(n_intervals, sid):
         html.Div(status, style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"})
     )
 
-    return html.Div(children), False, True
+    # Stop button stays enabled until cancellation has actually taken effect.
+    stop_disabled = bool(progress.get("cancel_requested"))
+    return html.Div(children), False, True, stop_disabled
+
+
+# ── Stop callback ───────────────────────────────────────────────────
+
+
+@callback(
+    Output("ac-stop-btn", "disabled", allow_duplicate=True),
+    Input("ac-stop-btn", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def stop_convert(n_clicks, sid):
+    """Signal the background thread to cancel at the next chunk boundary."""
+    if not n_clicks:
+        return no_update
+    progress = _convert_progress.get(sid)
+    if progress is None:
+        return True
+    progress["cancel_requested"] = True
+    return True
