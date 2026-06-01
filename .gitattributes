@@ -1,0 +1,10 @@
+# Force LF line endings for shell scripts, regardless of platform.
+# Without this, Git's autocrlf on Windows checkouts mangles .sh files
+# into CRLF, which Slurm and bash refuse to execute.
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Keep Windows-native scripts as CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
