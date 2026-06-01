@@ -272,6 +272,8 @@ def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
         "current": 0,
         "total": len(conversions),
         "current_file": "",
+        "file_stage": "",
+        "file_pct": 0.0,
         "done": False,
         "error": None,
         "results": [],
@@ -298,12 +300,18 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "
 
     progress = _convert_progress[sid]
 
+    def _cb(stage: str, fraction: float) -> None:
+        progress["file_stage"] = stage
+        progress["file_pct"] = fraction
+
     for i, (adicht_path, edf_path) in enumerate(conversions):
         progress["current"] = i
         progress["current_file"] = os.path.basename(adicht_path)
+        progress["file_stage"] = "starting"
+        progress["file_pct"] = 0.0
 
         try:
-            convert_adicht_to_edf(adicht_path, edf_path, mode=mode)
+            convert_adicht_to_edf(adicht_path, edf_path, mode=mode, progress_cb=_cb)
             progress["results"].append({
                 "file": os.path.basename(adicht_path),
                 "output": edf_path,
@@ -315,6 +323,8 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "
             return
 
     progress["current"] = len(conversions)
+    progress["file_stage"] = "done"
+    progress["file_pct"] = 1.0
     progress["done"] = True
 
 
@@ -336,15 +346,38 @@ def update_progress(n_intervals, sid):
 
     total = progress["total"]
     current = progress["current"]
-    pct = int((current / total) * 100) if total else 0
+    file_pct = float(progress.get("file_pct", 0.0))
+    file_stage = progress.get("file_stage", "")
+
+    # Overall pct counts completed files + fraction of current file.
+    if progress["done"]:
+        overall_frac = 1.0
+    elif total:
+        overall_frac = min(1.0, (current + file_pct) / total)
+    else:
+        overall_frac = 0.0
+    overall_pct = int(overall_frac * 100)
 
     bar = dbc.Progress(
-        value=pct,
-        label=f"{current}/{total}",
+        value=overall_pct,
+        label=f"{overall_pct}% ({current}/{total})",
         striped=True,
         animated=not progress["done"],
         className="mb-2",
     )
+
+    # Per-file bar (only while a single file is being processed).
+    file_bar = None
+    if not progress["done"] and total:
+        file_bar = dbc.Progress(
+            value=int(file_pct * 100),
+            label=f"{int(file_pct * 100)}%",
+            striped=True,
+            animated=True,
+            color="info",
+            className="mb-2",
+            style={"height": "12px"},
+        )
 
     if progress["error"]:
         _convert_progress.pop(sid, None)
@@ -379,9 +412,22 @@ def update_progress(n_intervals, sid):
             ) if rows else None,
         ]), True, False
 
-    status = f"Converting {progress['current_file']}..." if progress["current_file"] else "Starting..."
+    if progress["current_file"]:
+        stage_label = {
+            "starting": "starting",
+            "reading": "reading",
+            "writing": "writing EDF",
+            "done": "finishing",
+        }.get(file_stage, file_stage or "...")
+        status = f"[{current + 1}/{total}] {progress['current_file']} — {stage_label}"
+    else:
+        status = "Starting..."
 
-    return html.Div([
-        bar,
-        html.Div(status, style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"}),
-    ]), False, True
+    children = [bar]
+    if file_bar is not None:
+        children.append(file_bar)
+    children.append(
+        html.Div(status, style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)"})
+    )
+
+    return html.Div(children), False, True
