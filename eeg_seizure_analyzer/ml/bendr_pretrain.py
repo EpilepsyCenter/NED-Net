@@ -148,12 +148,19 @@ class EdfStreamDataset(IterableDataset):
 
             data = raw.reshape(1, -1)
 
-            # Resample if needed
+            # Resample if needed. Prefer integer-factor decimate to mirror
+            # dataset.py / predict.py (zero-phase, anti-aliased); fall back to
+            # Fourier resample only for non-integer ratios.
             if abs(fs - self.target_fs) > 0.5:
-                from scipy.signal import resample
-                target_n = self.segment_samples
-                data = resample(data, target_n, axis=1).astype(np.float32)
-            elif data.shape[1] != self.segment_samples:
+                factor = int(round(fs / self.target_fs))
+                if factor >= 2 and abs(fs / factor - self.target_fs) < 0.5:
+                    from scipy.signal import decimate
+                    data = decimate(data, factor, axis=1, zero_phase=True).astype(np.float32)
+                else:
+                    from scipy.signal import resample
+                    data = resample(data, self.segment_samples, axis=1).astype(np.float32)
+
+            if data.shape[1] != self.segment_samples:
                 # Trim or pad to exact length
                 if data.shape[1] > self.segment_samples:
                     data = data[:, :self.segment_samples]
