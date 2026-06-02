@@ -453,16 +453,20 @@ def pretrain_bendr(
         history = checkpoint.get("history", [])
         print(f"Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
 
-    # ── Mixed precision ──────────────────────────────────────────
-    # Use bf16 (not fp16) on CUDA: bf16 has fp32's exponent range, so the
-    # deep transformer can't overflow to inf/NaN the way fp16 did. bf16 also
-    # needs no GradScaler — it doesn't underflow gradients like fp16 does.
-    use_amp = device.type == "cuda"
-    amp_dtype = torch.bfloat16
+    # ── Precision ────────────────────────────────────────────────
+    # Train in full fp32. Both fp16 and bf16 autocast produced NaN losses
+    # on the A100: gradients through the cosine-similarity contrastive head
+    # go non-finite under reduced precision. fp16's GradScaler used to hide
+    # this by skipping non-finite steps (weights survived, but train_loss
+    # was still nan); without that guard the bad gradient corrupts every
+    # weight. Every fp32 run — CPU and the math here — is clean. Revisit
+    # mixed precision as a speed optimization once a clean fp32 run exists.
+    use_amp = False
 
     # ── Training loop ────────────────────────────────────────────
     log_path = output_path / "pretrain_log.json"
     print(f"\nStarting pre-training for {epochs} epochs")
+    print(f"Precision: {'AMP autocast' if use_amp else 'full fp32'} on {device.type}")
     print(f"Segment: {segment_sec}s at {target_fs} Hz = {int(segment_sec * target_fs)} samples")
     print(f"Mask: rate={mask_rate}, span={mask_span}, negatives={num_negatives}")
     print("-" * 70)
@@ -481,7 +485,7 @@ def pretrain_bendr(
             batch = batch.to(device)
             optimizer.zero_grad()
 
-            with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+            with torch.amp.autocast(device.type, enabled=use_amp):
                 logits, z, mask = model(batch)
                 loss = model.compute_loss(logits, z)
 
@@ -517,7 +521,7 @@ def pretrain_bendr(
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
-                with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+                with torch.amp.autocast(device.type, enabled=use_amp):
                     logits, z, mask = model(batch)
                     loss = model.compute_loss(logits, z)
                 val_losses.append(loss.item())
