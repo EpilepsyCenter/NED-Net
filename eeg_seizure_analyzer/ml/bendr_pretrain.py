@@ -475,16 +475,19 @@ def pretrain_bendr(
         torch.backends.cuda.enable_math_sdp(True)
 
     # ── Precision ────────────────────────────────────────────────
-    # Train in full fp32. With the fused-attention NaN ruled out above, AMP
-    # can be revisited as a speed optimization, but fp32 is the proven-clean
-    # baseline (CPU and GPU both train cleanly under it). bf16 is the natural
-    # next step for the multi-day run once this is confirmed end-to-end.
-    use_amp = False
+    # bf16 autocast on CUDA for speed. The earlier mixed-precision NaNs were
+    # the fused-attention backward (disabled above), not precision itself —
+    # bf16 keeps fp32's exponent range, so no overflow and no GradScaler
+    # needed. fp32 remains the proven-clean fallback: set use_amp=False to
+    # revert. The contrastive cosine similarity is still computed in fp32
+    # inside the model regardless of this setting.
+    use_amp = device.type == "cuda"
+    amp_dtype = torch.bfloat16
 
     # ── Training loop ────────────────────────────────────────────
     log_path = output_path / "pretrain_log.json"
     print(f"\nStarting pre-training for {epochs} epochs")
-    print(f"Precision: {'AMP autocast' if use_amp else 'full fp32'} on {device.type}")
+    print(f"Precision: {'AMP bf16' if use_amp else 'full fp32'} on {device.type}")
     if device.type == "cuda":
         print("SDPA backend: math (fused flash/mem-efficient disabled)")
     print(f"Segment: {segment_sec}s at {target_fs} Hz = {int(segment_sec * target_fs)} samples")
@@ -506,7 +509,7 @@ def pretrain_bendr(
             batch = batch.to(device)
             optimizer.zero_grad()
 
-            with torch.amp.autocast(device.type, enabled=use_amp):
+            with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                 logits, z, mask = model(batch)
                 loss = model.compute_loss(logits, z)
 
@@ -549,7 +552,7 @@ def pretrain_bendr(
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
-                with torch.amp.autocast(device.type, enabled=use_amp):
+                with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                     logits, z, mask = model(batch)
                     loss = model.compute_loss(logits, z)
                 if not torch.isfinite(loss):
