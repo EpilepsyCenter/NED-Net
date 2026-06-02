@@ -16,6 +16,12 @@ venv/
 *.adicht
 *.adibin
 
+# Model outputs & checkpoints (local smoke-test + training runs)
+bendr_test_output/
+bendr_output/
+*.pt
+*.ckpt
+
 # OS
 .DS_Store
 Thumbs.db
