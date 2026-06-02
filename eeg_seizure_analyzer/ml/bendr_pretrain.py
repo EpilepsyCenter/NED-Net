@@ -174,9 +174,16 @@ class EdfStreamDataset(IterableDataset):
             # Reject segments with NaN, inf, or flat signal
             if not np.isfinite(data).all():
                 return None
-            if np.std(data) < 1e-8:
+            std = float(np.std(data))
+            if std < 1e-8:
                 return None
 
+            # Z-score normalize, matching dataset.py / predict.py
+            # (_normalize_channels). The pre-training stream was the only
+            # path that fed raw amplitudes, so the model would have been
+            # pre-trained on a different input distribution than it sees at
+            # fine-tune / inference time.
+            data = ((data - np.mean(data)) / std).astype(np.float32)
             return data
 
         except Exception:
@@ -453,13 +460,36 @@ def pretrain_bendr(
         history = checkpoint.get("history", [])
         print(f"Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
 
-    # ── Mixed precision ──────────────────────────────────────────
+    # ── Attention backend ────────────────────────────────────────
+    # Force the math SDPA kernel on CUDA. The fused flash / mem-efficient
+    # attention kernels emit NaN *gradients* on the A100 for this model
+    # (diagnosed: the forward is finite, but the fused backward produces nan
+    # grads within a few steps; clip_grad_norm then propagates the nan and
+    # the optimizer step poisons every weight). The math kernel — the same
+    # one CPU uses, where training is always clean — is correct here, and is
+    # free for us: the post-encoder sequence is only ~150 tokens, so flash
+    # attention's long-sequence advantage does not apply.
+    if device.type == "cuda":
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
+
+    # ── Precision ────────────────────────────────────────────────
+    # bf16 autocast on CUDA for speed. The earlier mixed-precision NaNs were
+    # the fused-attention backward (disabled above), not precision itself —
+    # bf16 keeps fp32's exponent range, so no overflow and no GradScaler
+    # needed. fp32 remains the proven-clean fallback: set use_amp=False to
+    # revert. The contrastive cosine similarity is still computed in fp32
+    # inside the model regardless of this setting.
     use_amp = device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    amp_dtype = torch.bfloat16
 
     # ── Training loop ────────────────────────────────────────────
     log_path = output_path / "pretrain_log.json"
     print(f"\nStarting pre-training for {epochs} epochs")
+    print(f"Precision: {'AMP bf16' if use_amp else 'full fp32'} on {device.type}")
+    if device.type == "cuda":
+        print("SDPA backend: math (fused flash/mem-efficient disabled)")
     print(f"Segment: {segment_sec}s at {target_fs} Hz = {int(segment_sec * target_fs)} samples")
     print(f"Mask: rate={mask_rate}, span={mask_span}, negatives={num_negatives}")
     print("-" * 70)
@@ -473,20 +503,26 @@ def pretrain_bendr(
         train_correct = 0
         train_total = 0
         n_batches = 0
+        n_skipped = 0
 
         for batch in train_loader:
             batch = batch.to(device)
             optimizer.zero_grad()
 
-            with torch.amp.autocast(device.type, enabled=use_amp):
+            with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                 logits, z, mask = model(batch)
                 loss = model.compute_loss(logits, z)
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
+            # Skip non-finite batches instead of stepping on them — one bad
+            # batch's gradient would otherwise corrupt every weight (this is
+            # the guard the fp16 GradScaler used to provide implicitly).
+            if not torch.isfinite(loss):
+                n_skipped += 1
+                continue
+
+            loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
 
             train_losses.append(loss.item())
 
@@ -516,9 +552,11 @@ def pretrain_bendr(
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
-                with torch.amp.autocast(device.type, enabled=use_amp):
+                with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                     logits, z, mask = model(batch)
                     loss = model.compute_loss(logits, z)
+                if not torch.isfinite(loss):
+                    continue
                 val_losses.append(loss.item())
                 preds = logits.argmax(dim=1)
                 labels = torch.zeros(logits.shape[0], device=device, dtype=torch.long)
@@ -542,14 +580,19 @@ def pretrain_bendr(
             "lr": lr,
             "elapsed_sec": round(elapsed, 1),
             "n_batches": n_batches,
+            "n_skipped": n_skipped,
         }
         history.append(epoch_log)
 
+        skipped_note = (
+            f" | SKIPPED {n_skipped}/{n_batches} non-finite batches"
+            if n_skipped else ""
+        )
         print(
             f"Epoch {epoch+1}/{epochs} | "
             f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} | "
             f"val_loss={val_loss:.4f} val_acc={val_acc:.3f} | "
-            f"lr={lr:.2e} | {elapsed:.0f}s"
+            f"lr={lr:.2e} | {elapsed:.0f}s{skipped_note}"
         )
 
         # Save log

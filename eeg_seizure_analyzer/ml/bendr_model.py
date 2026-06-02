@@ -792,9 +792,16 @@ class BENDRPretrainModel(nn.Module):
         neg_in_target = (c == negatives).all(-1)
         targets = torch.cat([c, negatives], dim=-2)
 
-        logits = F.cosine_similarity(z, targets, dim=-1) / self.temp
+        # Compute the contrastive similarity in fp32 regardless of the
+        # surrounding autocast dtype: cosine_similarity's internal eps is
+        # fp32-sized, so a reduced-precision near-zero-norm vector could
+        # otherwise yield 0/0 = NaN.
+        with torch.autocast(z.device.type, enabled=False):
+            logits = F.cosine_similarity(z.float(), targets.float(), dim=-1) / self.temp
         if neg_in_target.any():
-            logits[1:][neg_in_target] = float("-inf")
+            # Positive match is column 0; mask only the negative columns
+            # (last dim) — NOT logits[1:], which sliced the batch dim.
+            logits[..., 1:][neg_in_target] = float("-inf")
 
         return logits.view(-1, logits.shape[-1])
 
@@ -832,9 +839,11 @@ class BENDRPretrainModel(nn.Module):
             )
             mask[:, _make_span_from_seeds(seed_positions, self.mask_span)] = True
 
-        # Apply mask to encoder output
+        # Apply mask to encoder output. Cast the (fp32) mask-replacement
+        # parameter to z's dtype so the in-place assignment works under
+        # autocast, where z is reduced-precision but params stay fp32.
         mask_device = mask.to(z.device)
-        z.transpose(2, 1)[mask_device] = self.contextualizer.mask_replacement
+        z.transpose(2, 1)[mask_device] = self.contextualizer.mask_replacement.to(z.dtype)
 
         c = self.contextualizer(z)
         negatives, _ = self._generate_negatives(unmasked_z)
