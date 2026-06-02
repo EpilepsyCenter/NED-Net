@@ -174,9 +174,16 @@ class EdfStreamDataset(IterableDataset):
             # Reject segments with NaN, inf, or flat signal
             if not np.isfinite(data).all():
                 return None
-            if np.std(data) < 1e-8:
+            std = float(np.std(data))
+            if std < 1e-8:
                 return None
 
+            # Z-score normalize, matching dataset.py / predict.py
+            # (_normalize_channels). The pre-training stream was the only
+            # path that fed raw amplitudes, so the model would have been
+            # pre-trained on a different input distribution than it sees at
+            # fine-tune / inference time.
+            data = ((data - np.mean(data)) / std).astype(np.float32)
             return data
 
         except Exception:
@@ -480,6 +487,7 @@ def pretrain_bendr(
         train_correct = 0
         train_total = 0
         n_batches = 0
+        n_skipped = 0
 
         for batch in train_loader:
             batch = batch.to(device)
@@ -488,6 +496,13 @@ def pretrain_bendr(
             with torch.amp.autocast(device.type, enabled=use_amp):
                 logits, z, mask = model(batch)
                 loss = model.compute_loss(logits, z)
+
+            # Skip non-finite batches instead of stepping on them — one bad
+            # batch's gradient would otherwise corrupt every weight (this is
+            # the guard the fp16 GradScaler used to provide implicitly).
+            if not torch.isfinite(loss):
+                n_skipped += 1
+                continue
 
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
@@ -524,6 +539,8 @@ def pretrain_bendr(
                 with torch.amp.autocast(device.type, enabled=use_amp):
                     logits, z, mask = model(batch)
                     loss = model.compute_loss(logits, z)
+                if not torch.isfinite(loss):
+                    continue
                 val_losses.append(loss.item())
                 preds = logits.argmax(dim=1)
                 labels = torch.zeros(logits.shape[0], device=device, dtype=torch.long)
@@ -547,14 +564,19 @@ def pretrain_bendr(
             "lr": lr,
             "elapsed_sec": round(elapsed, 1),
             "n_batches": n_batches,
+            "n_skipped": n_skipped,
         }
         history.append(epoch_log)
 
+        skipped_note = (
+            f" | SKIPPED {n_skipped}/{n_batches} non-finite batches"
+            if n_skipped else ""
+        )
         print(
             f"Epoch {epoch+1}/{epochs} | "
             f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} | "
             f"val_loss={val_loss:.4f} val_acc={val_acc:.3f} | "
-            f"lr={lr:.2e} | {elapsed:.0f}s"
+            f"lr={lr:.2e} | {elapsed:.0f}s{skipped_note}"
         )
 
         # Save log
