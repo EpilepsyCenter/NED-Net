@@ -460,20 +460,33 @@ def pretrain_bendr(
         history = checkpoint.get("history", [])
         print(f"Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
 
+    # ── Attention backend ────────────────────────────────────────
+    # Force the math SDPA kernel on CUDA. The fused flash / mem-efficient
+    # attention kernels emit NaN *gradients* on the A100 for this model
+    # (diagnosed: the forward is finite, but the fused backward produces nan
+    # grads within a few steps; clip_grad_norm then propagates the nan and
+    # the optimizer step poisons every weight). The math kernel — the same
+    # one CPU uses, where training is always clean — is correct here, and is
+    # free for us: the post-encoder sequence is only ~150 tokens, so flash
+    # attention's long-sequence advantage does not apply.
+    if device.type == "cuda":
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
+
     # ── Precision ────────────────────────────────────────────────
-    # Train in full fp32. Both fp16 and bf16 autocast produced NaN losses
-    # on the A100: gradients through the cosine-similarity contrastive head
-    # go non-finite under reduced precision. fp16's GradScaler used to hide
-    # this by skipping non-finite steps (weights survived, but train_loss
-    # was still nan); without that guard the bad gradient corrupts every
-    # weight. Every fp32 run — CPU and the math here — is clean. Revisit
-    # mixed precision as a speed optimization once a clean fp32 run exists.
+    # Train in full fp32. With the fused-attention NaN ruled out above, AMP
+    # can be revisited as a speed optimization, but fp32 is the proven-clean
+    # baseline (CPU and GPU both train cleanly under it). bf16 is the natural
+    # next step for the multi-day run once this is confirmed end-to-end.
     use_amp = False
 
     # ── Training loop ────────────────────────────────────────────
     log_path = output_path / "pretrain_log.json"
     print(f"\nStarting pre-training for {epochs} epochs")
     print(f"Precision: {'AMP autocast' if use_amp else 'full fp32'} on {device.type}")
+    if device.type == "cuda":
+        print("SDPA backend: math (fused flash/mem-efficient disabled)")
     print(f"Segment: {segment_sec}s at {target_fs} Hz = {int(segment_sec * target_fs)} samples")
     print(f"Mask: rate={mask_rate}, span={mask_span}, negatives={num_negatives}")
     print("-" * 70)
