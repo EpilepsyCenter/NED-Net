@@ -454,8 +454,11 @@ def pretrain_bendr(
         print(f"Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
 
     # ── Mixed precision ──────────────────────────────────────────
+    # Use bf16 (not fp16) on CUDA: bf16 has fp32's exponent range, so the
+    # deep transformer can't overflow to inf/NaN the way fp16 did. bf16 also
+    # needs no GradScaler — it doesn't underflow gradients like fp16 does.
     use_amp = device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    amp_dtype = torch.bfloat16
 
     # ── Training loop ────────────────────────────────────────────
     log_path = output_path / "pretrain_log.json"
@@ -478,15 +481,13 @@ def pretrain_bendr(
             batch = batch.to(device)
             optimizer.zero_grad()
 
-            with torch.amp.autocast(device.type, enabled=use_amp):
+            with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                 logits, z, mask = model(batch)
                 loss = model.compute_loss(logits, z)
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
+            loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
 
             train_losses.append(loss.item())
 
@@ -516,7 +517,7 @@ def pretrain_bendr(
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
-                with torch.amp.autocast(device.type, enabled=use_amp):
+                with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                     logits, z, mask = model(batch)
                     loss = model.compute_loss(logits, z)
                 val_losses.append(loss.item())
