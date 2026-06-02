@@ -21,8 +21,11 @@
 
 #SBATCH -p gpua100
 #SBATCH --qos=test
-#SBATCH -t 00:30:00
-#SBATCH -N 1
+#SBATCH --gres=gpu:1          # 1 of the node's 2 A100s — don't reserve the whole node
+#SBATCH -n 1                  # single task
+#SBATCH -c 8                  # 8 cores: 2 dataloader workers + main loop + headroom
+#SBATCH --mem=16G             # last tiny run used 253 MB; 16G is generous slack
+#SBATCH -t 00:15:00           # last run was 49 s — 15 min is plenty
 #SBATCH -J bendr_tiny
 #SBATCH -o logs/bendr_tiny_%j.out
 #SBATCH -e logs/bendr_tiny_%j.err
