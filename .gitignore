@@ -22,6 +22,9 @@ bendr_output/
 *.pt
 *.ckpt
 
+# Local working notes (never committed, excluded from cluster rsync)
+notes/
+
 # OS
 .DS_Store
 Thumbs.db
