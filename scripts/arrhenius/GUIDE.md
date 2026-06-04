@@ -22,9 +22,10 @@ every sbatch script (Slurm reads `-A` before `_common.sh` runs).
 | Item | Value | Where it lives |
 |------|-------|----------------|
 | Login | `login.hpc.arrhenius.naiss.se` | Step 1 |
-| Project ID | `naiss2026-3-358` | `_common.sh` + `#SBATCH -A` |
-| Project storage | `/nobackup/proj/disk/naiss2026-3-358` | `_common.sh` |
-| GPU partition | `arrhenius-gpu` | `_common.sh` + `#SBATCH -p` |
+| Storage project | `naiss2026-3-358` (storage path) | `_common.sh` (`NAISS_PROJECT`) |
+| GPU Slurm account | `naiss2026-3-358-gpu` (note the `-gpu` suffix — differs from storage ID) | `#SBATCH -A` in every script |
+| Project storage | `/nobackup/proj/disk/naiss2026-3-358/personal/$USER` (tier root is root-owned; write under `personal/<user>`) | `_common.sh` |
+| GPU partition | `gpu` (382 nodes, 3-day max walltime; default partition is `cpu`) | `_common.sh` + `#SBATCH -p` |
 | Account status | https://supr.naiss.se/account/ | this guide |
 | Apptainer module | `Apptainer` | `_common.sh` — fall back to `singularity` if `module spider` shows that instead |
 
@@ -236,8 +237,9 @@ sbatch scripts/arrhenius/resume.sh
 ```
 
 Resumes from the latest `checkpoint_epoch_*.pt` in `OUTPUT_DIR`.
-If the 7-day walltime hits and 30 epochs aren't done, just submit
-`resume.sh` again — it keeps picking up from the latest checkpoint.
+If the 3-day walltime (the `gpu` partition max) hits and 30 epochs
+aren't done, just submit `resume.sh` again — it keeps picking up from
+the latest checkpoint.
 
 Auto-chain after `pretrain_short.sh`:
 
@@ -304,10 +306,10 @@ zero-surprise option for the first runs.
 | Account status | https://supr.naiss.se/account/ |
 | Watch a log | `tail -f logs/bendr_*_<JOBID>.out` |
 | Estimated start | `squeue --start -j <JOBID>` |
-| GPU partition status | `sinfo -p arrhenius-gpu` |
+| GPU partition status | `sinfo -p gpu` |
 | Inspect container | `apptainer inspect $CONTAINER_PATH` |
 | Shell into container | `apptainer shell --nv $CONTAINER_PATH` |
-| Interactive GPU shell | `interactive -p arrhenius-gpu --gpus 1 -t 30` |
+| Interactive GPU shell | `interactive -p gpu --gpus 1 -t 30` |
 
 ---
 

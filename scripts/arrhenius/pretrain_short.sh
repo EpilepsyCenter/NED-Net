@@ -21,12 +21,19 @@
 #SBATCH --mail-user=marco.ledri@med.lu.se
 #SBATCH --mail-type=END,FAIL
 #SBATCH --no-requeue
-#SBATCH -A naiss2026-3-358
-#SBATCH -p arrhenius-gpu
+#SBATCH -A naiss2026-3-358-gpu
+#SBATCH -p gpu
 
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."
+cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/../..}"
+# sbatch exports the submitting shell's env (--export=ALL default), so a
+# stale PROJECT_STORAGE/NAISS_PROJECT exported there would override
+# _common.sh's ${VAR:-default} and break paths (e.g. CONTAINER_PATH would
+# miss the personal/<user> segment). Clear them so _common.sh is the single
+# source of truth; to override intentionally, edit _common.sh, not the env.
+unset PROJECT_STORAGE NAISS_PROJECT EDF_DIR CODE_DIR OUTPUT_DIR \
+      CONTAINER_PATH EXTRAS_VENV NVME_SCRATCH GPU_PARTITION GPU_QOS
 source scripts/arrhenius/_common.sh
 
 mkdir -p logs

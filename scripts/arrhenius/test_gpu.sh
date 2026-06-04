@@ -23,12 +23,19 @@
 # Project comes from your SUPR allocation (find it via `storagequota`
 # or at https://supr.naiss.se/account/). Update the line below once
 # the account is approved.
-#SBATCH -A naiss2026-3-358
-#SBATCH -p arrhenius-gpu
+#SBATCH -A naiss2026-3-358-gpu
+#SBATCH -p gpu
 
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."
+cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/../..}"
+# sbatch exports the submitting shell's env (--export=ALL default), so a
+# stale PROJECT_STORAGE/NAISS_PROJECT exported there would override
+# _common.sh's ${VAR:-default} and break paths (e.g. CONTAINER_PATH would
+# miss the personal/<user> segment). Clear them so _common.sh is the single
+# source of truth; to override intentionally, edit _common.sh, not the env.
+unset PROJECT_STORAGE NAISS_PROJECT EDF_DIR CODE_DIR OUTPUT_DIR \
+      CONTAINER_PATH EXTRAS_VENV NVME_SCRATCH GPU_PARTITION GPU_QOS
 source scripts/arrhenius/_common.sh
 
 mkdir -p logs
@@ -53,7 +60,8 @@ arrhenius_run "python -c 'import torch, platform; \
 print(f\"Arch:      {platform.machine()}\"); \
 print(f\"PyTorch:   {torch.__version__}\"); \
 print(f\"CUDA:      {torch.version.cuda}\"); \
-print(f\"Device:    {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \\\"N/A\\\"}\"); \
+dev = torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"; \
+print(f\"Device:    {dev}\"); \
 assert torch.cuda.is_available(), \"CUDA not visible inside container\"'"
 
 # Tiny pretrain on a few segments per file
