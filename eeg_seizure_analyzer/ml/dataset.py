@@ -43,7 +43,13 @@ class DatasetConfig:
     window_sec: int = WINDOW_SEC
     context_sec: int = CONTEXT_SEC
     include_activity: bool = False
-    neg_pos_ratio: float = 2.0  # negative windows per positive
+    neg_pos_ratio: float = 2.0  # negative windows per positive (global target);
+    #                             hard negatives preferred, random tops up a
+    #                             shortfall; <= 0 keeps every hard negative.
+    use_hard_negatives: bool = True  # True: rejected events become negatives
+    #                             (hard-negative mining). False: ignore rejected
+    #                             labels and sample all negatives as random
+    #                             background from the recordings.
     min_seizure_overlap: float = 0.5  # fraction of window that must be seizure
     augment: bool = True
     seed: int = 42
@@ -239,7 +245,10 @@ def build_window_specs(
     list[WindowSpec]
     """
     rng = np.random.default_rng(config.seed)
-    specs: list[WindowSpec] = []
+    specs: list[WindowSpec] = []  # positive windows
+    hard_neg_specs: list[WindowSpec] = []  # all rejected-event windows
+    # Per-channel context for generating random background negatives on demand.
+    neg_ctx: list[dict] = []
 
     for file_entry in dataset_def.get("files", []):
         edf_path = file_entry["edf_path"]
@@ -338,11 +347,12 @@ def build_window_specs(
                     animal_id=animal_id,
                 ))
 
-            # --- Negative windows ---
-            n_neg_needed = max(1, int(len(ch_confirmed) * config.neg_pos_ratio))
-
-            # Hard negatives from rejected events
-            for ann in ch_rejected[:n_neg_needed]:
+            # --- Hard negatives (every rejected candidate) ---
+            # Collect them all here; the global balancing step below decides how
+            # many to keep based on config.neg_pos_ratio.  Skipped entirely in
+            # random-background mode, where rejected labels are ignored and all
+            # negatives are sampled from the recording instead.
+            for ann in (ch_rejected if config.use_hard_negatives else []):
                 onset = ann["onset_sec"]
                 offset = ann["offset_sec"]
                 centre = (onset + offset) / 2
@@ -351,7 +361,7 @@ def build_window_specs(
                 win_end = min(rec_duration, win_start + config.window_sec)
                 win_start = max(0, win_end - config.window_sec)
 
-                specs.append(WindowSpec(
+                hard_neg_specs.append(WindowSpec(
                     edf_path=edf_path,
                     start_sec=win_start,
                     duration_sec=config.window_sec,
@@ -362,33 +372,81 @@ def build_window_specs(
                     animal_id=animal_id,
                 ))
 
-            # Random background negatives
-            n_random = n_neg_needed - len(ch_rejected[:n_neg_needed])
-            if n_random > 0 and rec_duration > config.window_sec:
-                max_start = rec_duration - config.window_sec
-                for _ in range(n_random):
-                    for _attempt in range(50):
-                        start = rng.uniform(0, max_start)
-                        end = start + config.window_sec
-                        overlaps = any(
-                            s[1] > start and s[0] < end
-                            for s in ch_seizure_intervals
-                        )
-                        if not overlaps:
-                            break
+            # Remember this channel so random background can be sampled later if
+            # hard negatives alone don't meet the requested ratio.
+            if rec_duration > config.window_sec:
+                neg_ctx.append({
+                    "edf_path": edf_path,
+                    "eeg_channel": eeg_ch,
+                    "act_channel": act_ch,
+                    "animal_id": animal_id,
+                    "rec_duration": rec_duration,
+                    "seizure_intervals": list(ch_seizure_intervals),
+                })
 
-                    specs.append(WindowSpec(
-                        edf_path=edf_path,
-                        start_sec=start,
-                        duration_sec=config.window_sec,
-                        eeg_channel=eeg_ch,
-                        act_channel=act_ch,
-                        is_positive=False,
-                        seizure_intervals=[],
-                        animal_id=animal_id,
-                    ))
-
+    # ── Global negative balancing ────────────────────────────────────
+    # neg_pos_ratio is the target number of negative windows per positive
+    # window across the whole dataset.  Hard negatives (reviewed-and-rejected
+    # events) are always preferred; random background only tops up a shortfall.
+    # A ratio <= 0 means "use every hard negative" (no cap).
+    n_pos = len(specs)
+    specs.extend(
+        _balance_negatives(hard_neg_specs, neg_ctx, n_pos, config, rng)
+    )
     return specs
+
+
+def _balance_negatives(
+    hard_neg_specs: list[WindowSpec],
+    neg_ctx: list[dict],
+    n_pos: int,
+    config: DatasetConfig,
+    rng: np.random.Generator,
+) -> list[WindowSpec]:
+    """Select negative windows to meet ``config.neg_pos_ratio`` globally.
+
+    Prefers hard negatives (random-subsampled if they exceed the target),
+    then tops up with random background windows if there's a shortfall.
+    ``neg_pos_ratio <= 0`` keeps every hard negative.
+    """
+    ratio = config.neg_pos_ratio
+    if ratio <= 0 or n_pos == 0:
+        return list(hard_neg_specs)  # use all hard negatives
+
+    target = int(round(n_pos * ratio))
+    out: list[WindowSpec] = []
+
+    if len(hard_neg_specs) >= target:
+        idx = rng.choice(len(hard_neg_specs), size=target, replace=False)
+        return [hard_neg_specs[i] for i in idx]
+
+    # Keep all hard negatives, then add random background to reach the target.
+    out.extend(hard_neg_specs)
+    n_random = target - len(hard_neg_specs)
+    if n_random > 0 and neg_ctx:
+        for _ in range(n_random):
+            ctx = neg_ctx[rng.integers(len(neg_ctx))]
+            max_start = ctx["rec_duration"] - config.window_sec
+            start = 0.0
+            for _attempt in range(50):
+                start = float(rng.uniform(0, max_start))
+                end = start + config.window_sec
+                if not any(
+                    s[1] > start and s[0] < end
+                    for s in ctx["seizure_intervals"]
+                ):
+                    break
+            out.append(WindowSpec(
+                edf_path=ctx["edf_path"],
+                start_sec=start,
+                duration_sec=config.window_sec,
+                eeg_channel=ctx["eeg_channel"],
+                act_channel=ctx["act_channel"],
+                is_positive=False,
+                seizure_intervals=[],
+                animal_id=ctx["animal_id"],
+            ))
+    return out
 
 
 # ---------------------------------------------------------------------------
