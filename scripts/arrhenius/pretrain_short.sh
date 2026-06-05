@@ -32,7 +32,7 @@ cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/../..}"
 # _common.sh's ${VAR:-default} and break paths (e.g. CONTAINER_PATH would
 # miss the personal/<user> segment). Clear them so _common.sh is the single
 # source of truth; to override intentionally, edit _common.sh, not the env.
-unset PROJECT_STORAGE NAISS_PROJECT EDF_DIR CODE_DIR OUTPUT_DIR \
+unset PROJECT_STORAGE NAISS_PROJECT EDF_DIR CODE_DIR OUTPUT_DIR BAD_CHANNELS \
       CONTAINER_PATH EXTRAS_VENV NVME_SCRATCH GPU_PARTITION GPU_QOS
 source scripts/arrhenius/_common.sh
 
@@ -60,6 +60,7 @@ arrhenius_run "python -m eeg_seizure_analyzer.ml.bendr_pretrain \
     --data-dir '${EDF_DIR}' \
     --output-dir '${OUTPUT_DIR}' \
     --channels 0 1 2 3 4 5 6 7 \
+    --bad-channels '${BAD_CHANNELS}' \
     --epochs 5 \
     --batch-size 64 \
     --lr 1e-3 \

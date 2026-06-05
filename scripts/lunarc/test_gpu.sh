@@ -15,6 +15,7 @@
 #SBATCH --qos=test
 #SBATCH -t 00:30:00
 #SBATCH -N 1
+#SBATCH --gres=gpu:1          # 1 of the node's 2 A100s — don't reserve the whole node
 #SBATCH -J bendr_test
 #SBATCH -o logs/bendr_test_%j.out
 #SBATCH -e logs/bendr_test_%j.err

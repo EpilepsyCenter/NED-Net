@@ -19,6 +19,7 @@
 #SBATCH -p gpua100
 #SBATCH -t 72:00:00
 #SBATCH -N 1
+#SBATCH --gres=gpu:1          # 1 of the node's 2 A100s — don't reserve the whole node
 #SBATCH -J bendr_5ep
 #SBATCH -o logs/bendr_5ep_%j.out
 #SBATCH -e logs/bendr_5ep_%j.err
@@ -50,11 +51,16 @@ mkdir -p logs
 # EDF data lives in the project storage (same SUPR ID as compute: LU 2026/2-60)
 EDF_DIR="/lunarc/nobackup/projects/lu2026-2-60/edf_data"
 OUTPUT_DIR="$HOME/bendr_output/run1"
+# Per-batch noisy-channel exclusions — generate once with
+#   python scripts/make_bad_channels.py --data-dir "$EDF_DIR"
+# The trainer hard-fails if this file is missing (intentional).
+BAD_CHANNELS="/lunarc/nobackup/projects/lu2026-2-60/bad_channels.json"
 
 python -m eeg_seizure_analyzer.ml.bendr_pretrain \
     --data-dir "$EDF_DIR" \
     --output-dir "$OUTPUT_DIR" \
     --channels 0 1 2 3 4 5 6 7 \
+    --bad-channels "$BAD_CHANNELS" \
     --epochs 5 \
     --batch-size 64 \
     --lr 1e-3 \

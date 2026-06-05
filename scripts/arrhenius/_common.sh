@@ -32,6 +32,13 @@ export PROJECT_STORAGE="${PROJECT_STORAGE:-/nobackup/proj/disk/${NAISS_PROJECT}/
 
 # Data, code, output, container.
 export EDF_DIR="${EDF_DIR:-${PROJECT_STORAGE}/edf_data}"
+# Per-batch noisy-channel exclusion map for the real pretrain/resume runs.
+# Generate once after the data is staged:
+#   python scripts/make_bad_channels.py --data-dir "$EDF_DIR"
+# (writes to ${PROJECT_STORAGE}/bad_channels.json). The trainer hard-fails
+# if it's missing — intentional, so a forgotten generate doesn't silently
+# train on the channels you meant to drop. Smoke tests don't use it.
+export BAD_CHANNELS="${BAD_CHANNELS:-${PROJECT_STORAGE}/bad_channels.json}"
 export CODE_DIR="${CODE_DIR:-${HOME}/NED-Net}"
 export OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_STORAGE}/bendr_output/run1}"
 export CONTAINER_PATH="${CONTAINER_PATH:-${PROJECT_STORAGE}/containers/pytorch-ngc-arm64.sif}"

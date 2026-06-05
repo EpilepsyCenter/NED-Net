@@ -7,8 +7,10 @@
 #
 # GH200 with 96 GB HBM is faster per step than A100, but the
 # overall epoch wallclock is dominated by data I/O off Lustre,
-# so don't expect a dramatic speedup over LUNARC. Plan for the
-# same 1–2 job submissions to hit 30 epochs.
+# so don't expect a dramatic speedup over LUNARC. The `gpu`
+# partition caps at 3 days (72 h), so 30 epochs (~120–240 h)
+# needs ~2–4 submissions here (vs 1–2 on LUNARC's 168 h) —
+# resume.sh chains from the latest checkpoint each time.
 #
 # Usage:
 #   sbatch scripts/arrhenius/pretrain.sh
@@ -34,7 +36,7 @@ cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/../..}"
 # _common.sh's ${VAR:-default} and break paths (e.g. CONTAINER_PATH would
 # miss the personal/<user> segment). Clear them so _common.sh is the single
 # source of truth; to override intentionally, edit _common.sh, not the env.
-unset PROJECT_STORAGE NAISS_PROJECT EDF_DIR CODE_DIR OUTPUT_DIR \
+unset PROJECT_STORAGE NAISS_PROJECT EDF_DIR CODE_DIR OUTPUT_DIR BAD_CHANNELS \
       CONTAINER_PATH EXTRAS_VENV NVME_SCRATCH GPU_PARTITION GPU_QOS
 source scripts/arrhenius/_common.sh
 
@@ -59,6 +61,7 @@ arrhenius_run "python -m eeg_seizure_analyzer.ml.bendr_pretrain \
     --data-dir '${EDF_DIR}' \
     --output-dir '${OUTPUT_DIR}' \
     --channels 0 1 2 3 4 5 6 7 \
+    --bad-channels '${BAD_CHANNELS}' \
     --epochs 30 \
     --batch-size 64 \
     --lr 1e-3 \
