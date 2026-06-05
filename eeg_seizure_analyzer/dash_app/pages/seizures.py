@@ -34,6 +34,7 @@ _METHOD_OPTIONS = [
     {"label": "Spectral Band (17–25 Hz)", "value": "spectral_band"},
     {"label": "Autocorrelation", "value": "autocorrelation"},
     {"label": "Ensemble", "value": "ensemble"},
+    {"label": "U-Net", "value": "unet"},
     {"label": "BENDR", "value": "bendr"},
 ]
 
@@ -42,6 +43,7 @@ _DETECTOR_NAMES = {
     "spectral_band": "SpectralBandDetector",
     "autocorrelation": "AutocorrelationDetector",
     "ensemble": "EnsembleDetector",
+    "unet": "U-Net (ML)",
     "bendr": "BENDR (ML)",
 }
 
@@ -258,6 +260,27 @@ Individual method parameters are inherited from the other method tabs. \
 Switch to each method to tune its parameters, then select Ensemble to combine.
 
 Best for maximum specificity - reduces false positives by requiring agreement.
+
+---
+
+## U-Net (ML)
+
+A compact 1-D U-Net trained **from scratch** on your annotated seizures \
+(no pre-training). A solid baseline when you have enough labelled data; \
+BENDR is the alternative that starts from a self-supervised pre-trained \
+encoder.
+
+**Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| **Model** | Select a trained U-Net model. Models are trained in the Dataset / Model tab. |
+| **Threshold** | Probability threshold for seizure detection (0.1–0.9). Lower = more sensitive, higher = more specific. |
+| **Min duration** | Discard predicted events shorter than this (seconds). |
+| **Merge gap** | Merge predicted segments closer than this (seconds). |
+
+No rule-based parameters — U-Net is a learned model. To improve detection, \
+annotate more data and re-train via the Dataset / Model tab.
 
 ---
 
@@ -582,6 +605,13 @@ def layout(sid: str | None) -> html.Div:
                           ["spike_train", "spectral_band"]))],
             ),
 
+            # ── U-Net params (shown/hidden) ───────────────────────
+            html.Div(
+                id="sz-params-unet",
+                style={"display": "block" if persisted_method == "unet" else "none"},
+                children=[_unet_params(state)],
+            ),
+
             # ── BENDR params (shown/hidden) ───────────────────────
             html.Div(
                 id="sz-params-bendr",
@@ -713,6 +743,7 @@ _METHOD_LABELS_FILTER = {
     "autocorrelation": "Autocorrelation",
     "ensemble": "Ensemble",
     "ml_unet": "ML U-Net",
+    "ml_bendr": "ML BENDR",
     "ml_unet_spike": "ML U-Net Spike",
     "line_length_energy": "LL / Energy",
 }
@@ -1582,6 +1613,100 @@ def _bendr_params(state) -> html.Div:
     ])
 
 
+def _unet_params(state) -> html.Div:
+    """Build U-Net (ML) parameter controls: model selector + inference params."""
+    try:
+        from eeg_seizure_analyzer.ml.train import list_models
+        all_models = list_models()
+        unet_models = [m for m in all_models
+                       if m.get("architecture", "unet") == "unet"]
+    except Exception:
+        unet_models = []
+
+    if unet_models:
+        model_options = [
+            {
+                "label": (f"{m['name']} — F1: {m['best_event_f1']:.2f}"
+                          if m.get("best_event_f1") else m["name"]),
+                "value": m["name"],
+            }
+            for m in unet_models
+        ]
+        default_model = state.extra.get("sz_unet_model", model_options[0]["value"])
+    else:
+        model_options = []
+        default_model = None
+
+    # Persisted slider values
+    unet_p = state.extra.get("sz_unet_params", {})
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col([
+                collapsible_section(
+                    "U-Net Model", "sz-unet-cfg",
+                    default_open=True,
+                    children=[
+                        html.Div([
+                            html.Label("Trained model",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)",
+                                              "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="sz-unet-model",
+                                options=model_options,
+                                value=default_model,
+                                clearable=False,
+                                placeholder="No U-Net models available — train one first",
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], style={"marginBottom": "12px"}),
+                        param_control(
+                            "Threshold", "sz-unet-threshold",
+                            0.1, 0.9, 0.05,
+                            unet_p.get("threshold", 0.5),
+                            "Probability threshold. Lower = more sensitive.",
+                        ),
+                        param_control(
+                            "Min duration (s)", "sz-unet-min-dur",
+                            1.0, 30.0, 0.5,
+                            unet_p.get("min_duration_sec", 3.0),
+                            "Discard events shorter than this.",
+                        ),
+                        param_control(
+                            "Merge gap (s)", "sz-unet-merge-gap",
+                            0.5, 10.0, 0.5,
+                            unet_p.get("merge_gap_sec", 2.0),
+                            "Merge segments closer than this.",
+                        ),
+                    ],
+                ),
+            ], width=6),
+            dbc.Col([
+                html.Div([
+                    html.Div(
+                        "\U0001f9e0 U-Net is a learned model — no rule-based parameters to tune.",
+                        style={"fontSize": "0.82rem", "fontWeight": "500",
+                               "marginBottom": "8px"},
+                    ),
+                    html.Div(
+                        "To improve detection accuracy, annotate more seizures in the "
+                        "Training tab and re-train the model. U-Net is trained from "
+                        "scratch on your annotations (no pre-training).",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
+                    ),
+                    html.Hr(style={"margin": "12px 0", "borderColor": "var(--ned-border)"}),
+                    html.Div(
+                        id="sz-unet-model-info",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
+                    ),
+                ], style={"padding": "12px", "border": "1px solid var(--ned-border)",
+                          "borderRadius": "6px", "marginTop": "8px"}),
+            ], width=6),
+        ], className="g-3 mb-3"),
+    ])
+
+
 # ── Collapse toggle callbacks ─────────────────────────────────────────
 
 _ALL_COLLAPSE_SECTIONS = [
@@ -1663,6 +1788,7 @@ def toggle_ac_boundary_controls(method):
     Output("sz-params-spectral-band", "style"),
     Output("sz-params-autocorrelation", "style"),
     Output("sz-params-ensemble", "style"),
+    Output("sz-params-unet", "style"),
     Output("sz-params-bendr", "style"),
     Output("sz-method-badge", "children"),
     Input("sz-method-selector", "value"),
@@ -1676,7 +1802,7 @@ def toggle_method_params(method):
     styles = {
         "spike_train": hide, "spectral_band": hide,
         "autocorrelation": hide, "ensemble": hide,
-        "bendr": hide,
+        "unet": hide, "bendr": hide,
     }
     styles[method] = show
     return (
@@ -1684,6 +1810,7 @@ def toggle_method_params(method):
         styles["spectral_band"],
         styles["autocorrelation"],
         styles["ensemble"],
+        styles["unet"],
         styles["bendr"],
         labels.get(method, "Spike-Train"),
     )
@@ -1720,6 +1847,8 @@ def toggle_help_modal(open_clicks, close_clicks, is_open):
     Input("sz-ac-bnd-method", "value"),
     # BENDR model selector
     Input("sz-bendr-model", "value"),
+    # U-Net model selector
+    Input("sz-unet-model", "value"),
     # Filter values (min + max)
     *[Input(fid, "value") for fid in _ALL_FILTER_IDS],
     Input("sz-filter-channel", "value"),
@@ -1738,17 +1867,18 @@ def toggle_help_modal(open_clicks, close_clicks, is_open):
 )
 def auto_save_sz_extras(*args):
     """Save all non-MATCH seizure component values to server state on any change."""
-    # Unpack *args: 9 fixed + n_min + n_max filter IDs + 3 dropdowns + 1 toggle + 5 inspector + sid
+    # Unpack *args: 10 fixed + n_min + n_max filter IDs + 3 dropdowns + 1 toggle + 5 inspector + sid
     n_min = len(_ALL_FILTER_MIN_IDS)
     n_max = len(_ALL_FILTER_MAX_IDS)
     (channels, bl_method, bnd_method, classify, method_sel,
-     sb_bnd_method, ac_bl_method, ac_bnd_method, bendr_model_sel) = args[0:9]
-    filt_min_vals = args[9:9 + n_min]
-    filt_max_vals = args[9 + n_min:9 + n_min + n_max]
-    filt_channel = args[9 + n_min + n_max]
-    filt_method = args[9 + n_min + n_max + 1]
-    filt_severity = args[9 + n_min + n_max + 2]
-    filt_enabled = args[9 + n_min + n_max + 3]
+     sb_bnd_method, ac_bl_method, ac_bnd_method, bendr_model_sel,
+     unet_model_sel) = args[0:10]
+    filt_min_vals = args[10:10 + n_min]
+    filt_max_vals = args[10 + n_min:10 + n_min + n_max]
+    filt_channel = args[10 + n_min + n_max]
+    filt_method = args[10 + n_min + n_max + 1]
+    filt_severity = args[10 + n_min + n_max + 2]
+    filt_enabled = args[10 + n_min + n_max + 3]
     insp_spikes, insp_baseline, insp_threshold, insp_bp, insp_yr = args[-6:-1]
     sid = args[-1]
 
@@ -1774,6 +1904,8 @@ def auto_save_sz_extras(*args):
         state.extra["sz_ac_bnd_method"] = ac_bnd_method
     if bendr_model_sel is not None:
         state.extra["sz_bendr_model"] = bendr_model_sel
+    if unet_model_sel is not None:
+        state.extra["sz_unet_model"] = unet_model_sel
     # Merge filter values — only update keys with non-None values
     _min_keys = ["min_conf", "min_dur", "min_spikes", "min_amp", "min_lbl",
                  "min_top_amp", "min_ll", "min_energy", "min_sigbl",
@@ -1925,6 +2057,11 @@ def auto_save_sz_extras(*args):
     State({"type": "param-slider", "key": "sz-bendr-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-bendr-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-bendr-merge-gap"}, "value"),
+    # ── U-Net params ──
+    State("sz-unet-model", "value"),
+    State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
     # Session
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -1971,6 +2108,8 @@ def run_detection(
     ens_methods, ens_merge, ens_conf_merge,
     # BENDR
     bendr_model, bendr_threshold, bendr_min_dur, bendr_merge_gap,
+    # U-Net
+    unet_model, unet_threshold, unet_min_dur, unet_merge_gap,
     sid,
 ):
     """Run seizure detection (multi-method), clear results, or apply filters."""
@@ -2170,6 +2309,10 @@ def run_detection(
             detector = None  # handled separately below
             params = None
 
+        elif method == "unet":
+            detector = None  # handled separately below
+            params = None
+
         else:
             return (
                 alert(f"Unknown method: {method}", "danger"),
@@ -2181,12 +2324,28 @@ def run_detection(
 
         _src = getattr(rec, "source_path", "") or ""
 
-        if method == "bendr":
-            # ── BENDR ML detection ────────────────────────────────
-            if not bendr_model:
+        if method in ("bendr", "unet"):
+            # ── ML detection (BENDR or U-Net) ─────────────────────
+            # Both run the same architecture-agnostic predict_seizures();
+            # only the model + inference params differ. predict_seizures
+            # reads the architecture from the model metadata and tags
+            # events ml_bendr / ml_unet automatically.
+            _ml_label = "BENDR" if method == "bendr" else "U-Net"
+            if method == "bendr":
+                _ml_model = bendr_model
+                _ml_thr, _ml_mindur, _ml_merge = (
+                    bendr_threshold, bendr_min_dur, bendr_merge_gap)
+                _model_key, _params_key = "sz_bendr_model", "sz_bendr_params"
+            else:
+                _ml_model = unet_model
+                _ml_thr, _ml_mindur, _ml_merge = (
+                    unet_threshold, unet_min_dur, unet_merge_gap)
+                _model_key, _params_key = "sz_unet_model", "sz_unet_params"
+
+            if not _ml_model:
                 return (
-                    alert("No BENDR model selected. Train one in the Training tab first.",
-                          "warning"),
+                    alert(f"No {_ml_label} model selected. Train one in the "
+                          "Training tab first.", "warning"),
                     no_update, no_update, no_update, no_update, no_update,
                 )
             from eeg_seizure_analyzer.ml.predict import predict_seizures
@@ -2194,26 +2353,30 @@ def run_detection(
             _edf_path = _src
             if not _edf_path or not _edf_path.lower().endswith(".edf"):
                 return (
-                    alert("BENDR detection requires an EDF file. Load an EDF recording first.",
-                          "warning"),
+                    alert(f"{_ml_label} detection requires an EDF file. Load an "
+                          "EDF recording first.", "warning"),
                     no_update, no_update, no_update, no_update, no_update,
                 )
 
-            # Persist BENDR params
-            state.extra["sz_bendr_model"] = bendr_model
-            state.extra["sz_bendr_params"] = {
-                "threshold": float(bendr_threshold or 0.5),
-                "min_duration_sec": float(bendr_min_dur or 3.0),
-                "merge_gap_sec": float(bendr_merge_gap or 2.0),
+            _thr = float(_ml_thr or 0.5)
+            _mindur = float(_ml_mindur or 3.0)
+            _merge = float(_ml_merge or 2.0)
+
+            # Persist params for this method
+            state.extra[_model_key] = _ml_model
+            state.extra[_params_key] = {
+                "threshold": _thr,
+                "min_duration_sec": _mindur,
+                "merge_gap_sec": _merge,
             }
 
             seizures = predict_seizures(
                 edf_path=_edf_path,
-                model_name=bendr_model,
+                model_name=_ml_model,
                 channels=selected_channels,
-                threshold=float(bendr_threshold or 0.5),
-                min_duration_sec=float(bendr_min_dur or 3.0),
-                merge_gap_sec=float(bendr_merge_gap or 2.0),
+                threshold=_thr,
+                min_duration_sec=_mindur,
+                merge_gap_sec=_merge,
             )
 
         elif method == "ensemble":
