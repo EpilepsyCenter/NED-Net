@@ -795,9 +795,22 @@ Training uses a combined **Dice + BCE (Binary Cross-Entropy)** loss. Dice loss n
 
 **Mixed precision:** When a GPU is available, training uses mixed-precision (float16) for faster computation.
 
-### 11.5 Retraining with new annotations
+**BENDR (pre-trained alternative):** The **Architecture** selector also offers **BENDR** instead of U-Net. BENDR is a self-supervised EEG foundation model — a convolutional encoder plus a transformer contextualiser — that is **pre-trained on large amounts of unlabelled EEG** and then **fine-tuned** on your annotations. Choose it when you have a pre-trained backbone and relatively few labels. Selecting BENDR reveals extra controls:
 
-When you annotate more data, simply retrain from scratch by selecting all annotation files (old and new) and training a new model. With typical EEG dataset sizes (hundreds to low thousands of events), training takes minutes, and retraining from scratch avoids any forgetting issues compared to fine-tuning.
+- **Pre-trained weights** — the self-supervised backbone to fine-tune from. This dropdown lists the `*.pt` files in `~/.eeg_seizure_analyzer/pretrained/` (e.g. a `bendr_rodent_25k` backbone produced by a pre-training run). It does **not** list your previously *trained* models — those live in `~/.eeg_seizure_analyzer/models/`.
+- **Freeze encoder (epochs)** — keep the pre-trained encoder frozen for the first N epochs (training only the new detection head), then unfreeze it.
+- **Encoder LR** — a lower learning rate applied to the encoder once unfrozen, so fine-tuning nudges the backbone rather than overwriting it.
+
+### 11.5 Retraining and continually improving a model
+
+To improve a model, **retrain on the expanded annotation set** — select all annotation files (old **and** new) and train a new model. The practical loop is: run the current model in the **Detection** tab to propose candidates, **Confirm / Reject** them in the **Training** tab, then retrain here. Each pass adds labels and sharpens the detector.
+
+You do **not** continue training from your previous *trained* model, and you do **not** load it as **Pre-trained weights** — that dropdown only offers the self-supervised BENDR backbones in `~/.eeg_seizure_analyzer/pretrained/`, never your trained detectors in `~/.eeg_seizure_analyzer/models/`. Instead:
+
+- **U-Net** retrains from scratch on the full annotation set.
+- **BENDR** re-fine-tunes from the same self-supervised backbone (e.g. `bendr_rodent_25k`) on the full annotation set.
+
+Retraining from a fixed starting point each round — rather than incrementally continuing the previous weights — is deliberate: with typical EEG dataset sizes (hundreds to low thousands of events) it takes only minutes, and it avoids the forgetting / drift that incremental fine-tuning can introduce.
 
 ### 11.6 Where models are saved
 

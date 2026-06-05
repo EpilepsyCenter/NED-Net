@@ -786,15 +786,21 @@ That is **not a seizure detector on its own** — it's the pre-trained
 starting point you **fine-tune** on labelled seizures inside NED-Net.
 
 `Detection`, `Training`, `Dataset / Model`, and `Analysis` are all
-**separate top-level tabs** (not nested), visited in this order:
+**separate top-level tabs** (not nested). The workflow is an **iterative
+loop** — each pass makes the detector better:
 
 1. **Load** — open your EDF(s) and fill in the **Animal ID** for each
    channel (needed for a clean train/validation split).
 
-2. **Detection → Seizure** — generate candidate events to review. With no
-   trained model yet, pick a **rule-based** method (e.g. Spike-Train or
-   Spectral Band) and click **Detect Seizures**. These are candidates, not
-   final results.
+2. **Detection → Seizure** — generate candidate events to review.
+   - *First pass (no model yet):* pick a **rule-based** method
+     (Spike-Train, Spectral Band, …) and click **Detect Seizures**.
+   - *Later passes:* pick your **trained model** — method **BENDR** *or*
+     **U-Net** — to propose far better candidates than rule-based. This is
+     the engine of the loop: a better model means fewer corrections next
+     round.
+
+   These are candidates for review, not final results.
 
 3. **Training → Seizure** — the **refinement / annotation** step. Step
    through each candidate and **Confirm** (real) or **Reject** (false
@@ -803,25 +809,38 @@ starting point you **fine-tune** on labelled seizures inside NED-Net.
    (confirmed → positives, rejected → hard negatives).
 
 4. **Dataset / Model → Dataset** — **Scan** the folder of annotated EDFs,
-   set **Architecture: BENDR**, and in **Pre-trained weights** choose
-   `bendr_rodent_25k` (it shows up because Step 10 placed it in
-   `~/.eeg_seizure_analyzer/pretrained/`). Set the fine-tune params
-   (epochs, freeze-encoder epochs, encoder LR, …) and click
-   **Start Training**. The trained detector is saved under
-   `~/.eeg_seizure_analyzer/models/<name>/`.
+   choose an **Architecture**, and click **Start Training**. The trained
+   detector is saved under `~/.eeg_seizure_analyzer/models/<name>/`.
+   - **BENDR:** in **Pre-trained weights** choose `bendr_rodent_25k` (it
+     appears because Step 10 placed it in `…/pretrained/`); set the
+     fine-tune params (epochs, freeze-encoder epochs, encoder LR, …). This
+     fine-tunes the self-supervised backbone on your labels.
+   - **U-Net:** no pre-trained weights — it trains from scratch on your
+     labels.
 
-5. **Analysis** — run the **final** detection with the trained model.
-   Choose **Seizures**, select your model, set the threshold, and run in
-   **Single**, **Batch** (a folder of recordings), or **Live** mode.
-   Results are written to the database.
+5. **Repeat 2 → 4.** Run the step-4 model in Detection (step 2) to surface
+   better candidates, correct them in Training (step 3), and retrain
+   (step 4). Each loop adds labels and improves the detector.
 
-6. **Results** — review aggregated detections (daily burden, circadian
+6. **Analysis** — once the detector is good enough, run the **final**
+   detection: choose **Seizures**, select your model, set the threshold,
+   and run in **Single**, **Batch** (a folder of recordings), or **Live**
+   mode. Results are written to the database.
+
+7. **Results** — review aggregated detections (daily burden, circadian
    distribution) and export CSV.
 
-> A quick single-file ML detection also exists under **Detection →
-> Seizure** (method **BENDR** → pick your trained model) — handy for
-> spot-checking one recording — but **Analysis** is the tab for the real
-> batch/live run that populates the Results database.
+> **To keep improving the model, do you load your trained model as the
+> Pre-trained weights?** **No.** The **Pre-trained weights** dropdown lists
+> only the self-supervised backbones in `~/.eeg_seizure_analyzer/pretrained/`;
+> your *trained* models live in `…/models/` and are **not** offered there
+> (and U-Net has no pre-trained-weights field at all). You improve a model
+> by **retraining on the expanded annotation set** (select old + new
+> annotation files): BENDR re-fine-tunes from the `bendr_rodent_25k`
+> backbone, U-Net retrains from scratch. Retraining on more data each round
+> — rather than continuing the previous supervised weights — is deliberate:
+> it avoids forgetting / drift and takes only minutes at these dataset
+> sizes.
 
 ---
 

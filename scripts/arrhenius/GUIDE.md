@@ -375,6 +375,14 @@ reject) in **Training → Seizure**, then fine-tune a detector in
 `bendr_rodent_25k`, **Start Training**), and finally run batch/live
 detection in the **Analysis** tab. These are all separate top-level tabs.
 
+To **keep improving** the model you re-run that loop — detect with the
+trained model (Detection offers both **BENDR** and **U-Net** methods),
+correct the candidates, and **retrain on the larger annotation set**. You
+do *not* load your trained model as **Pre-trained weights**: that dropdown
+only lists the self-supervised backbones in `~/.eeg_seizure_analyzer/
+pretrained/`, never your trained detectors in `…/models/`. BENDR
+re-fine-tunes from the backbone; U-Net retrains from scratch.
+
 ---
 
 ## Why a container, not conda?
