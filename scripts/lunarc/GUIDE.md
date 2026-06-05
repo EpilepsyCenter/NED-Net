@@ -558,6 +558,98 @@ If this passes too, you're cleared for the multi-day runs.
 
 ---
 
+## Step 7.5: Generate the bad-channels map
+
+The real training runs (Steps 8–9) exclude known-noisy channels on a
+**per recording batch** basis — e.g. batch 1 drops electrode 1, batch 2
+drops electrodes 6 and 8, batch 3 drops none. The trainer reads this from
+a `bad_channels.json` file, which `scripts/make_bad_channels.py` generates
+from the `batch N` folders in your uploaded data.
+
+Run it once, on the **login node** (no GPU or conda needed — it's pure
+standard-library Python and only reads directory paths, not EDF contents):
+
+```bash
+cd ~/NED-Net
+python scripts/make_bad_channels.py \
+  --data-dir /lunarc/nobackup/projects/lu2026-2-60/edf_data
+```
+
+Expected output (counts will match your data):
+
+```
+Scanned 1888 EDF(s) under /lunarc/nobackup/projects/lu2026-2-60/edf_data
+  batch 1:   655 file(s)  exclude indices [0]
+  batch 2:   670 file(s)  exclude indices [5, 7]
+  batch 3:   563 file(s)  exclude indices none
+
+Wrote 1325 file entr(ies) ... to:
+  /lunarc/nobackup/projects/lu2026-2-60/bad_channels.json
+```
+
+By default it writes `bad_channels.json` to `<edf_data>/../`, which is
+exactly the path the `pretrain_short.sh` / `pretrain.sh` / `resume.sh`
+scripts pass to `--bad-channels`. Nothing else to wire up.
+
+Sanity-check it landed:
+
+```bash
+head -20 /lunarc/nobackup/projects/lu2026-2-60/bad_channels.json
+```
+
+> **Why this isn't optional.** The real-run scripts pass `--bad-channels`
+> unconditionally, so they **hard-fail at startup** if this file is
+> missing — that's deliberate: better a fast, loud failure than silently
+> training on the noisy channels you meant to drop. The smoke tests
+> (Steps 6–7) do *not* use the map, so they run fine before you generate
+> it.
+
+The generator itself also hard-fails (non-zero exit, nothing written) if:
+
+- the **same EDF filename appears under two different batches** (the map
+  keys on filename, so this would be ambiguous), or
+- an **EDF sits outside any `batch N` folder** (no rule to apply).
+
+If you hit either, the data layout needs a look before training — the
+`batch N` folders must be preserved from the transfer (don't flatten).
+
+### Adjusting for future batches or different bad channels
+
+All the exclusion logic lives in **one dict** at the top of
+`scripts/make_bad_channels.py`:
+
+```python
+BATCH_EXCLUDE = {
+    1: [0],      # electrode 1
+    2: [5, 7],   # electrodes 6 and 8
+    3: [],       # none
+}
+```
+
+Keys are batch numbers; values are **0-based channel indices** to drop.
+
+> **Electrode label vs. array index.** The lab numbers electrodes
+> **1-based** (1–8); the model indexes channels **0-based** (0–7). So
+> electrode *N* → index *N−1*. Electrode 1 → `0`, electrode 6 → `5`,
+> electrode 8 → `7`. Edit the dict in **index** space.
+
+To adjust:
+
+1. **New batch arrives** (e.g. the next 24-animal cohort = batch 4): add a
+   line, e.g. `4: [2],` for "drop electrode 3 in batch 4", or `4: [],` if
+   it's clean. **You must add a line for every batch** — a batch folder
+   with no entry in `BATCH_EXCLUDE` is left **untouched (all channels)**
+   with a warning to stderr, *not* treated as "exclude none". This is on
+   purpose so a forgotten batch is visible in the log rather than silently
+   mis-handled.
+2. **Bad channels differ from what's wired** (your channel check found
+   something else): change the index list for that batch.
+3. **Re-run the same command** above. It overwrites `bad_channels.json`
+   in place; the training scripts already point at it, so no other edits
+   are needed. Re-run it any time the data set or the rules change.
+
+---
+
 ## Step 8: Short pre-training run (5 epochs)
 
 Instead of jumping straight into a 7-day training job, we do a short run
