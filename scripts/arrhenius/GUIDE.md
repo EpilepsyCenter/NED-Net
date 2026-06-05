@@ -365,9 +365,15 @@ on Arrhenius too.)
 
 ## Step 11: Use the pre-trained model in NED-Net
 
-Identical to LUNARC — open the Dash app, go to **Training →
-Dataset/Model**, pick **BENDR**, and the `bendr_rodent_25k` weight
-file appears in the dropdown.
+Identical to LUNARC — see **Step 11** in `scripts/lunarc/GUIDE.md` for the
+full tab-by-tab flow. In short: the cluster produces a self-supervised
+BENDR *backbone* (`bendr_rodent_25k.pt` in
+`~/.eeg_seizure_analyzer/pretrained/`), not a detector. Inside NED-Net you
+generate candidates in **Detection → Seizure**, refine them (confirm /
+reject) in **Training → Seizure**, then fine-tune a detector in
+**Dataset / Model** (Architecture = BENDR, Pre-trained weights =
+`bendr_rodent_25k`, **Start Training**), and finally run batch/live
+detection in the **Analysis** tab. These are all separate top-level tabs.
 
 ---
 

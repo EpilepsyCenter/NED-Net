@@ -780,14 +780,48 @@ scp YOUR_USERNAME@cosmos.lunarc.lu.se:~/bendr_output/run1/pretrain_log.json `
 
 ## Step 11: Use the pre-trained model in NED-Net
 
-Now that the pre-trained weights are on the machine where NED-Net runs:
+What the cluster produced is a **self-supervised BENDR backbone**
+(`bendr_rodent_25k.pt`, now in `~/.eeg_seizure_analyzer/pretrained/`).
+That is **not a seizure detector on its own** — it's the pre-trained
+starting point you **fine-tune** on labelled seizures inside NED-Net.
 
-1. Open NED-Net (`python -m eeg_seizure_analyzer.dash_app.main`)
-2. Go to **Training** tab → **Dataset / Model**
-3. Select **Architecture: BENDR**
-4. In **Pre-trained weights**, you should see `bendr_rodent_25k` in the dropdown
-5. Annotate some seizures, build a dataset, and click **Start Training**
-6. Once trained, go to **Detection → Seizure** → select **BENDR** → pick your model → **Detect**
+`Detection`, `Training`, `Dataset / Model`, and `Analysis` are all
+**separate top-level tabs** (not nested), visited in this order:
+
+1. **Load** — open your EDF(s) and fill in the **Animal ID** for each
+   channel (needed for a clean train/validation split).
+
+2. **Detection → Seizure** — generate candidate events to review. With no
+   trained model yet, pick a **rule-based** method (e.g. Spike-Train or
+   Spectral Band) and click **Detect Seizures**. These are candidates, not
+   final results.
+
+3. **Training → Seizure** — the **refinement / annotation** step. Step
+   through each candidate and **Confirm** (real) or **Reject** (false
+   positive), adjusting onset/offset where the detector was off.
+   Annotations auto-save next to each EDF as `*_ned_annotations.json`
+   (confirmed → positives, rejected → hard negatives).
+
+4. **Dataset / Model → Dataset** — **Scan** the folder of annotated EDFs,
+   set **Architecture: BENDR**, and in **Pre-trained weights** choose
+   `bendr_rodent_25k` (it shows up because Step 10 placed it in
+   `~/.eeg_seizure_analyzer/pretrained/`). Set the fine-tune params
+   (epochs, freeze-encoder epochs, encoder LR, …) and click
+   **Start Training**. The trained detector is saved under
+   `~/.eeg_seizure_analyzer/models/<name>/`.
+
+5. **Analysis** — run the **final** detection with the trained model.
+   Choose **Seizures**, select your model, set the threshold, and run in
+   **Single**, **Batch** (a folder of recordings), or **Live** mode.
+   Results are written to the database.
+
+6. **Results** — review aggregated detections (daily burden, circadian
+   distribution) and export CSV.
+
+> A quick single-file ML detection also exists under **Detection →
+> Seizure** (method **BENDR** → pick your trained model) — handy for
+> spot-checking one recording — but **Analysis** is the tab for the real
+> batch/live run that populates the Results database.
 
 ---
 
