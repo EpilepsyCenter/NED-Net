@@ -1,8 +1,12 @@
 """Self-supervised pre-training for BENDR on unlabelled EEG data.
 
-Trains the convolutional encoder and transformer contextualizer using
-a contrastive masked prediction objective (wav2vec 2.0 style).  No
-annotations required — only raw EDF files.
+Trains the convolutional encoder and transformer contextualizer with a
+masked-prediction objective. The default ``--method data2vec`` uses an EMA
+teacher (data2vec / Baevski et al., 2022) — it learns and generalises to
+unseen recordings without the representation collapse that sank the legacy
+``--method contrastive`` (wav2vec 2.0 style) objective. See
+``BENDR_PRETRAIN_FIX_TODO.md`` for the diagnosis. No annotations required —
+only raw EDF files.
 
 Designed to run on a GPU cluster (e.g., LUNARC COSMOS with A100 GPUs).
 Not part of the Dash GUI.
@@ -46,7 +50,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, IterableDataset
 
-from eeg_seizure_analyzer.ml.bendr_model import build_pretrain_model
+import torch.nn.functional as F
+
+from eeg_seizure_analyzer.ml.bendr_model import (
+    build_data2vec_pretrain_model,
+    build_pretrain_model,
+)
 
 
 # ── Streaming EDF Dataset ────────────────────────────────────────────
@@ -264,14 +273,20 @@ def pretrain_bendr(
     encoder_h: int = 512,
     context_layers: int = 8,
     context_heads: int = 8,
-    mask_rate: float = 0.1,
+    method: str = "data2vec",
+    mask_rate: float = 0.15,
     mask_span: int = 6,
     temp: float = 0.5,
     num_negatives: int = 100,
+    ema_decay: float = 0.999,
+    ema_end_decay: float = 0.9999,
+    ema_anneal_steps: int = 5000,
+    top_k_layers: int = 4,
     epochs: int = 30,
     batch_size: int = 64,
-    learning_rate: float = 1e-3,
+    learning_rate: float = 5e-4,
     weight_decay: float = 1e-4,
+    warmup_steps: int = 500,
     num_workers: int = 4,
     checkpoint_every: int = 5,
     segments_per_file: int | None = None,
@@ -421,16 +436,36 @@ def pretrain_bendr(
     )
     print(f"Device: {device}")
 
-    model = build_pretrain_model(
-        n_eeg_channels=n_input_channels,
-        encoder_h=encoder_h,
-        context_layers=context_layers,
-        context_heads=context_heads,
-        mask_rate=mask_rate,
-        mask_span=mask_span,
-        temp=temp,
-        num_negatives=num_negatives,
-    )
+    if method == "data2vec":
+        # EMA-teacher objective — does not collapse on continuous EEG targets
+        # (see BENDR_PRETRAIN_FIX_TODO.md). This is the default.
+        model = build_data2vec_pretrain_model(
+            n_eeg_channels=n_input_channels,
+            encoder_h=encoder_h,
+            context_layers=context_layers,
+            context_heads=context_heads,
+            mask_rate=mask_rate,
+            mask_span=mask_span,
+            ema_decay=ema_decay,
+            ema_end_decay=ema_end_decay,
+            ema_anneal_steps=ema_anneal_steps,
+            top_k_layers=top_k_layers,
+        )
+    elif method == "contrastive":
+        # Legacy wav2vec-2.0-style objective. Kept for reference; it suffers a
+        # slow representation collapse on this data — prefer data2vec.
+        model = build_pretrain_model(
+            n_eeg_channels=n_input_channels,
+            encoder_h=encoder_h,
+            context_layers=context_layers,
+            context_heads=context_heads,
+            mask_rate=mask_rate,
+            mask_span=mask_span,
+            temp=temp,
+            num_negatives=num_negatives,
+        )
+    else:
+        raise ValueError(f"Unknown method {method!r} (use 'data2vec' or 'contrastive')")
     model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -491,8 +526,36 @@ def pretrain_bendr(
     if device.type == "cuda":
         print("SDPA backend: math (fused flash/mem-efficient disabled)")
     print(f"Segment: {segment_sec}s at {target_fs} Hz = {int(segment_sec * target_fs)} samples")
-    print(f"Mask: rate={mask_rate}, span={mask_span}, negatives={num_negatives}")
+    if method == "data2vec":
+        print(f"Method: data2vec (EMA teacher) | mask rate={mask_rate} span={mask_span} "
+              f"| ema {ema_decay}→{ema_end_decay} over {ema_anneal_steps} steps "
+              f"| top-{top_k_layers} layers")
+    else:
+        print(f"Method: contrastive | mask rate={mask_rate} span={mask_span} "
+              f"negatives={num_negatives} temp={temp}")
     print("-" * 70)
+
+    # Per-method quality metric (label-0 contrastive accuracy, or data2vec
+    # prediction–target cosine on masked positions). Both are stored under the
+    # train_acc/val_acc log keys; ``metric_label`` names what they mean.
+    metric_label = "acc" if method == "contrastive" else "cos"
+
+    def quality_sum_count(out) -> tuple[float, int]:
+        """Sample-weighted (sum, count) for the method's quality metric."""
+        if method == "contrastive":
+            logits, _z, mask = out
+            ml = model.select_masked_logits(logits, mask)
+            return float((ml.argmax(dim=1) == 0).sum().item()), int(ml.shape[0])
+        pred, target, mask = out
+        p = F.normalize(pred[mask], dim=1)
+        t = F.normalize(target[mask], dim=1)
+        return float((p * t).sum(dim=1).sum().item()), int(p.shape[0])
+
+    # data2vec's continuous-regression loss can diverge if launched straight at
+    # peak LR (validated locally); a short linear warmup prevents it. Skip it on
+    # resume — the model is already past the fragile early phase.
+    clip_norm = 3.0 if method == "data2vec" else 10.0
+    global_step = 0 if start_epoch == 0 else warmup_steps
 
     for epoch in range(start_epoch, epochs):
         t0 = time.time()
@@ -500,18 +563,27 @@ def pretrain_bendr(
         # ── Train ────────────────────────────────────────────
         model.train()
         train_losses = []
-        train_correct = 0
-        train_total = 0
+        train_metric_sum = 0.0
+        train_metric_count = 0
         n_batches = 0
         n_skipped = 0
+
+        # Peak LR for this epoch as set by the cosine scheduler; warmup scales
+        # below it during the first warmup_steps global steps only.
+        epoch_peak_lr = optimizer.param_groups[0]["lr"]
 
         for batch in train_loader:
             batch = batch.to(device)
             optimizer.zero_grad()
 
+            if global_step < warmup_steps:
+                warm_lr = epoch_peak_lr * (global_step + 1) / warmup_steps
+                for g in optimizer.param_groups:
+                    g["lr"] = warm_lr
+
             with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
-                logits, z, mask = model(batch)
-                loss = model.compute_loss(logits, z)
+                out = model(batch)
+                loss = model.compute_loss(*out)
 
             # Skip non-finite batches instead of stepping on them — one bad
             # batch's gradient would otherwise corrupt every weight (this is
@@ -521,50 +593,50 @@ def pretrain_bendr(
                 continue
 
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_norm)
             optimizer.step()
+            if method == "data2vec":
+                model.update_ema()
+            global_step += 1
 
             train_losses.append(loss.item())
 
-            # Contrastive accuracy
             with torch.no_grad():
-                preds = logits.argmax(dim=1)
-                labels = torch.zeros(logits.shape[0], device=device, dtype=torch.long)
-                train_correct += (preds == labels).sum().item()
-                train_total += labels.shape[0]
+                s, c = quality_sum_count(out)
+                train_metric_sum += s
+                train_metric_count += c
 
             n_batches += 1
             if n_batches % 100 == 0:
                 avg_loss = np.mean(train_losses[-100:])
-                acc = train_correct / max(1, train_total)
+                metric = train_metric_sum / max(1, train_metric_count)
                 print(f"  Epoch {epoch+1} | batch {n_batches} | "
-                      f"loss={avg_loss:.4f} | acc={acc:.3f}")
+                      f"loss={avg_loss:.4f} | {metric_label}={metric:.3f}")
 
         train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-        train_acc = train_correct / max(1, train_total)
+        train_acc = train_metric_sum / max(1, train_metric_count)
 
         # ── Validate ─────────────────────────────────────────
         model.eval()
         val_losses = []
-        val_correct = 0
-        val_total = 0
+        val_metric_sum = 0.0
+        val_metric_count = 0
 
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
                 with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
-                    logits, z, mask = model(batch)
-                    loss = model.compute_loss(logits, z)
+                    out = model(batch)
+                    loss = model.compute_loss(*out)
                 if not torch.isfinite(loss):
                     continue
                 val_losses.append(loss.item())
-                preds = logits.argmax(dim=1)
-                labels = torch.zeros(logits.shape[0], device=device, dtype=torch.long)
-                val_correct += (preds == labels).sum().item()
-                val_total += labels.shape[0]
+                s, c = quality_sum_count(out)
+                val_metric_sum += s
+                val_metric_count += c
 
         val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-        val_acc = val_correct / max(1, val_total)
+        val_acc = val_metric_sum / max(1, val_metric_count)
 
         scheduler.step()
         elapsed = time.time() - t0
@@ -590,8 +662,8 @@ def pretrain_bendr(
         )
         print(
             f"Epoch {epoch+1}/{epochs} | "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} | "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.3f} | "
+            f"train_loss={train_loss:.4f} train_{metric_label}={train_acc:.3f} | "
+            f"val_loss={val_loss:.4f} val_{metric_label}={val_acc:.3f} | "
             f"lr={lr:.2e} | {elapsed:.0f}s{skipped_note}"
         )
 
@@ -644,9 +716,11 @@ def _config_dict(local_vars: dict) -> dict:
     """Extract serialisable config from local variables."""
     keys = [
         "data_dir", "output_dir", "channels", "segment_sec", "target_fs",
-        "encoder_h", "context_layers", "context_heads", "mask_rate",
-        "mask_span", "temp", "num_negatives", "epochs", "batch_size",
-        "learning_rate", "weight_decay", "num_workers", "val_fraction",
+        "encoder_h", "context_layers", "context_heads", "method", "mask_rate",
+        "mask_span", "temp", "num_negatives", "ema_decay", "ema_end_decay",
+        "ema_anneal_steps", "top_k_layers", "epochs", "batch_size",
+        "learning_rate", "weight_decay", "warmup_steps", "num_workers",
+        "val_fraction", "metric_label",
     ]
     return {k: local_vars[k] for k in keys if k in local_vars}
 
@@ -686,22 +760,37 @@ def main():
                         help="Transformer layers")
     parser.add_argument("--context-heads", type=int, default=8,
                         help="Attention heads")
-    parser.add_argument("--mask-rate", type=float, default=0.1,
+    parser.add_argument("--method", choices=["data2vec", "contrastive"],
+                        default="data2vec",
+                        help="Pre-training objective. data2vec (EMA teacher) is "
+                             "the default and does not collapse; contrastive is "
+                             "the legacy wav2vec-2.0 objective kept for reference.")
+    parser.add_argument("--mask-rate", type=float, default=0.15,
                         help="Masking probability")
     parser.add_argument("--mask-span", type=int, default=6,
                         help="Contiguous mask span length")
     parser.add_argument("--temp", type=float, default=0.5,
-                        help="Contrastive loss temperature")
+                        help="[contrastive only] cosine similarity temperature")
     parser.add_argument("--num-negatives", type=int, default=100,
-                        help="Negative samples per position")
+                        help="[contrastive only] negative samples per position")
+    parser.add_argument("--ema-decay", type=float, default=0.999,
+                        help="[data2vec] starting EMA teacher momentum")
+    parser.add_argument("--ema-end-decay", type=float, default=0.9999,
+                        help="[data2vec] final EMA teacher momentum")
+    parser.add_argument("--ema-anneal-steps", type=int, default=5000,
+                        help="[data2vec] steps to anneal EMA momentum over")
+    parser.add_argument("--top-k-layers", type=int, default=4,
+                        help="[data2vec] teacher layers averaged into the target")
     parser.add_argument("--epochs", type=int, default=30,
                         help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Training batch size")
-    parser.add_argument("--lr", type=float, default=1e-3,
+    parser.add_argument("--lr", type=float, default=5e-4,
                         help="Peak learning rate")
     parser.add_argument("--weight-decay", type=float, default=1e-4,
                         help="AdamW weight decay")
+    parser.add_argument("--warmup-steps", type=int, default=500,
+                        help="Linear LR warmup steps (stabilises data2vec start)")
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader worker processes")
     parser.add_argument("--checkpoint-every", type=int, default=5,
@@ -730,14 +819,20 @@ def main():
         encoder_h=args.encoder_h,
         context_layers=args.context_layers,
         context_heads=args.context_heads,
+        method=args.method,
         mask_rate=args.mask_rate,
         mask_span=args.mask_span,
         temp=args.temp,
         num_negatives=args.num_negatives,
+        ema_decay=args.ema_decay,
+        ema_end_decay=args.ema_end_decay,
+        ema_anneal_steps=args.ema_anneal_steps,
+        top_k_layers=args.top_k_layers,
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
+        warmup_steps=args.warmup_steps,
         num_workers=args.num_workers,
         checkpoint_every=args.checkpoint_every,
         segments_per_file=args.segments_per_file,
