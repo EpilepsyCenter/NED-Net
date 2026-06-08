@@ -1,64 +1,79 @@
-# BENDR pre-training — collapse bug + fix plan (handoff 2026-06-08)
+# BENDR pre-training — collapse diagnosis + resolution (data2vec)
 
-**Status: BENDR self-supervised pre-training does not learn.** Fix before any
-more cluster time. This note is the handoff for resuming on another machine
-(e.g. Mac/arm64). Code under discussion: `bendr_model.py` (`BENDRPretrainModel`).
+**Status (2026-06-08): RESOLVED locally. Pre-training switched to a data2vec
+EMA-teacher objective, which learns and generalises without collapse. Validated
+on held-out whole files on Mac/MPS. Ready for a cluster `pretrain_short.sh`
+verification run before the full 30-epoch campaign.**
 
-## Evidence (Arrhenius, 2026-06-08)
+## The problem (Arrhenius runs)
 
-The contrastive objective sits at **chance in every run**:
-`val_loss ≈ ln(num_negatives+1) = ln(101) = 4.615`, `acc ≈ 0` every epoch.
+The original wav2vec-2.0-style **contrastive** objective never learned —
+`val_loss ≈ ln(num_negatives+1) = ln(101) = 4.615`, `acc ≈ 0` in every run.
 
-| run | train_acc | val_acc | notes |
-|-----|-----------|---------|-------|
-| test_gpu epoch 1 (job 12102) | 0.0002 | 0.0 | 3491 batches, LR 5e-4 |
-| test_gpu epoch 2 | 0.0 | 0.0 | |
-| pretrain_short epoch 1 (job 12159) | 0.000 | 0.000 | full data, ~2430 s/epoch |
-| pretrain_short epoch 2 | 0.000 | 0.000 | |
+## What we found (in order)
 
-~7000 optimizer steps at a healthy LR never moved off chance → **not
-under-training; it never learned the task.** The earlier smoke tests only ever
-validated plumbing (GPU/container/data path/checkpointing) — their `acc=0` was
-the missed tell. Job 12159 was cancelled to stop GPU billing.
+1. **Catastrophic collapse from three bugs** in the contrastive code, now fixed
+   in `bendr_model.py` (`BENDRPretrainModel`):
+   - targets/negatives weren't stop-gradient → encoder collapsed `z` to be
+     equidistant. → `.detach()` the targets + negatives.
+   - the loss covered *all* timesteps, not just masked ones. → `compute_loss`
+     now restricts to masked positions (`select_masked_logits`).
+   - the `neg_in_target` dedup compared `c` (context) instead of the target
+     `z`, so it never fired. → compare against `z`.
+   These took held-out accuracy from *exactly 0* to a peak of ~0.29.
 
-## Diagnosis: representation collapse
+2. **A second, slower collapse remained.** With the bugs fixed, held-out
+   accuracy still **peaked (~step 100) then decayed back to chance**. Confirmed
+   on held-out *whole files* (unseen cohorts), so it was real, not a metric
+   artifact. Diagnosis: continuous-target contrastive SSL is inherently
+   collapse-prone — once targets are detached, nothing keeps them diverse, and
+   the context `c` drifts to a near-constant. VICReg variance/covariance reg,
+   temperature 0.1, lower LR, and warmup each helped but none cured it.
 
-Loss parks a hair *above* `ln(101)` with `acc` pinned at exactly 0 — the
-positive is consistently just below the (collapsed, all-equal) negatives. The
-encoder minimizes loss by making all `z` vectors equidistant instead of
-learning to predict.
+## The fix: data2vec EMA-teacher objective (`--method data2vec`, default)
 
-## Fix — 3 surgical changes in `bendr_model.py`
+`BENDRData2VecPretrainModel` in `bendr_model.py`. A **student** (the trainable
+encoder + contextualizer) sees the *masked* sequence; at masked positions it
+regresses (smooth-L1) to targets from a **teacher** — an EMA copy of the same
+networks run on the *unmasked* sequence. Targets are the average of the top-K
+teacher layers, instance-normalised over time then layer-normed over features.
+The EMA lag + target normalisation structurally prevent collapse: no negatives,
+no quantization. Build via `build_data2vec_pretrain_model`; checkpoints are
+weight-compatible with `BENDRSeizureModel.load_pretrained_combined` for
+fine-tuning (only encoder+contextualizer are saved; teacher/predictor dropped).
 
-These restore the standard wav2vec 2.0 / BENDR objective this code deviates from:
+### Local validation (held-out whole files, Mac/MPS)
 
-1. **Stop-gradient the targets + negatives.** `unmasked_z` is used as the
-   positive target in `_compute_logits` and for negatives in
-   `_generate_negatives` **without `.detach()`**, so gradients flow into the
-   targets and the model collapses `z`. `enc_feat_l2` (penalizes `z²`) helps it
-   into that basin. → detach `z`/negatives where they serve as targets.
-2. **Restrict the contrastive loss to MASKED positions only.** `compute_loss`
-   uses `labels = zeros(logits.shape[0])` over *all* timesteps; the returned
-   `mask` is ignored. wav2vec2/BENDR compute the loss only at masked positions.
-3. **Fix the `neg_in_target` dedup.** It compares negatives against `c`
-   (context) instead of the positive target `z`, so it never fires.
+`scripts/local/sanity_pretrain.py` — shrunk model, whole-file holdout, tracks
+held-out prediction–target cosine. data2vec rises **monotonically and holds**
+(cosine 0.00 → 0.12 over 1200 steps, loss steadily down), vs the contrastive
+objective which spiked then decayed to chance. Gate PASSES. Run it before any
+cluster time:
 
-`temp=0.5` is fine (logits = cos_sim×2, not over-squashed) — not the cause.
-Also reconsider `mask_rate=0.1` (low; BENDR uses heavier effective masking)
-once the objective learns at all.
+    python scripts/local/sanity_pretrain.py --data /path/to/edf_dir --steps 1200
 
-## Validation BEFORE re-running on the cluster
+### Training-loop changes (`bendr_pretrain.py`)
 
-Fast local sanity run (CPU or Mac MPS): shrink the model (fewer context layers,
-smaller `encoder_h`) + a few EDFs + a few hundred steps. A **correct** objective
-should drop `val_loss` below 4.6 and lift `acc` off zero within minutes; the
-current code provably won't. Only after that curve looks right do we re-run
-`scripts/arrhenius/pretrain_short.sh`. **Do NOT launch `resume.sh`** until validated.
+- `--method {data2vec,contrastive}` (default data2vec); EMA flags
+  `--ema-decay/--ema-end-decay/--ema-anneal-steps/--top-k-layers`.
+- `update_ema()` after each `optimizer.step()`; loss is smooth-L1 regression;
+  the reported quality metric is held-out cosine (`val_cos`).
+- **Linear LR warmup** (`--warmup-steps 500`) + tighter grad clip (3.0): a
+  constant high LR with no warmup caused a late divergence in testing; warmup +
+  the existing cosine schedule fixes it. Peak LR lowered to `5e-4`.
+- mask_rate default 0.10 → 0.15.
 
-## Everything else is working (don't re-litigate)
+Cluster scripts (`arrhenius/`, `lunarc/` pretrain_short/pretrain/resume) updated
+to `--lr 5e-4 --method data2vec --warmup-steps 500`.
 
-Two-cohort staging (`SV2A_2024` + `RAM_GDNF_2025`, 2976 EDFs on Arrhenius),
-cohort-aware `scripts/make_bad_channels.py` (2635 files / 6897 exclusions),
-740 GB transfer intact, ~40 min/epoch throughput, math-SDPA backend (deliberate
-anti-NaN choice, fine at ~150 tokens). The full 30-epoch run would fit one
-`resume.sh` job (~17 h) once the objective is fixed.
+## Next step on the cluster
+
+Run `pretrain_short.sh` (5 epochs) and confirm `val_loss` decreases and
+`val_cos` rises across epochs. If clean, launch the full 30-epoch `pretrain.sh`
+(+`resume.sh` if walltime is exceeded), then fine-tune and compare to from-scratch.
+
+## Everything else (don't re-litigate)
+
+Two-cohort staging, cohort-aware bad-channels, 740 GB transfer, ~40 min/epoch,
+math-SDPA backend, `--target-fs 250` alignment — all fine. Channels 0–7 are the
+Biopot EEG (each a separate animal); 8–15 are activity and are never trained on.

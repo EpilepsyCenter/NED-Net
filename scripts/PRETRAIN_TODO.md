@@ -1,5 +1,14 @@
 # Pre-training Notes
 
+## Resolved: objective switched to data2vec (EMA teacher)
+
+The wav2vec-2.0 **contrastive** objective collapsed (held-out accuracy peaked
+then decayed to chance — continuous-target collapse). Pre-training now defaults
+to `--method data2vec`, which learns and generalises without collapse. Cluster
+scripts updated to `--lr 5e-4 --method data2vec --warmup-steps 500`. Validate
+locally first: `python scripts/local/sanity_pretrain.py --data <edf_dir>`. Full
+diagnosis + resolution in `eeg_seizure_analyzer/ml/BENDR_PRETRAIN_FIX_TODO.md`.
+
 ## Resolved: `--target-fs` aligned to 250 across pre-training scripts
 
 The pre-training sample rate now matches fine-tuning / inference at **250 Hz**

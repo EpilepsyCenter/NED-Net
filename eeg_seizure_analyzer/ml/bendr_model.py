@@ -400,8 +400,14 @@ class BENDRContextualizer(nn.Module):
         x: torch.Tensor,
         mask_t: torch.Tensor | None = None,
         mask_c: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """(batch, features, seq) → (batch, features, seq)"""
+        return_hidden: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
+        """(batch, features, seq) → (batch, features, seq).
+
+        If ``return_hidden`` is True, also return the list of per-layer
+        transformer hidden states (each ``(seq[+start], batch, transformer_dim)``)
+        — used by the data2vec pre-training objective for top-K target averaging.
+        """
         bs, feat, seq = x.shape
 
         # Fine-tuning masking (light regularisation)
@@ -431,12 +437,18 @@ class BENDRContextualizer(nn.Module):
             x = torch.cat([token, x], dim=0)
 
         # Transformer layers with stochastic depth
+        hidden_states: list[torch.Tensor] = []
         for layer in self.transformer_layers:
             if not self.training or torch.rand(1).item() > self.layer_drop:
                 x = layer(x)
+            if return_hidden:
+                hidden_states.append(x)
 
         # → (batch, features, seq) and project back to encoder_h
-        return self.output_layer(x.permute(1, 2, 0))
+        out = self.output_layer(x.permute(1, 2, 0))
+        if return_hidden:
+            return out, hidden_states
+        return out
 
     def freeze(self, frozen: bool = True) -> None:
         """Freeze or unfreeze all contextualizer parameters."""
@@ -788,8 +800,13 @@ class BENDRPretrainModel(nn.Module):
         c = c[..., 1:].permute(0, 2, 1).unsqueeze(-2)
         z = z.permute(0, 2, 1).unsqueeze(-2)
 
-        # Check for exact matches (avoid div-by-zero)
-        neg_in_target = (c == negatives).all(-1)
+        # A sampled negative is "false" when it coincides with the positive
+        # target z (cos = 1 would penalise the model for what is actually a
+        # correct guess). Negatives are drawn from z, so the comparison must
+        # be against z. Comparing against the contextualizer output c (a
+        # different representation space) never fires, so false negatives
+        # stayed in the denominator and held the objective at chance.
+        neg_in_target = (z == negatives).all(-1)
         targets = torch.cat([c, negatives], dim=-2)
 
         # Compute the contrastive similarity in fp32 regardless of the
@@ -846,17 +863,221 @@ class BENDRPretrainModel(nn.Module):
         z.transpose(2, 1)[mask_device] = self.contextualizer.mask_replacement.to(z.dtype)
 
         c = self.contextualizer(z)
-        negatives, _ = self._generate_negatives(unmasked_z)
-        logits = self._compute_logits(unmasked_z, c, negatives)
+
+        # Stop-gradient on the prediction targets. The positive (unmasked_z)
+        # and the negatives drawn from it are *targets*, not predictions —
+        # gradient must not flow into them. Without detach the encoder
+        # minimises the loss by collapsing every z to be mutually equidistant
+        # (the positive parks just under the all-equal negatives → acc pinned
+        # at chance forever), which is exactly the failure seen on Arrhenius.
+        # The non-detached unmasked_z is still returned so the L2 feature
+        # penalty in compute_loss can regularise the encoder. This restores
+        # the standard wav2vec 2.0 / BENDR objective.
+        target_z = unmasked_z.detach()
+        negatives, _ = self._generate_negatives(target_z)
+        logits = self._compute_logits(target_z, c, negatives)
 
         return logits, unmasked_z, mask
 
-    def compute_loss(
-        self, logits: torch.Tensor, z: torch.Tensor,
+    @staticmethod
+    def select_masked_logits(
+        logits: torch.Tensor, mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Contrastive loss + L2 regularisation on encoder features."""
+        """Keep only the logit rows at masked positions.
+
+        ``logits`` is ``(batch * seq, 1 + num_negatives)``, flattened
+        batch-major to match ``_compute_logits``; ``mask`` is
+        ``(batch, seq)``. The contrastive objective is defined *only* at
+        masked positions — scoring the unmasked ones (which the
+        contextualizer can copy straight through from the input) swamps the
+        signal with trivial examples and pins accuracy at chance. wav2vec 2.0
+        and BENDR both compute the loss on masked positions alone.
+        """
+        sel = mask.reshape(-1).to(logits.device)
+        return logits[sel]
+
+    def compute_loss(
+        self,
+        logits: torch.Tensor,
+        z: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Contrastive loss (masked positions only) + L2 feature penalty.
+
+        ``mask`` is the per-position boolean mask returned by ``forward``.
+        It is optional only for backward compatibility; always pass it —
+        omitting it scores every timestep and the objective cannot learn.
+        """
+        if mask is not None:
+            logits = self.select_masked_logits(logits, mask)
         labels = torch.zeros(logits.shape[0], device=logits.device, dtype=torch.long)
         return self.loss_fn(logits, labels) + self.enc_feat_l2 * z.pow(2).mean()
+
+
+# ── data2vec Pre-training Model ──────────────────────────────────────
+
+
+class BENDRData2VecPretrainModel(nn.Module):
+    """data2vec-style self-supervised pre-training (EMA target encoder).
+
+    The contrastive objective (``BENDRPretrainModel``) collapses on continuous
+    EEG targets: even with detached targets and masked-only loss, the
+    representation degrades after an early peak (held-out accuracy returns to
+    chance). data2vec (Baevski et al., 2022) is the principled cure and is
+    essentially "BENDR done right" — no negatives, no quantization.
+
+    A **student** (the trainable encoder + contextualizer) sees the *masked*
+    feature sequence and, at the masked positions, regresses to targets produced
+    by a **teacher** — an exponential-moving-average (EMA) copy of the same
+    networks — run on the *unmasked* sequence. The teacher is never trained by
+    gradient (only EMA-tracked), and its targets are the average of the top-K
+    transformer layers, instance-normalised over time then layer-normed over
+    features. The EMA lag + target normalisation are what structurally prevent
+    the representation collapse.
+
+    Parameters
+    ----------
+    encoder, contextualizer
+        The student networks to pre-train (also EMA-copied into the teacher).
+    mask_rate, mask_span
+        Temporal masking, as in the contrastive model.
+    ema_decay, ema_end_decay, ema_anneal_steps
+        EMA momentum schedule: ``ema_decay`` at step 0, linearly annealed to
+        ``ema_end_decay`` over ``ema_anneal_steps`` optimizer steps, then held.
+    top_k_layers
+        Number of final teacher transformer layers averaged into the target.
+    """
+
+    def __init__(
+        self,
+        encoder: ConvEncoderBENDR,
+        contextualizer: BENDRContextualizer,
+        mask_rate: float = 0.15,
+        mask_span: int = 6,
+        ema_decay: float = 0.999,
+        ema_end_decay: float = 0.9999,
+        ema_anneal_steps: int = 2000,
+        top_k_layers: int = 4,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.contextualizer = contextualizer
+        self.mask_rate = mask_rate
+        self.mask_span = mask_span
+        self.ema_decay = ema_decay
+        self.ema_end_decay = ema_end_decay
+        self.ema_anneal_steps = ema_anneal_steps
+        self.top_k_layers = top_k_layers
+
+        transformer_dim = contextualizer._transformer_dim
+        self.predictor = nn.Sequential(
+            nn.Linear(transformer_dim, transformer_dim),
+            nn.GELU(),
+            nn.Linear(transformer_dim, transformer_dim),
+        )
+
+        # EMA teacher: frozen deep copies, updated only via update_ema().
+        self.ema_encoder = copy.deepcopy(encoder)
+        self.ema_contextualizer = copy.deepcopy(contextualizer)
+        for p in self.ema_encoder.parameters():
+            p.requires_grad_(False)
+        for p in self.ema_contextualizer.parameters():
+            p.requires_grad_(False)
+        self.register_buffer("ema_step", torch.zeros((), dtype=torch.long))
+
+    @torch.no_grad()
+    def _current_decay(self) -> float:
+        s = int(self.ema_step.item())
+        if s >= self.ema_anneal_steps:
+            return self.ema_end_decay
+        frac = s / max(1, self.ema_anneal_steps)
+        return self.ema_decay + (self.ema_end_decay - self.ema_decay) * frac
+
+    @torch.no_grad()
+    def update_ema(self) -> None:
+        """EMA-track the teacher toward the student. Call after optimizer.step()."""
+        d = self._current_decay()
+        for pe, ps in zip(self.ema_encoder.parameters(), self.encoder.parameters()):
+            pe.mul_(d).add_(ps.detach(), alpha=1 - d)
+        for pe, ps in zip(
+            self.ema_contextualizer.parameters(), self.contextualizer.parameters(),
+        ):
+            pe.mul_(d).add_(ps.detach(), alpha=1 - d)
+        # Buffers (norm stats etc.) are copied outright, not averaged.
+        for be, bs in zip(self.ema_encoder.buffers(), self.encoder.buffers()):
+            be.copy_(bs)
+        for be, bs in zip(
+            self.ema_contextualizer.buffers(), self.contextualizer.buffers(),
+        ):
+            be.copy_(bs)
+        self.ema_step += 1
+
+    def _strip_start(self, h: torch.Tensor) -> torch.Tensor:
+        """(seq[+start], batch, dim) → (batch, seq, dim), dropping the start token."""
+        if self.contextualizer.start_token is not None:
+            h = h[1:]
+        return h.permute(1, 0, 2)
+
+    def _make_mask_for(self, batch_size: int, samples: int) -> torch.Tensor:
+        if self.training:
+            return _make_mask(
+                (batch_size, samples), self.mask_rate, samples, self.mask_span,
+            )
+        mask = torch.zeros((batch_size, samples), dtype=torch.bool)
+        half_seeds = max(1, int(samples * self.mask_rate * 0.5))
+        seed_positions = (samples // half_seeds) * np.arange(half_seeds).astype(int)
+        mask[:, _make_span_from_seeds(seed_positions, self.mask_span)] = True
+        return mask
+
+    def forward(
+        self, x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``(pred, target, mask)``.
+
+        pred, target : (batch, seq, transformer_dim)
+            Student prediction and (stop-grad) teacher target.
+        mask : (batch, seq) bool
+            Masked positions — the loss is computed only here.
+        """
+        z = self.encoder(x)
+        batch_size, feat, samples = z.shape
+
+        mask = self._make_mask_for(batch_size, samples)
+        mask_device = mask.to(z.device)
+
+        z_masked = z.clone()
+        z_masked.transpose(2, 1)[mask_device] = (
+            self.contextualizer.mask_replacement.to(z.dtype)
+        )
+
+        # Student: masked input → top transformer hidden → predictor.
+        _, student_hidden = self.contextualizer(z_masked, return_hidden=True)
+        student_h = self._strip_start(student_hidden[-1])
+        pred = self.predictor(student_h)
+
+        # Teacher: unmasked input → averaged, normalised top-K targets (no grad).
+        with torch.no_grad():
+            self.ema_encoder.eval()
+            self.ema_contextualizer.eval()
+            z_teacher = self.ema_encoder(x)
+            _, teacher_hidden = self.ema_contextualizer(z_teacher, return_hidden=True)
+            top_k = teacher_hidden[-self.top_k_layers:]
+            normed = []
+            for h in top_k:
+                h = self._strip_start(h)  # (B, S, D)
+                # Instance-normalise over time (per batch, per feature).
+                h = (h - h.mean(1, keepdim=True)) / (h.std(1, keepdim=True) + 1e-5)
+                normed.append(h)
+            target = sum(normed) / len(normed)
+            target = F.layer_norm(target, (target.shape[-1],))
+
+        return pred, target, mask_device
+
+    def compute_loss(
+        self, pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Smooth-L1 regression loss at masked positions only."""
+        return F.smooth_l1_loss(pred[mask], target[mask])
 
 
 # ── Factory functions ────────────────────────────────────────────────
@@ -975,4 +1196,58 @@ def build_pretrain_model(
         mask_span=mask_span,
         temp=temp,
         num_negatives=num_negatives,
+    )
+
+
+def build_data2vec_pretrain_model(
+    n_eeg_channels: int = 1,
+    encoder_h: int = 512,
+    context_layers: int = 8,
+    context_heads: int = 8,
+    mask_rate: float = 0.15,
+    mask_span: int = 6,
+    ema_decay: float = 0.999,
+    ema_end_decay: float = 0.9999,
+    ema_anneal_steps: int = 2000,
+    top_k_layers: int = 4,
+) -> BENDRData2VecPretrainModel:
+    """Create a BENDR model configured for data2vec (EMA-teacher) pre-training.
+
+    Drop-in alternative to :func:`build_pretrain_model` that avoids the
+    continuous-target contrastive collapse. The encoder/contextualizer produced
+    here are weight-compatible with :class:`BENDRSeizureModel`, so the resulting
+    checkpoint fine-tunes through the same ``load_pretrained_combined`` path.
+
+    Parameters
+    ----------
+    n_eeg_channels, encoder_h, context_layers, context_heads
+        Architecture, identical to :func:`build_pretrain_model`.
+    mask_rate, mask_span
+        Temporal masking.
+    ema_decay, ema_end_decay, ema_anneal_steps
+        EMA teacher momentum schedule (see :class:`BENDRData2VecPretrainModel`).
+    top_k_layers
+        Number of final teacher layers averaged into the target.
+    """
+    encoder = ConvEncoderBENDR(
+        in_features=n_eeg_channels,
+        encoder_h=encoder_h,
+    )
+    contextualizer = BENDRContextualizer(
+        in_features=encoder_h,
+        hidden_feedforward=3076,
+        heads=context_heads,
+        layers=context_layers,
+        finetuning=False,
+        start_token=-5,
+    )
+    return BENDRData2VecPretrainModel(
+        encoder=encoder,
+        contextualizer=contextualizer,
+        mask_rate=mask_rate,
+        mask_span=mask_span,
+        ema_decay=ema_decay,
+        ema_end_decay=ema_end_decay,
+        ema_anneal_steps=ema_anneal_steps,
+        top_k_layers=top_k_layers,
     )

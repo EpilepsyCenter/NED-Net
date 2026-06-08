@@ -64,7 +64,9 @@ arrhenius_run "python -m eeg_seizure_analyzer.ml.bendr_pretrain \
     --bad-channels '${BAD_CHANNELS}' \
     --epochs 30 \
     --batch-size 64 \
-    --lr 1e-3 \
+    --lr 5e-4 \
+    --method data2vec \
+    --warmup-steps 500 \
     --weight-decay 1e-4 \
     --num-workers 16 \
     --segment-sec 60 \
