@@ -561,10 +561,21 @@ If this passes too, you're cleared for the multi-day runs.
 ## Step 7.5: Generate the bad-channels map
 
 The real training runs (Steps 8–9) exclude known-noisy channels on a
-**per recording batch** basis — e.g. batch 1 drops electrode 1, batch 2
-drops electrodes 6 and 8, batch 3 drops none. The trainer reads this from
-a `bad_channels.json` file, which `scripts/make_bad_channels.py` generates
-from the `batch N` folders in your uploaded data.
+**per (cohort, batch)** basis. The data is staged one folder per cohort,
+each with its own `batch {1,2,3}` — and the bad channels differ per batch
+*and* per cohort:
+
+```
+edf_data/
+  SV2A_2024/     batch {1,2,3}/Week*-Day*/*.edf
+  RAM_GDNF_2025/ batch {1,2,3}/W*-D*/*.edf
+```
+
+The trainer reads the exclusions from a `bad_channels.json` file, which
+`scripts/make_bad_channels.py` generates from the cohort + `batch N` folders
+in your uploaded data. The lab's plain-text source of truth is
+`edf_data_for_bendr/bad channels.txt`; the script encodes the same rules as
+0-based indices.
 
 Run it once, on the **login node** (no GPU or conda needed — it's pure
 standard-library Python and only reads directory paths, not EDF contents):
@@ -578,12 +589,15 @@ python scripts/make_bad_channels.py \
 Expected output (counts will match your data):
 
 ```
-Scanned 1888 EDF(s) under /lunarc/nobackup/projects/lu2026-2-60/edf_data
-  batch 1:   655 file(s)  exclude indices [0]
-  batch 2:   670 file(s)  exclude indices [5, 7]
-  batch 3:   563 file(s)  exclude indices none
+Scanned 2976 EDF(s) under /lunarc/nobackup/projects/lu2026-2-60/edf_data
+  RAM_GDNF_2025 / batch 1:   338 file(s)  exclude indices [1, 4]
+  RAM_GDNF_2025 / batch 2:   339 file(s)  exclude indices [2, 3, 6]
+  RAM_GDNF_2025 / batch 3:   341 file(s)  exclude indices none
+  SV2A_2024 / batch 1:   660 file(s)  exclude indices [0, 2, 7]
+  SV2A_2024 / batch 2:   670 file(s)  exclude indices [4, 5]
+  SV2A_2024 / batch 3:   628 file(s)  exclude indices [0, 2, 5]
 
-Wrote 1325 file entr(ies) ... to:
+Wrote 2635 file entr(ies) ... to:
   /lunarc/nobackup/projects/lu2026-2-60/bad_channels.json
 ```
 
@@ -606,45 +620,56 @@ head -20 /lunarc/nobackup/projects/lu2026-2-60/bad_channels.json
 
 The generator itself also hard-fails (non-zero exit, nothing written) if:
 
-- the **same EDF filename appears under two different batches** (the map
-  keys on filename, so this would be ambiguous), or
+- the **same EDF filename appears under groups with different exclusions**
+  (the map keys on filename, so this would be ambiguous — this is exactly
+  how a misplaced/duplicated recording gets caught), or
+- an **EDF sits outside any known cohort folder** (`SV2A_2024`,
+  `RAM_GDNF_2025`, …), or
 - an **EDF sits outside any `batch N` folder** (no rule to apply).
 
-If you hit either, the data layout needs a look before training — the
-`batch N` folders must be preserved from the transfer (don't flatten).
+If you hit any of these, the data layout needs a look before training — the
+cohort and `batch N` folders must be preserved from the transfer (don't
+flatten).
 
-### Adjusting for future batches or different bad channels
+### Adjusting for future cohorts/batches or different bad channels
 
 All the exclusion logic lives in **one dict** at the top of
-`scripts/make_bad_channels.py`:
+`scripts/make_bad_channels.py`, keyed on **cohort → batch → 0-based indices**:
 
 ```python
-BATCH_EXCLUDE = {
-    1: [0],      # electrode 1
-    2: [5, 7],   # electrodes 6 and 8
-    3: [],       # none
+COHORT_EXCLUDE = {
+    "SV2A_2024": {
+        1: [0, 2, 7],   # electrodes 1, 3, 8
+        2: [4, 5],      # electrodes 5, 6
+        3: [0, 2, 5],   # electrodes 1, 3, 6
+    },
+    "RAM_GDNF_2025": {
+        1: [1, 4],      # electrodes 2, 5
+        2: [2, 3, 6],   # electrodes 3, 4, 7
+        3: [],          # all ok
+    },
 }
 ```
-
-Keys are batch numbers; values are **0-based channel indices** to drop.
 
 > **Electrode label vs. array index.** The lab numbers electrodes
 > **1-based** (1–8); the model indexes channels **0-based** (0–7). So
 > electrode *N* → index *N−1*. Electrode 1 → `0`, electrode 6 → `5`,
-> electrode 8 → `7`. Edit the dict in **index** space.
+> electrode 8 → `7`. Edit the dict in **index** space. The human-readable
+> source is `edf_data_for_bendr/bad channels.txt`.
 
 To adjust:
 
-1. **New batch arrives** (e.g. the next 24-animal cohort = batch 4): add a
-   line, e.g. `4: [2],` for "drop electrode 3 in batch 4", or `4: [],` if
-   it's clean. **You must add a line for every batch** — a batch folder
-   with no entry in `BATCH_EXCLUDE` is left **untouched (all channels)**
-   with a warning to stderr, *not* treated as "exclude none". This is on
-   purpose so a forgotten batch is visible in the log rather than silently
-   mis-handled.
-2. **Bad channels differ from what's wired** (your channel check found
-   something else): change the index list for that batch.
-3. **Re-run the same command** above. It overwrites `bad_channels.json`
+1. **New cohort arrives** (e.g. another study): add a top-level key with its
+   own per-batch sub-dict. EDFs under a folder name not in `COHORT_EXCLUDE`
+   **hard-fail** the run (so a new cohort can't be silently mis-handled).
+2. **New batch within a cohort**: add a line to that cohort's sub-dict, e.g.
+   `4: [2],` to "drop electrode 3", or `4: [],` if clean. A batch folder
+   with no entry is left **untouched (all channels)** with a warning to
+   stderr — *not* treated as "exclude none" — so a forgotten batch is
+   visible in the log.
+3. **Bad channels differ from what's wired** (your channel check found
+   something else): change the index list for that cohort/batch.
+4. **Re-run the same command** above. It overwrites `bad_channels.json`
    in place; the training scripts already point at it, so no other edits
    are needed. Re-run it any time the data set or the rules change.
 
