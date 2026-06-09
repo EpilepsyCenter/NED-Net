@@ -327,7 +327,14 @@ class BENDRContextualizer(nn.Module):
         self.in_features = in_features
         self._transformer_dim = in_features * 3
 
-        # Build transformer layers with T-fixup (norms replaced by identity)
+        # Pre-LN transformer layers. The original BENDR used T-fixup, which
+        # removes the attention LayerNorms (norm1/norm2 → identity). Without any
+        # normalization the residual stream grows unboundedly under the
+        # data2vec regression objective — verified: the contextualizer output
+        # magnitude blew up ~6 orders over a few hundred steps and overflowed
+        # bf16 on the A100 (~79% non-finite batches). norm_first=True keeps the
+        # per-layer LayerNorms and applies them before each sublayer, which
+        # bounds activation growth; self.norm is the final pre-LN normalization.
         layer_template = nn.TransformerEncoderLayer(
             d_model=self._transformer_dim,
             nhead=heads,
@@ -335,9 +342,8 @@ class BENDRContextualizer(nn.Module):
             dropout=dropout,
             activation=activation,
             batch_first=False,
+            norm_first=True,
         )
-        layer_template.norm1 = _Hax()
-        layer_template.norm2 = _Hax()
 
         self.norm = nn.LayerNorm(self._transformer_dim)
         self.transformer_layers = nn.ModuleList(
@@ -444,7 +450,8 @@ class BENDRContextualizer(nn.Module):
             if return_hidden:
                 hidden_states.append(x)
 
-        # → (batch, features, seq) and project back to encoder_h
+        # Final pre-LN normalization before projecting back to encoder_h.
+        x = self.norm(x)
         out = self.output_layer(x.permute(1, 2, 0))
         if return_hidden:
             return out, hidden_states
