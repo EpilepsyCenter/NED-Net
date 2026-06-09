@@ -66,6 +66,27 @@ cluster time:
 Cluster scripts (`arrhenius/`, `lunarc/` pretrain_short/pretrain/resume) updated
 to `--lr 5e-4 --method data2vec --warmup-steps 500`.
 
+## Cluster smoke-test findings (2026-06-09) — two more fixes
+
+A `test_gpu.sh` smoke run on the A100 (bf16 AMP, which the Mac never exercised —
+it runs fp32) skipped ~79% of batches as non-finite and blew `train_loss` to
+~1e13. Two distinct bf16 issues, both fixed:
+
+1. **Target/loss precision.** The data2vec target normalization and smooth-L1
+   loss ran under bf16 autocast, where ~3 significant digits destroy mean/std/
+   division. Now forced to fp32 (autocast disabled, tensors cast up), mirroring
+   the contrastive path; instance-norm eps 1e-5 → 1e-4.
+2. **Unbounded activation growth → the real cause.** The contextualizer was a
+   LayerNorm-free T-fixup transformer (`norm1=norm2=_Hax()`). Under data2vec's
+   *unbounded* regression loss the residual stream grew ~6 orders of magnitude
+   over a few hundred steps and overflowed bf16. Switched the transformer to
+   **pre-LN** (`norm_first=True`, real LayerNorms) and wired in the
+   previously-unused `self.norm` as the final norm. Verified locally under bf16:
+   contextualizer output magnitude now sits at ~2 (was 3e6+), 0 non-finite, and
+   the learnability gate still passes. This changes the architecture for both
+   pre-training and fine-tuning (consistent — both build the same
+   `BENDRContextualizer`; no pre-existing weights to break).
+
 ## Next step on the cluster
 
 Run `pretrain_short.sh` (5 epochs) and confirm `val_loss` decreases and
