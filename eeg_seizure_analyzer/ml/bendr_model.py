@@ -1062,22 +1062,32 @@ class BENDRData2VecPretrainModel(nn.Module):
             z_teacher = self.ema_encoder(x)
             _, teacher_hidden = self.ema_contextualizer(z_teacher, return_hidden=True)
             top_k = teacher_hidden[-self.top_k_layers:]
-            normed = []
-            for h in top_k:
-                h = self._strip_start(h)  # (B, S, D)
-                # Instance-normalise over time (per batch, per feature).
-                h = (h - h.mean(1, keepdim=True)) / (h.std(1, keepdim=True) + 1e-5)
-                normed.append(h)
-            target = sum(normed) / len(normed)
-            target = F.layer_norm(target, (target.shape[-1],))
+            # Build the targets in fp32. Under bf16 autocast the normalisation
+            # statistics (mean/std/division) lose all precision — a near-flat
+            # feature gives a tiny std and the division explodes to huge or
+            # non-finite targets (observed: ~79% of batches skipped on the A100).
+            with torch.autocast(x.device.type, enabled=False):
+                normed = []
+                for h in top_k:
+                    h = self._strip_start(h).float()  # (B, S, D), fp32
+                    # Instance-normalise over time (per batch, per feature).
+                    h = (h - h.mean(1, keepdim=True)) / (h.std(1, keepdim=True) + 1e-4)
+                    normed.append(h)
+                target = sum(normed) / len(normed)
+                target = F.layer_norm(target, (target.shape[-1],))
 
         return pred, target, mask_device
 
     def compute_loss(
         self, pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor,
     ) -> torch.Tensor:
-        """Smooth-L1 regression loss at masked positions only."""
-        return F.smooth_l1_loss(pred[mask], target[mask])
+        """Smooth-L1 regression loss at masked positions only.
+
+        Computed in fp32 (targets are fp32; pred is cast up) — the regression
+        against normalised targets is numerically fragile under bf16 autocast.
+        """
+        with torch.autocast(pred.device.type, enabled=False):
+            return F.smooth_l1_loss(pred[mask].float(), target[mask].float())
 
 
 # ── Factory functions ────────────────────────────────────────────────
