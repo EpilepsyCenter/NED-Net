@@ -3290,13 +3290,131 @@ def _progress_path(sid: str) -> _Path:
 
 def _write_progress(sid: str, current: int, total: int,
                     current_file: str, events_so_far: int,
-                    done: bool = False, error_msg: str = ""):
+                    done: bool = False, error_msg: str = "",
+                    skipped_msg: str = ""):
     """Write progress info to a JSON file for polling."""
     _json.dump(
         {"current": current, "total": total, "file": current_file,
-         "events": events_so_far, "done": done, "error": error_msg},
+         "events": events_so_far, "done": done, "error": error_msg,
+         "skipped": skipped_msg},
         open(_progress_path(sid), "w"),
     )
+
+
+def _build_per_channel_detector(method: str, sz_params: dict):
+    """Build ``(detector, params, detector_name, (bp_low, bp_high))`` for a
+    per-channel detection method from the persisted slider-key dict.
+
+    Covers the three methods that share the
+    ``detector.detect(rec, ch, params=)`` interface — spike_train,
+    spectral_band, autocorrelation — using the same construction as the
+    single-file Detect path but sourced from ``sz_params`` so batch
+    "Detect All" honours the selected method instead of always running
+    Spike-Train. Returns ``(None, None, None, None)`` for methods handled
+    elsewhere (ensemble/bendr/unet) or unknown.
+    """
+    _defaults = {**_SZ_DEFAULTS, **_SB_DEFAULTS, **_AC_DEFAULTS}
+
+    def g(key):
+        return sz_params.get(key, _defaults.get(key))
+
+    if method == "spike_train":
+        from eeg_seizure_analyzer.detection.spike_train_seizure import (
+            SpikeTrainSeizureDetector,
+        )
+        params = SpikeTrainSeizureParams(
+            bandpass_low=float(g("sz-bp-low")),
+            bandpass_high=float(g("sz-bp-high")),
+            spike_amplitude_x_baseline=float(g("sz-spike-amp")),
+            spike_min_amplitude_uv=float(g("sz-spike-min-uv")),
+            spike_prominence_x_baseline=float(g("sz-spike-prom")),
+            spike_max_width_ms=float(g("sz-spike-maxw")),
+            spike_min_width_ms=float(g("sz-spike-minw")),
+            spike_refractory_ms=float(g("sz-spike-refr")),
+            max_interspike_interval_ms=float(g("sz-max-isi")),
+            min_train_spikes=int(g("sz-min-spikes")),
+            min_train_duration_sec=float(g("sz-min-dur")),
+            min_interevent_interval_sec=float(g("sz-min-iei")),
+            baseline_method=sz_params.get("sz-bl-method", "percentile"),
+            baseline_percentile=int(g("sz-bl-pct")),
+            baseline_rms_window_sec=float(g("sz-bl-rms")),
+            boundary_method=sz_params.get("sz-bnd-method", "rms"),
+            boundary_rms_window_ms=float(g("sz-bnd-rms-win")),
+            boundary_rms_threshold_x=float(g("sz-bnd-rms-thr")),
+            boundary_max_trim_sec=float(g("sz-bnd-max-trim")),
+            boundary_window_sec=float(g("sz-bnd-window")),
+            boundary_min_rate_hz=float(g("sz-bnd-rate")),
+            boundary_min_amplitude_x=float(g("sz-bnd-amp-x")),
+            hvsw_min_amplitude_x=float(g("sz-hvsw-amp")),
+            hvsw_min_frequency_hz=float(g("sz-hvsw-freq")),
+            hvsw_min_duration_sec=float(g("sz-hvsw-dur")),
+            hvsw_max_evolution=float(g("sz-hvsw-max-ev")),
+            hpd_min_amplitude_x=float(g("sz-hpd-amp")),
+            hpd_min_frequency_hz=float(g("sz-hpd-freq")),
+            hpd_min_duration_sec=float(g("sz-hpd-dur")),
+            convulsive_min_duration_sec=float(g("sz-conv-dur")),
+            convulsive_min_amplitude_x=float(g("sz-conv-amp")),
+            convulsive_postictal_suppression_sec=float(g("sz-conv-postictal")),
+        )
+        return (SpikeTrainSeizureDetector(), params,
+                "SpikeTrainSeizureDetector",
+                (float(g("sz-bp-low")), float(g("sz-bp-high"))))
+
+    if method == "spectral_band":
+        from eeg_seizure_analyzer.detection.spectral_band_seizure import (
+            SpectralBandDetector,
+        )
+        params = SpectralBandParams(
+            band_low=float(g("sz-sb-band-low")),
+            band_high=float(g("sz-sb-band-high")),
+            ref_band_low=float(g("sz-sb-ref-low")),
+            ref_band_high=float(g("sz-sb-ref-high")),
+            window_sec=float(g("sz-sb-window")),
+            step_sec=float(g("sz-sb-step")),
+            threshold_z=float(g("sz-sb-thr-z")),
+            baseline_percentile=int(g("sz-sb-bl-pct")),
+            min_duration_sec=float(g("sz-sb-min-dur")),
+            merge_gap_sec=float(g("sz-sb-merge-gap")),
+            boundary_method=sz_params.get("sz-sb-bnd-method", "none"),
+            boundary_rms_window_ms=float(g("sz-sb-bnd-rms-win")),
+            boundary_rms_threshold_x=float(g("sz-sb-bnd-rms-thr")),
+            boundary_max_trim_sec=float(g("sz-sb-bnd-max-trim")),
+        )
+        return (SpectralBandDetector(), params, "SpectralBandDetector",
+                (1.0, 100.0))
+
+    if method == "autocorrelation":
+        from eeg_seizure_analyzer.detection.autocorrelation_seizure import (
+            AutocorrelationDetector,
+        )
+        params = AutocorrelationParams(
+            bandpass_low=float(g("sz-ac-bp-low")),
+            bandpass_high=float(g("sz-ac-bp-high")),
+            spike_amplitude_x_baseline=float(g("sz-ac-spike-amp")),
+            spike_refractory_ms=float(g("sz-ac-spike-refr")),
+            subwindow_points=int(g("sz-ac-subwin")),
+            lookahead_points=int(g("sz-ac-lookahead")),
+            acorr_window_sec=float(g("sz-ac-window")),
+            acorr_step_sec=float(g("sz-ac-step")),
+            min_spike_freq_hz=float(g("sz-ac-min-freq")),
+            acorr_threshold_z=float(g("sz-ac-thr-z")),
+            min_duration_sec=float(g("sz-ac-min-dur")),
+            merge_gap_sec=float(g("sz-ac-merge-gap")),
+            baseline_method=sz_params.get("sz-ac-bl-method", "percentile"),
+            baseline_percentile=int(g("sz-ac-bl-pct")),
+            baseline_rms_window_sec=float(g("sz-ac-bl-rms")),
+            boundary_method=sz_params.get("sz-ac-bnd-method", "signal"),
+            boundary_rms_window_ms=float(g("sz-ac-bnd-rms-win")),
+            boundary_rms_threshold_x=float(g("sz-ac-bnd-rms-thr")),
+            boundary_max_trim_sec=float(g("sz-ac-bnd-max-trim")),
+            boundary_window_sec=float(g("sz-ac-bnd-window")),
+            boundary_min_rate_hz=float(g("sz-ac-bnd-rate")),
+            boundary_min_amplitude_x=float(g("sz-ac-bnd-amp-x")),
+        )
+        return (AutocorrelationDetector(), params, "AutocorrelationDetector",
+                (float(g("sz-ac-bp-low")), float(g("sz-ac-bp-high"))))
+
+    return None, None, None, None
 
 
 def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
@@ -3320,50 +3438,23 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
         load_annotations, save_annotations,
     )
 
-    def _p(key):
-        return sz_params.get(key, _SZ_DEFAULTS.get(key))
-
-    params = SpikeTrainSeizureParams(
-        bandpass_low=float(_p("sz-bp-low")),
-        bandpass_high=float(_p("sz-bp-high")),
-        spike_amplitude_x_baseline=float(_p("sz-spike-amp")),
-        spike_min_amplitude_uv=float(_p("sz-spike-min-uv")),
-        spike_prominence_x_baseline=float(_p("sz-spike-prom")),
-        spike_max_width_ms=float(_p("sz-spike-maxw")),
-        spike_min_width_ms=float(_p("sz-spike-minw")),
-        spike_refractory_ms=float(_p("sz-spike-refr")),
-        max_interspike_interval_ms=float(_p("sz-max-isi")),
-        min_train_spikes=int(_p("sz-min-spikes")),
-        min_train_duration_sec=float(_p("sz-min-dur")),
-        min_interevent_interval_sec=float(_p("sz-min-iei")),
-        baseline_method=sz_params.get("sz-bl-method", "percentile"),
-        baseline_percentile=int(_p("sz-bl-pct")),
-        baseline_rms_window_sec=float(_p("sz-bl-rms")),
-        boundary_method=sz_params.get("sz-bnd-method", "rms"),
-        boundary_rms_window_ms=float(_p("sz-bnd-rms-win")),
-        boundary_rms_threshold_x=float(_p("sz-bnd-rms-thr")),
-        boundary_max_trim_sec=float(_p("sz-bnd-max-trim")),
-        boundary_window_sec=float(_p("sz-bnd-window")),
-        boundary_min_rate_hz=float(_p("sz-bnd-rate")),
-        boundary_min_amplitude_x=float(_p("sz-bnd-amp-x")),
-        hvsw_min_amplitude_x=float(_p("sz-hvsw-amp")),
-        hvsw_min_frequency_hz=float(_p("sz-hvsw-freq")),
-        hvsw_min_duration_sec=float(_p("sz-hvsw-dur")),
-        hvsw_max_evolution=float(_p("sz-hvsw-max-ev")),
-        hpd_min_amplitude_x=float(_p("sz-hpd-amp")),
-        hpd_min_frequency_hz=float(_p("sz-hpd-freq")),
-        hpd_min_duration_sec=float(_p("sz-hpd-dur")),
-        convulsive_min_duration_sec=float(_p("sz-conv-dur")),
-        convulsive_min_amplitude_x=float(_p("sz-conv-amp")),
-        convulsive_postictal_suppression_sec=float(_p("sz-conv-postictal")),
+    method = sz_params.get("sz-method", "spike_train")
+    detector, params, detector_name, (bp_low, bp_high) = (
+        _build_per_channel_detector(method, sz_params)
     )
+    # start_detect_all already rejects methods batch can't run
+    # (ensemble/bendr/unet); guard anyway so a future caller can't silently
+    # fall through to the wrong detector.
+    if detector is None:
+        _write_progress(
+            sid, 0, len(project_files), "", 0, done=True,
+            error_msg=f"Batch detection does not support method '{method}'.",
+        )
+        return
 
-    bp_low = float(_p("sz-bp-low"))
-    bp_high = float(_p("sz-bp-high"))
-
-    detector = SpikeTrainSeizureDetector()
     total_events = 0
     errors = []
+    skipped_no_ids = []
     n_total = len(project_files)
 
     for i, pf in enumerate(project_files):
@@ -3392,6 +3483,13 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
 
             ch_ids = load_channel_ids(edf_path) or {}
             selected_channels = list(range(rec.n_channels))
+
+            # Skip-and-report: don't run detection on files whose channels have
+            # no Animal IDs assigned. The single-file path hard-blocks on this;
+            # in batch we skip the file and list it in the final report.
+            if [ch for ch in selected_channels if not ch_ids.get(ch)]:
+                skipped_no_ids.append(fname)
+                continue
 
             seizures = []
             detection_info = {}
@@ -3454,7 +3552,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
                     events=seizures,
                     detection_info=detection_info,
                     params_dict=sz_params,
-                    detector_name="SpikeTrainSeizureDetector",
+                    detector_name=detector_name,
                     channels=selected_channels,
                 )
 
@@ -3481,8 +3579,15 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
     err_msg = ""
     if errors:
         err_msg = "; ".join(errors[:3])
+    skipped_msg = ""
+    if skipped_no_ids:
+        shown = ", ".join(skipped_no_ids[:5])
+        more = (f" (+{len(skipped_no_ids) - 5} more)"
+                if len(skipped_no_ids) > 5 else "")
+        skipped_msg = (f"{len(skipped_no_ids)} file(s) skipped — no Animal IDs "
+                       f"assigned: {shown}{more}")
     _write_progress(sid, n_total, n_total, "", total_events,
-                    done=True, error_msg=err_msg)
+                    done=True, error_msg=err_msg, skipped_msg=skipped_msg)
 
     # Reload the active file into session state
     try:
@@ -3521,6 +3626,21 @@ def start_detect_all(n_clicks, sid):
         return False, True, alert("No project loaded.", "warning"), False
 
     sz_params = dict(state.extra.get("sz_params", {}))
+    # Honour the currently-selected method. The selector persists to
+    # state.extra["sz_method"], which can be newer than the copy embedded in
+    # sz_params (only refreshed when single-file Detect runs), so without this
+    # sync batch detection could run a stale method.
+    method = state.extra.get(
+        "sz_method", sz_params.get("sz-method", "spike_train"))
+    sz_params["sz-method"] = method
+    if method in ("ensemble", "bendr", "unet"):
+        return (
+            False, True,
+            alert("Batch “Detect All Files” supports Spike-Train, "
+                  "Spectral Band, and Autocorrelation. For Ensemble, BENDR, or "
+                  "U-Net, run detection one file at a time.", "warning"),
+            False,
+        )
 
     # Write initial progress
     _write_progress(sid, 0, len(project_files), project_files[0]["filename"], 0)
@@ -3593,9 +3713,14 @@ def poll_detect_all(n_intervals, sid, is_running, refresh):
         except OSError:
             pass
 
+        skipped = data.get("skipped", "")
         msg = f"Detected {events} seizure(s) across {total} files."
+        if skipped:
+            msg += f" {skipped}."
         if error_msg:
             msg += f" Errors: {error_msg}"
+            result = alert(msg, "warning")
+        elif skipped:
             result = alert(msg, "warning")
         else:
             result = alert(msg, "success")
