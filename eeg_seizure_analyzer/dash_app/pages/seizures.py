@@ -4126,6 +4126,34 @@ def _render_inspector(rec, event, det_info, state, *,
         acorr_values = det_info.get("acorr_values", [])
         spike_freqs = det_info.get("spike_freqs", [])
         acorr_thr = det_info.get("acorr_threshold", 0)
+        # The curve only lives in the transient per-detection detection_info.
+        # When the event reached the list another way (annotation-derived, or a
+        # later run of a different method overwrote the saved info), it's absent
+        # and the graph silently vanished. Recompute it on demand from the
+        # signal (current autocorrelation params) and cache it back into
+        # st_detection_info so this runs at most once per channel per session.
+        if not (acorr_times and acorr_values):
+            try:
+                _ac_params = state.extra.get("sz_params", {}) if state else {}
+                _ac_det, _ac_p, _, _ = _build_per_channel_detector(
+                    "autocorrelation", _ac_params)
+                _ac_det.detect(rec, ch, params=_ac_p)
+                _ac_info = _ac_det._last_detection_info
+                acorr_times = _ac_info.get("acorr_times", [])
+                acorr_values = _ac_info.get("acorr_values", [])
+                spike_freqs = _ac_info.get("spike_freqs", [])
+                acorr_thr = _ac_info.get("acorr_threshold", acorr_thr)
+                if state is not None and acorr_times and acorr_values:
+                    _cached = dict(state.st_detection_info.get(ch, {}))
+                    _cached.update({
+                        "acorr_times": acorr_times,
+                        "acorr_values": acorr_values,
+                        "spike_freqs": spike_freqs,
+                        "acorr_threshold": acorr_thr,
+                    })
+                    state.st_detection_info[ch] = _cached
+            except Exception:
+                pass
         if acorr_times and acorr_values:
             fig_acorr = make_subplots(
                 rows=2, cols=1, shared_xaxes=True,
