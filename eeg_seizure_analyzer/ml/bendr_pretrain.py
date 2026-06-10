@@ -489,11 +489,29 @@ def pretrain_bendr(
         checkpoint = torch.load(resume_from, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         start_epoch = checkpoint["epoch"] + 1
         best_val_loss = checkpoint.get("best_val_loss", float("inf"))
         history = checkpoint.get("history", [])
+
+        # Rebuild the LR schedule for the *current* ``epochs`` horizon instead of
+        # restoring the checkpoint's scheduler state. The saved scheduler was
+        # built with the original run's ``T_max`` (e.g. 5 for the short run);
+        # ``load_state_dict`` would pin ``T_max`` back to that value, so a resume
+        # that extends ``--epochs`` (e.g. to 30) would NOT anneal once over 30 —
+        # the cosine (period 2·T_max) would instead warm-restart, oscillating the
+        # LR between floor (5e-6) and peak (5e-4) every ~10 epochs, with the first
+        # resumed epoch wasted at the floor. Reconstructing with
+        # ``last_epoch=start_epoch-1`` stretches a single cosine across all
+        # ``epochs`` and positions the LR at the correct point of it.
+        for g in optimizer.param_groups:
+            g.setdefault("initial_lr", learning_rate)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs, eta_min=learning_rate * 0.01,
+            last_epoch=start_epoch - 1,
+        )
         print(f"Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
+        print(f"LR schedule rebuilt: cosine T_max={epochs}, "
+              f"lr now {optimizer.param_groups[0]['lr']:.2e}")
 
     # ── Attention backend ────────────────────────────────────────
     # Force the math SDPA kernel on CUDA. The fused flash / mem-efficient
