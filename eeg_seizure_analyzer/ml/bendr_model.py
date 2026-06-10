@@ -7,7 +7,7 @@ on wav2vec 2.0.  Original code: github.com/SPOClab-ca/BENDR (Apache 2.0).
 Core components extracted from the DN3 framework and made standalone:
 
 - **ConvEncoderBENDR**: 6-layer 1D CNN that compresses raw EEG by 96×
-  (at 256 Hz → ~2.67 Hz effective rate, 375 ms per token).
+  (at 250 Hz → ~2.6 Hz effective rate, 384 ms per token).
 - **BENDRContextualizer**: 8-layer transformer that learns temporal
   context across encoded tokens via masked prediction pre-training.
 - **BENDRSegmentation**: Decoder that upsamples contextualised
@@ -21,7 +21,7 @@ Pre-training produces encoder + contextualizer weights.  Fine-tuning
 attaches the segmentation decoder and trains on annotated seizure data,
 using the same loss / metrics / dataset pipeline as the U-Net.
 
-Input:  (batch, n_channels, n_samples) — EEG at 256 Hz
+Input:  (batch, n_channels, n_samples) — EEG at 250 Hz
 Output: (batch, n_classes, n_samples) — per-sample logits
 """
 

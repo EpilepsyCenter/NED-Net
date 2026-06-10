@@ -300,10 +300,11 @@ def train_model(
         model_name = dataset_def.get("name", "unnamed")
 
     # ── Build datasets ───────────────────────────────────────────
-    # BENDR uses 256 Hz; U-Net uses 250 Hz
-    if train_config.architecture == "bendr" and dataset_config.target_fs == 250:
-        dataset_config.target_fs = 256
-        print("BENDR: target_fs set to 256 Hz")
+    # 250 Hz end-to-end: the BENDR encoder is pre-trained at 250 Hz
+    # (bendr_pretrain.py --target-fs 250) and inference runs at 250
+    # (predict.py / dataset.py), so fine-tuning must stay at 250 too. An
+    # earlier override bumped BENDR fine-tuning to 256 Hz, which fed the
+    # 250 Hz-pre-trained encoder off-distribution input — removed.
 
     train_ds, val_ds, dataset_config = build_datasets(
         dataset_def, dataset_config
