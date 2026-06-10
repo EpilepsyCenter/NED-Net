@@ -3417,8 +3417,14 @@ def _build_per_channel_detector(method: str, sz_params: dict):
     return None, None, None, None
 
 
-def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
-    """Run detection on all project files in a background thread."""
+def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
+                       sel_channels=None):
+    """Run detection on all project files in a background thread.
+
+    ``sel_channels`` is the user's channel selection (indices) from the
+    Seizure tab; applied per file (filtered to its valid range). ``None`` or
+    empty means all channels.
+    """
     from eeg_seizure_analyzer.detection.spike_train_seizure import (
         SpikeTrainSeizureDetector,
     )
@@ -3482,7 +3488,14 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict):
             rec.source_path = edf_path
 
             ch_ids = load_channel_ids(edf_path) or {}
-            selected_channels = list(range(rec.n_channels))
+            # Honour the user's channel selection (by index), filtered to this
+            # file's valid range; fall back to all channels when unset. Without
+            # this, batch detection ran every channel even after deselection.
+            if sel_channels:
+                selected_channels = [c for c in sel_channels
+                                     if 0 <= c < rec.n_channels]
+            else:
+                selected_channels = list(range(rec.n_channels))
 
             # Skip-and-report: don't run detection on files whose channels have
             # no Animal IDs assigned. The single-file path hard-blocks on this;
@@ -3642,13 +3655,19 @@ def start_detect_all(n_clicks, sid):
             False,
         )
 
+    # Honour the channel selection from the Seizure tab (sz-channel-selector).
+    # Without this, batch detection ran every channel even when the user had
+    # deselected some. Applied by channel index across the cohort (the batch
+    # shares a montage, having been loaded together); None = all channels.
+    sel_channels = state.extra.get("sz_selected_channels")
+
     # Write initial progress
     _write_progress(sid, 0, len(project_files), project_files[0]["filename"], 0)
 
     # Launch background thread
     t = threading.Thread(
         target=_detect_all_worker,
-        args=(sid, project_files, sz_params),
+        args=(sid, project_files, sz_params, sel_channels),
         daemon=True,
     )
     t.start()
