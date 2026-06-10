@@ -51,13 +51,6 @@ class _Permute(nn.Module):
         return x.permute(self.dims)
 
 
-class _Hax(nn.Module):
-    """Identity layer — T-fixup removes self-attention LayerNorms."""
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
-
-
 # ── Masking utilities ────────────────────────────────────────────────
 
 
@@ -276,8 +269,10 @@ class EncodingAugment(nn.Module):
 class BENDRContextualizer(nn.Module):
     """Transformer encoder that learns temporal context across tokens.
 
-    Uses T-fixup initialisation (removes LayerNorm from self-attention)
-    and grouped-convolution positional encoding.
+    Pre-LN multi-head self-attention layers with grouped-convolution
+    positional encoding. (The original BENDR used T-fixup — LayerNorm-free
+    layers with a scaled init — but that left activations unbounded under the
+    data2vec regression objective; pre-LN is the stable, standard alternative.)
 
     Parameters
     ----------
@@ -388,7 +383,10 @@ class BENDRContextualizer(nn.Module):
         # Output projection back to encoder dimension
         self.output_layer = nn.Conv1d(self._transformer_dim, in_features, 1)
 
-        # T-fixup initialisation
+        # Standard transformer (BERT-style) initialisation. Plain Xavier for
+        # linear layers — the pre-LN LayerNorms keep activations/gradients in
+        # check, so the old T-fixup residual down-scaling (which existed only to
+        # compensate for *missing* LayerNorms) is neither needed nor coherent here.
         self.apply(self._init_bert_params)
 
     def _init_bert_params(self, module: nn.Module) -> None:
@@ -396,10 +394,6 @@ class BENDRContextualizer(nn.Module):
             nn.init.xavier_uniform_(module.weight.data)
             if module.bias is not None:
                 module.bias.data.zero_()
-            # T-fixup scaling
-            module.weight.data = (
-                0.67 * len(self.transformer_layers) ** (-0.25) * module.weight.data
-            )
 
     def forward(
         self,
