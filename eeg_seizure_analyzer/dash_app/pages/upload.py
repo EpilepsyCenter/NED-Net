@@ -763,6 +763,22 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                     ),
                     html.Div(id="upload-channel-ids-status",
                              style={"marginTop": "4px"}),
+                    # Copy the Animal IDs entered above onto the same channel
+                    # indices of every other loaded file in the project.
+                    html.Div(
+                        style={"marginTop": "10px", "display": "flex",
+                               "alignItems": "center", "gap": "12px",
+                               "justifyContent": "flex-end"},
+                        children=[
+                            html.Span(id="upload-apply-ids-all-status",
+                                      style={"fontSize": "0.78rem"}),
+                            dbc.Button(
+                                "Apply IDs to all loaded files",
+                                id="upload-apply-ids-all-btn",
+                                className="btn-ned-secondary", size="sm",
+                            ),
+                        ],
+                    ),
                 ],
             ),
 
@@ -1327,6 +1343,70 @@ def on_channel_id_edit(cell_changed, row_data, sid):
     n_assigned = len(mapping)
     return html.Div(
         f"Saved {n_assigned} animal ID{'s' if n_assigned != 1 else ''}.",
+        style={"color": "var(--ned-success)", "fontSize": "0.78rem"},
+    )
+
+
+@callback(
+    Output("upload-apply-ids-all-status", "children"),
+    Input("upload-apply-ids-all-btn", "n_clicks"),
+    State("upload-channel-ids-grid", "rowData"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def apply_ids_to_all_files(n_clicks, row_data, sid):
+    """Copy the Animal IDs from the active file's grid onto the same channel
+    indices of every other loaded file in the project.
+
+    The user assigns IDs on one file and clicks "Apply IDs to all loaded
+    files"; the same channel-index -> animal-ID mapping is written next to
+    every loaded EDF (this assumes a shared channel layout across the cohort,
+    which holds for a batch loaded together).
+    """
+    if not n_clicks or not row_data:
+        return no_update
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+
+    # Build mapping {channel_index: animal_id} from the current grid.
+    mapping = {}
+    for row in row_data:
+        ch_idx = row.get("index")
+        aid = (row.get("animal_id") or "").strip()
+        if ch_idx is not None and aid:
+            mapping[int(ch_idx)] = aid
+
+    if not mapping:
+        return html.Span(
+            "Enter at least one Animal ID first.",
+            style={"color": "#d29922", "fontSize": "0.78rem"},
+        )
+
+    project_files = state.extra.get("project_files", [])
+    active_path = getattr(rec, "source_path", "") if rec else ""
+
+    # Apply to every loaded file (including the active one, so its IDs are
+    # definitely persisted even if a cell edit hadn't fired yet).
+    targets = [f["edf_path"] for f in project_files] or (
+        [active_path] if active_path else [])
+    applied = 0
+    for edf_path in targets:
+        try:
+            save_channel_ids(edf_path, mapping)
+            applied += 1
+        except Exception:
+            continue
+
+    # Mark project files as having IDs; refresh the active file's session map.
+    for f in project_files:
+        f["has_ids"] = True
+    state.extra["channel_animal_ids"] = mapping
+
+    n_ids = len(mapping)
+    return html.Span(
+        f"Applied {n_ids} Animal ID{'s' if n_ids != 1 else ''} to {applied} "
+        f"loaded file{'s' if applied != 1 else ''}.",
         style={"color": "var(--ned-success)", "fontSize": "0.78rem"},
     )
 
