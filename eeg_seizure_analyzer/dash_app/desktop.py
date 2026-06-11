@@ -15,6 +15,7 @@ or the platform launcher:
 
 from __future__ import annotations
 
+import json
 import logging
 import socket
 import sys
@@ -36,6 +37,27 @@ MIN_SIZE = (960, 640)
 SERVER_THREADS = 8  # waitress worker threads
 
 _ASSETS = Path(__file__).parent / "assets"
+_WIN_STATE_PATH = Path.home() / ".eeg_seizure_analyzer" / "window.json"
+
+
+def _load_window_size() -> tuple[int, int]:
+    """Restore the last window size (clamped to MIN_SIZE); defaults otherwise."""
+    try:
+        d = json.loads(_WIN_STATE_PATH.read_text())
+        return (max(int(d["width"]), MIN_SIZE[0]),
+                max(int(d["height"]), MIN_SIZE[1]))
+    except Exception:
+        return WIN_WIDTH, WIN_HEIGHT
+
+
+def _save_window_size(width: int, height: int) -> None:
+    """Persist the window size so the next launch reopens at the same size."""
+    try:
+        _WIN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _WIN_STATE_PATH.write_text(
+            json.dumps({"width": int(width), "height": int(height)}))
+    except Exception:
+        pass
 
 
 def _icon_path() -> str | None:
@@ -132,16 +154,32 @@ def main() -> None:
             f"NED-Net server did not come up on {HOST}:{port} within 30s."
         )
 
-    webview.create_window(
+    width, height = _load_window_size()
+    size = {"w": width, "h": height}
+    window = webview.create_window(
         TITLE,
         f"http://{HOST}:{port}",
-        width=WIN_WIDTH,
-        height=WIN_HEIGHT,
+        width=width,
+        height=height,
         min_size=MIN_SIZE,
     )
+
+    # Track the latest size — pywebview's resized event passes (width, height).
+    def _on_resized(*args):
+        if len(args) >= 2:
+            size["w"], size["h"] = args[0], args[1]
+
+    try:
+        window.events.resized += _on_resized
+    except Exception:
+        pass  # older pywebview without the resized event — size just won't update
+
     # Blocks on the native GUI event loop; returns when the window is closed.
     # The server thread is a daemon, so it dies with the process on return.
     webview.start(icon=icon)
+
+    # Window closed — remember its final size for the next launch.
+    _save_window_size(size["w"], size["h"])
 
 
 if __name__ == "__main__":
