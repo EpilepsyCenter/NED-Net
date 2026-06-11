@@ -1965,6 +1965,17 @@ def _load_edf_into_state(state: server_state.SessionState, edf_path: str):
     # Discover video
     _discover_video(state)
 
+    # Start from a clean slate: the _try_load_* helpers only POPULATE when a
+    # sidecar exists, so without this a file that has none would inherit the
+    # previously-loaded file's detections — notably the first file of a freshly
+    # loaded folder, whose load path doesn't otherwise clear state. (The
+    # file-switch path already clears; this makes every load consistent.)
+    state.seizure_events = []
+    state.spike_events = []
+    state.detected_events = []
+    state.st_detection_info = {}
+    state.sp_detection_info = {}
+
     # Load saved detections and spikes
     _try_load_saved_detections(state)
     _try_load_saved_spikes(state)
