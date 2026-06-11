@@ -20,6 +20,14 @@ from pathlib import Path
 import pandas as pd
 
 
+def _read_table(path: str) -> "pd.DataFrame":
+    """Read a metadata table as strings — CSV (no extra deps) or Excel."""
+    p = str(path)
+    if p.lower().endswith(".csv"):
+        return pd.read_csv(p, dtype=str).fillna("")
+    return pd.read_excel(p, dtype=str).fillna("")
+
+
 def generate_template(
     folder: str,
     edf_files: list[str] | None = None,
@@ -66,8 +74,8 @@ def generate_template(
 
     df = pd.DataFrame(data)
 
-    out_path = folder_path / "batch_metadata.xlsx"
-    df.to_excel(str(out_path), index=False)
+    out_path = folder_path / "batch_metadata.csv"
+    df.to_csv(str(out_path), index=False)
     return str(out_path)
 
 
@@ -82,7 +90,7 @@ def load_metadata(excel_path: str) -> dict[str, dict]:
         file-level defaults and the ``channel_*`` maps are per channel (a blank
         per-channel tag falls back to the file-level default).
     """
-    df = pd.read_excel(excel_path, dtype=str).fillna("")
+    df = _read_table(excel_path)
 
     result = {}
     for _, row in df.iterrows():
@@ -180,7 +188,7 @@ def load_live_template(path: str) -> dict:
     to every incoming file by channel index:
     ``{channel_ids, channel_cohort, channel_group}``.
     """
-    df = pd.read_excel(path, dtype=str).fillna("")
+    df = _read_table(path)
     channel_ids, ch_cohort, ch_group = {}, {}, {}
     for _, row in df.iterrows():
         try:
