@@ -28,7 +28,7 @@ from eeg_seizure_analyzer.io.edf_reader import (
     auto_pair_channels,
     read_edf_window,
 )
-from eeg_seizure_analyzer.io.channel_ids import load_channel_ids
+from eeg_seizure_analyzer.io.channel_ids import load_channel_ids, load_channel_tags
 from eeg_seizure_analyzer.ml.predict import predict_seizures
 from eeg_seizure_analyzer.ml.train import list_models
 
@@ -376,6 +376,17 @@ def process_chunk(
             if ch_idx not in ch_ids:
                 ch_ids[ch_idx] = animal_id
 
+    # Per-channel cohort/group: sidecar first, batch metadata supplements;
+    # file-level cohort/group is the per-event fallback.
+    _tags = load_channel_tags(edf_path)
+    ch_cohort = dict(_tags.get("cohort", {}))
+    ch_group = dict(_tags.get("group", {}))
+    if file_metadata:
+        for _k, _v in (file_metadata.get("channel_cohort") or {}).items():
+            ch_cohort.setdefault(int(_k), _v)
+        for _k, _v in (file_metadata.get("channel_group") or {}).items():
+            ch_group.setdefault(int(_k), _v)
+
     # Write chunk record
     chunk_id = db.write_chunk(edf_path, {
         "cohort": cohort,
@@ -444,6 +455,8 @@ def process_chunk(
                 "recording_day": None,
                 "hour_of_day": hour,
                 "source": _arch_source(feat.get("detection_method"), "seizure"),
+                "cohort": ch_cohort.get(ev.channel, cohort),
+                "group_id": ch_group.get(ev.channel, group_id),
             })
 
         db.write_events(chunk_id, event_dicts, source="seizure_cnn")
@@ -531,6 +544,17 @@ def process_spike_chunk(
             if ch_idx not in ch_ids:
                 ch_ids[ch_idx] = animal_id
 
+    # Per-channel cohort/group: sidecar first, batch metadata supplements;
+    # file-level cohort/group is the per-event fallback.
+    _tags = load_channel_tags(edf_path)
+    ch_cohort = dict(_tags.get("cohort", {}))
+    ch_group = dict(_tags.get("group", {}))
+    if file_metadata:
+        for _k, _v in (file_metadata.get("channel_cohort") or {}).items():
+            ch_cohort.setdefault(int(_k), _v)
+        for _k, _v in (file_metadata.get("channel_group") or {}).items():
+            ch_group.setdefault(int(_k), _v)
+
     chunk_id = db.write_chunk(edf_path, {
         "cohort": cohort,
         "group_id": group_id,
@@ -575,6 +599,8 @@ def process_spike_chunk(
                 "hour_of_day": hour,
                 "source": _arch_source((ev.features or {}).get("detection_method"),
                                        "spike"),
+                "cohort": ch_cohort.get(ev.channel, cohort),
+                "group_id": ch_group.get(ev.channel, group_id),
             })
 
         db.write_events(chunk_id, event_dicts, source="spike_cnn")
