@@ -33,6 +33,20 @@ from eeg_seizure_analyzer.ml.predict import predict_seizures
 from eeg_seizure_analyzer.ml.train import list_models
 
 
+def _arch_source(detection_method: str | None, kind: str) -> str:
+    """Map an ML event's detection_method to a detector source tag.
+
+    Distinguishes U-Net vs BENDR for Results provenance; falls back to the
+    legacy ``'<kind>_cnn'`` when the architecture is unknown. ``kind`` is
+    'seizure' or 'spike'. (predict_seizures tags events 'ml_unet'/'ml_bendr'.)
+    """
+    if detection_method == "ml_bendr":
+        return f"{kind}_bendr"
+    if detection_method == "ml_unet":
+        return f"{kind}_unet"
+    return f"{kind}_cnn"
+
+
 # ---------------------------------------------------------------------------
 # Thread-safe analysis status — polled by dcc.Interval callbacks
 # ---------------------------------------------------------------------------
@@ -429,6 +443,7 @@ def process_chunk(
                 "movement_flag": ev.movement_flag,
                 "recording_day": None,
                 "hour_of_day": hour,
+                "source": _arch_source(feat.get("detection_method"), "seizure"),
             })
 
         db.write_events(chunk_id, event_dicts, source="seizure_cnn")
@@ -558,7 +573,8 @@ def process_spike_chunk(
                 "movement_flag": ev.movement_flag,
                 "recording_day": None,
                 "hour_of_day": hour,
-                "source": "spike_cnn",
+                "source": _arch_source((ev.features or {}).get("detection_method"),
+                                       "spike"),
             })
 
         db.write_events(chunk_id, event_dicts, source="spike_cnn")
