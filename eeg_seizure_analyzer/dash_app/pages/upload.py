@@ -785,6 +785,12 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                         children=[
                             html.Span(id="upload-apply-all-status",
                                       style={"fontSize": "0.78rem"}),
+                            dbc.Button("Copy tags from file…",
+                                       id="upload-copy-tags-btn",
+                                       className="btn-ned-secondary", size="sm",
+                                       title="Copy Animal ID/Cohort/Group from "
+                                             "an already-tagged EDF (e.g. another "
+                                             "day's folder) onto all loaded files"),
                             dbc.Button("Apply IDs to all",
                                        id="upload-apply-ids-all-btn",
                                        className="btn-ned-secondary", size="sm"),
@@ -1511,6 +1517,54 @@ def apply_cohorts_to_all(n_clicks, row_data, sid):
 def apply_groups_to_all(n_clicks, row_data, sid):
     """Copy this file's per-channel Group tags onto every loaded file."""
     return _apply_tag_to_all(n_clicks, row_data, sid, "group")
+
+
+@callback(
+    Output("upload-apply-all-status", "children", allow_duplicate=True),
+    Output("upload-channel-ids-grid", "rowData", allow_duplicate=True),
+    Input("upload-copy-tags-btn", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def copy_tags_from_file(n_clicks, sid):
+    """Copy Animal ID / Cohort / Group from a chosen already-tagged EDF and
+    apply them, by channel index, to every loaded file. Lets you reuse one
+    folder's tagging on another folder without re-entering everything."""
+    if not n_clicks:
+        return no_update, no_update
+    src = _browse_file("Select an already-tagged EDF to copy tags from")
+    if not src:
+        return no_update, no_update
+
+    ids = load_channel_ids(src) or {}
+    tags = load_channel_tags(src)
+    if not ids and not tags["cohort"] and not tags["group"]:
+        return (html.Span(f"No tags found next to {Path(src).name}.",
+                          style={"color": "#d29922", "fontSize": "0.78rem"}),
+                no_update)
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+    project_files = state.extra.get("project_files", [])
+    targets = [f["edf_path"] for f in project_files] or (
+        [rec.source_path] if rec and getattr(rec, "source_path", None) else [])
+    applied = 0
+    for ep in targets:
+        try:
+            save_channel_ids(ep, dict(ids))
+            save_channel_tags(ep, dict(tags["cohort"]), dict(tags["group"]))
+            applied += 1
+        except Exception:
+            continue
+
+    if rec and getattr(rec, "source_path", None):
+        state.extra["channel_animal_ids"] = load_channel_ids(rec.source_path) or {}
+    rows = _build_channel_id_rows(rec, state) if rec else no_update
+    return (html.Span(
+                f"Copied tags from {Path(src).name} to {applied} loaded "
+                f"file{'s' if applied != 1 else ''}.",
+                style={"color": "var(--ned-success)", "fontSize": "0.78rem"}),
+            rows)
 
 
 @callback(
