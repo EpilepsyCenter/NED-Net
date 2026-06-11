@@ -36,8 +36,12 @@ from eeg_seizure_analyzer import db
 
 # Friendly labels for the `source` (specific detector) column / filter.
 _DETECTOR_LABELS = {
-    "seizure_cnn": "CNN (seizure)",
-    "spike_cnn": "CNN (spike)",
+    "seizure_unet": "U-Net",
+    "seizure_bendr": "BENDR",
+    "seizure_cnn": "CNN (legacy)",
+    "spike_unet": "U-Net (spike)",
+    "spike_bendr": "BENDR (spike)",
+    "spike_cnn": "CNN spike (legacy)",
     "spike_train": "Spike-Train",
     "spectral_band": "Spectral Band",
     "autocorrelation": "Autocorrelation",
