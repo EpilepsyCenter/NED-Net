@@ -62,7 +62,7 @@ def layout(sid: str | None) -> html.Div:
     ]
 
     return html.Div(
-        style={"padding": "24px", "maxWidth": "1200px"},
+        style={"padding": "24px"},
         children=[
             html.H4("Results", style={"marginBottom": "8px"}),
             html.P(
