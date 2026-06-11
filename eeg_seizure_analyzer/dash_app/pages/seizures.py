@@ -4336,6 +4336,14 @@ def _render_inspector(rec, event, det_info, state, *,
                     state.st_detection_info[ch] = _cached
             except Exception:
                 pass
+        # Use the event's OWN detection-time threshold for the line — that's the
+        # value that actually gated this event. A recomputed / whole-channel
+        # threshold can sit above a valid event that was detected against a
+        # per-chunk threshold (chunked "Detect All Files"), making it look
+        # sub-threshold even though the curve values are the same.
+        _stored_thr = (event.features or {}).get("acorr_threshold")
+        if _stored_thr is not None:
+            acorr_thr = _stored_thr
         if acorr_times and acorr_values:
             fig_acorr = make_subplots(
                 rows=2, cols=1, shared_xaxes=True,
