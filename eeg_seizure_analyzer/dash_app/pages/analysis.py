@@ -191,9 +191,14 @@ def layout(sid: str | None) -> html.Div:
                             "Create project", id="an-project-create-btn",
                             className="btn-ned-secondary", size="sm",
                         ), width="auto"),
+                        dbc.Col(dbc.Button(
+                            "Delete project", id="an-project-delete-btn",
+                            className="btn-ned-danger", size="sm",
+                        ), width="auto"),
                     ], className="g-2", align="center"),
                     html.Div(id="an-project-status",
                              style={"fontSize": "0.78rem", "marginTop": "6px"}),
+                    dcc.ConfirmDialog(id="an-project-delete-confirm"),
                 ],
             ),
 
@@ -615,6 +620,52 @@ def an_switch_or_create_project(selected, create_clicks, new_name):
                            style={"color": "var(--ned-text-muted)"})
 
     options = [{"label": p, "value": p} for p in db.list_projects()]
+    return options, db.get_active_project(), status, _results_summary()
+
+
+@callback(
+    Output("an-project-delete-confirm", "displayed"),
+    Output("an-project-delete-confirm", "message"),
+    Output("an-project-status", "children", allow_duplicate=True),
+    Input("an-project-delete-btn", "n_clicks"),
+    State("an-project-select", "value"),
+    prevent_initial_call=True,
+)
+def ask_delete_project(n_clicks, selected):
+    """Pop a confirm dialog before deleting a project DB."""
+    if not n_clicks:
+        return no_update, no_update, no_update
+    if not selected or selected == "Default":
+        return (False, "",
+                html.Span("The Default project can't be deleted.",
+                          style={"color": "#d29922"}))
+    return (True,
+            f"Delete project '{selected}' and all its analysis results? "
+            f"This cannot be undone.",
+            no_update)
+
+
+@callback(
+    Output("an-project-select", "options", allow_duplicate=True),
+    Output("an-project-select", "value", allow_duplicate=True),
+    Output("an-project-status", "children", allow_duplicate=True),
+    Output("an-results-summary", "children", allow_duplicate=True),
+    Input("an-project-delete-confirm", "submit_n_clicks"),
+    State("an-project-select", "value"),
+    prevent_initial_call=True,
+)
+def do_delete_project(submit_n, selected):
+    """Delete the project after the user confirms; fall back to Default."""
+    if not submit_n or not selected:
+        return no_update, no_update, no_update, no_update
+    try:
+        db.delete_project(selected)
+    except ValueError as e:
+        return (no_update, no_update,
+                html.Span(str(e), style={"color": "#d29922"}), no_update)
+    options = [{"label": p, "value": p} for p in db.list_projects()]
+    status = html.Span(f"Deleted '{selected}'. Active project is now Default.",
+                       style={"color": "var(--ned-success)"})
     return options, db.get_active_project(), status, _results_summary()
 
 

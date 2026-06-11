@@ -252,6 +252,29 @@ def create_project(name: str) -> str:
     return set_active_project(safe)
 
 
+def delete_project(name: str) -> None:
+    """Delete a project's database file (and WAL/SHM sidecars).
+
+    The Default project cannot be deleted. If the deleted project is active,
+    switch to Default first so cached connections reconnect off the removed
+    file. Raises ValueError on Default or a missing project.
+    """
+    safe = _sanitize_project_name(name)
+    if not safe or safe == _DEFAULT_PROJECT:
+        raise ValueError("The Default project cannot be deleted.")
+    path = project_path(safe)
+    if not path.exists():
+        raise ValueError(f"Project '{safe}' not found.")
+    if _active_project == safe:
+        set_active_project(_DEFAULT_PROJECT)
+    for q in (path, path.with_name(path.name + "-wal"),
+              path.with_name(path.name + "-shm")):
+        try:
+            q.unlink()
+        except OSError:
+            pass
+
+
 def _restore_active_project() -> None:
     """On import, point ``_db_path`` at the persisted active project, if any."""
     global _active_project, _db_path
