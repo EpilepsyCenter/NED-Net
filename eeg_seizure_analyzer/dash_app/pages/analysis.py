@@ -446,7 +446,7 @@ def _batch_panel(store: dict) -> list:
             dbc.Input(
                 id="an-batch-meta-path",
                 value=prev_meta,
-                placeholder="batch_metadata.xlsx — cohort, group, animal IDs",
+                placeholder="batch_metadata.csv / .xlsx — cohort, group, animal IDs",
                 style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
                        "border": "1px solid var(--ned-border)"},
                 size="sm",
@@ -537,7 +537,7 @@ def _live_panel(store: dict) -> list:
             dbc.Input(
                 id="an-live-template",
                 value=store.get("live_template_path", ""),
-                placeholder="Path to filled live_template.xlsx...",
+                placeholder="Path to filled live_template.csv...",
                 style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
                        "border": "1px solid var(--ned-border)"},
                 size="sm",
@@ -873,12 +873,13 @@ def download_template(n_batch, n_live):
         empty_batch_template, empty_live_template,
     )
     if ctx.triggered_id == "an-live-template-dl":
-        df, fname = empty_live_template(), "live_template.xlsx"
+        df, fname = empty_live_template(), "live_template.csv"
     elif ctx.triggered_id == "an-batch-meta-dl":
-        df, fname = empty_batch_template(), "batch_metadata.xlsx"
+        df, fname = empty_batch_template(), "batch_metadata.csv"
     else:
         return no_update
-    return dcc.send_bytes(lambda buf: df.to_excel(buf, index=False), fname)
+    # CSV needs no extra deps (xlsx would require openpyxl); opens in Excel fine.
+    return dcc.send_data_frame(df.to_csv, fname, index=False)
 
 
 # ── Single file: check if already processed ────────────────────────────
