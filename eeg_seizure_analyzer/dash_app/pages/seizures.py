@@ -440,6 +440,7 @@ def layout(sid: str | None) -> html.Div:
         state.detected_events = filtered + state.spike_events
         existing_results = _build_results(
             rec, filtered, persisted_classify,
+            excluded_ids=state.extra.get("sz_excluded_event_ids", set()),
             selected_event_key=selected_event_key,
             all_channels=persisted_channels,
             n_total=len(state.seizure_events),
@@ -2167,6 +2168,7 @@ def run_detection(
         selected_ek = state.extra.get("sz_selected_event_key")
         n_total = len(state.seizure_events)
         results = _build_results(rec, filtered, classify_subtypes,
+                                 excluded_ids=state.extra.get("sz_excluded_event_ids", set()),
                                  selected_event_key=selected_ek,
                                  all_channels=selected_channels,
                                  n_total=n_total)
@@ -2742,6 +2744,7 @@ def run_detection(
         # Update detected_events with filtered set so viewer shows only these
         state.detected_events = filtered + state.spike_events
         results = _build_results(rec, filtered, classify_subtypes,
+                                 excluded_ids=state.extra.get("sz_excluded_event_ids", set()),
                                  all_channels=selected_channels,
                                  n_total=len(all_events))
         n_ch = len(selected_channels)
@@ -2766,6 +2769,41 @@ def run_detection(
 
 
 # ── Filter helpers ──────────────────────────────────────────────────
+
+
+@callback(
+    Output("sz-add-to-db-status", "children", allow_duplicate=True),
+    Input("sz-results-grid", "cellValueChanged"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def on_sz_exclude_toggle(changed, sid):
+    """Track which detected events are excluded so 'Add to project database'
+    skips them (curation before writing)."""
+    if not changed:
+        return no_update
+    state = server_state.get_session(sid)
+    excluded = set(state.extra.get("sz_excluded_event_ids", set()))
+    changes = changed if isinstance(changed, list) else [changed]
+    touched = False
+    for ch in changes:
+        if not isinstance(ch, dict) or ch.get("colId") != "Exclude":
+            continue
+        eid = (ch.get("data") or {}).get("_event_id")
+        if eid is None:
+            continue
+        if ch.get("value"):
+            excluded.add(eid)
+        else:
+            excluded.discard(eid)
+        touched = True
+    if not touched:
+        return no_update
+    state.extra["sz_excluded_event_ids"] = excluded
+    return html.Span(
+        f"{len(excluded)} event(s) marked excluded — they won't be added "
+        f"to the database.",
+        style={"color": "var(--ned-text-muted)", "fontSize": "0.78rem"})
 
 
 @callback(
@@ -2807,6 +2845,13 @@ def add_to_project_db(n_clicks, sid):
         events = list(state.seizure_events)
     if not events:
         return alert("No events pass the current filters.", "warning")
+
+    # Drop events the user marked excluded in the results table.
+    excluded = state.extra.get("sz_excluded_event_ids", set())
+    if excluded:
+        events = [ev for ev in events if ev.event_id not in excluded]
+    if not events:
+        return alert("All events are excluded. Uncheck some to add.", "warning")
 
     method = state.extra.get("sz_method", "spike_train")
     tags = load_channel_tags(src_path)
@@ -3030,8 +3075,9 @@ def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid
 
 
 def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
-                    all_channels=None, n_total=None):
+                    all_channels=None, n_total=None, excluded_ids=None):
     """Build the results display (summary line + table)."""
+    excluded_ids = excluded_ids or set()
     if not seizures:
         return empty_state("\u2714", "No Seizures Found",
                            "No seizure events match the current parameters / filters.")
@@ -3082,6 +3128,8 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         row = {
             "#": i + 1,
             "ID": e.event_id if e.event_id > 0 else i + 1,
+            "Exclude": e.event_id in excluded_ids,
+            "_event_id": e.event_id,
             "_event_key": ek,
             "_source": "manual" if is_manual else "detector",
             "Method": method_label,
@@ -3107,8 +3155,12 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
             selected_rows = [row]
 
     col_defs = [
+        {"field": "Exclude", "maxWidth": 85, "minWidth": 70, "editable": True,
+         "cellDataType": "boolean",
+         "headerTooltip": "Exclude from 'Add to project database'"},
         {"field": "#", "maxWidth": 55, "minWidth": 40},
         {"field": "ID", "maxWidth": 55, "minWidth": 40, "headerTooltip": "Stable event ID"},
+        {"field": "_event_id", "hide": True},
         {"field": "_event_key", "hide": True},
         {"field": "_source", "hide": True},
         {"field": "Method", "flex": 1, "minWidth": 75,
@@ -3143,6 +3195,10 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
     # Row style callback: highlight manual seizures in purple
     manual_row_style = {
         "styleConditions": [
+            {
+                "condition": "params.data.Exclude === true",
+                "style": {"opacity": 0.4, "textDecoration": "line-through"},
+            },
             {
                 "condition": "params.data._source === 'manual'",
                 "style": {"backgroundColor": "rgba(188, 140, 255, 0.12)"},
