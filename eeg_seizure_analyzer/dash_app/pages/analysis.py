@@ -160,6 +160,43 @@ def layout(sid: str | None) -> html.Div:
                        "marginBottom": "16px"},
             ),
 
+            # ── Project database ──────────────────────────────────
+            html.Div(
+                style={"marginBottom": "16px", "padding": "12px",
+                       "border": "1px solid #30363d", "borderRadius": "6px"},
+                children=[
+                    html.Label(
+                        "Project database",
+                        style={"fontSize": "0.82rem", "fontWeight": "600",
+                               "color": "var(--ned-text-muted)"}),
+                    html.P(
+                        "Analysis writes to the active project; Results reads "
+                        "from it. Switch projects to keep experiments separate, "
+                        "or add cohorts to an existing one.",
+                        style={"color": "var(--ned-text-muted)",
+                               "fontSize": "0.76rem", "margin": "2px 0 8px"}),
+                    dbc.Row([
+                        dbc.Col(dcc.Dropdown(
+                            id="an-project-select",
+                            options=[{"label": p, "value": p}
+                                     for p in db.list_projects()],
+                            value=db.get_active_project(),
+                            clearable=False,
+                        ), width=4),
+                        dbc.Col(dbc.Input(
+                            id="an-project-new-name", type="text",
+                            placeholder="New project name…", size="sm",
+                        ), width=4),
+                        dbc.Col(dbc.Button(
+                            "Create project", id="an-project-create-btn",
+                            className="btn-ned-secondary", size="sm",
+                        ), width="auto"),
+                    ], className="g-2", align="center"),
+                    html.Div(id="an-project-status",
+                             style={"fontSize": "0.78rem", "marginTop": "6px"}),
+                ],
+            ),
+
             # ── Detection type ────────────────────────────────────
             dbc.RadioItems(
                 id="an-detection-type",
@@ -549,6 +586,36 @@ def _results_summary() -> list:
 
 
 # ── Mode selector: toggle panel visibility ─────────────────────────────
+
+
+@callback(
+    Output("an-project-select", "options"),
+    Output("an-project-select", "value"),
+    Output("an-project-status", "children"),
+    Output("an-results-summary", "children", allow_duplicate=True),
+    Input("an-project-select", "value"),
+    Input("an-project-create-btn", "n_clicks"),
+    State("an-project-new-name", "value"),
+    prevent_initial_call=True,
+)
+def an_switch_or_create_project(selected, create_clicks, new_name):
+    """Switch the active project DB, or create a new one, then refresh the
+    summary. The active project is app-wide (shared with the Results tab)."""
+    if ctx.triggered_id == "an-project-create-btn":
+        try:
+            name = db.create_project(new_name)
+        except ValueError as e:
+            return (no_update, no_update,
+                    html.Span(str(e), style={"color": "#d29922"}), no_update)
+        status = html.Span(f"Created and switched to '{name}'.",
+                           style={"color": "var(--ned-success)"})
+    else:
+        name = db.set_active_project(selected)
+        status = html.Span(f"Active project: '{name}'.",
+                           style={"color": "var(--ned-text-muted)"})
+
+    options = [{"label": p, "value": p} for p in db.list_projects()]
+    return options, db.get_active_project(), status, _results_summary()
 
 
 @callback(
