@@ -94,6 +94,39 @@ def _browse_file(title: str = "Select EDF file") -> str | None:
         return None
 
 
+def _save_file(default_name: str, title: str = "Save file") -> str | None:
+    """Native 'Save as' dialog (the in-window webview can't do browser
+    downloads, so templates are written to a path the user picks). Returns the
+    chosen path or None if cancelled."""
+    if platform.system() == "Darwin":
+        try:
+            r = subprocess.run(
+                ["osascript", "-e",
+                 f'POSIX path of (choose file name with prompt "{title}" '
+                 f'default name "{default_name}")'],
+                capture_output=True, text=True, timeout=120,
+            )
+            return r.stdout.strip() or None
+        except Exception:
+            pass
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", "\n".join([
+                "import tkinter as tk",
+                "from tkinter import filedialog",
+                "root = tk.Tk(); root.withdraw()",
+                "root.attributes('-topmost', True); root.update()",
+                f'p = filedialog.asksaveasfilename(title="{title}", '
+                f'initialfile="{default_name}", defaultextension=".csv")',
+                "root.destroy(); print(p or '')",
+            ])],
+            capture_output=True, text=True, timeout=120,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
 def _model_options(model_type: str = "seizure") -> list[dict]:
     """Build dropdown options for available models."""
     if model_type == "spike":
@@ -364,7 +397,6 @@ def layout(sid: str | None) -> html.Div:
             # ── Results summary (below modes) ──────────────────────
             html.Hr(style={"borderColor": "#21262d", "marginTop": "24px"}),
             html.Div(id="an-results-summary", children=_results_summary()),
-            dcc.Download(id="an-template-download"),
 
             # ── Stores & intervals ─────────────────────────────────
             dcc.Store(id="an-store", storage_type="session"),
@@ -455,7 +487,7 @@ def _batch_panel(store: dict) -> list:
                        outline=True, color="secondary", size="sm"),
             dbc.Button("Generate template", id="an-batch-meta-gen",
                        outline=True, color="info", size="sm"),
-            dbc.Button("Download empty", id="an-batch-meta-dl",
+            dbc.Button("Save empty template", id="an-batch-meta-dl",
                        outline=True, color="secondary", size="sm"),
         ], className="mb-1"),
         html.Div(id="an-batch-meta-status",
@@ -544,7 +576,7 @@ def _live_panel(store: dict) -> list:
             ),
             dbc.Button("Browse", id="an-live-template-browse",
                        outline=True, color="secondary", size="sm"),
-            dbc.Button("Download empty", id="an-live-template-dl",
+            dbc.Button("Save empty template", id="an-live-template-dl",
                        outline=True, color="secondary", size="sm"),
         ], className="mb-1"),
         html.Small(
@@ -552,7 +584,9 @@ def _live_panel(store: dict) -> list:
             "file.",
             style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem"},
         ),
-        html.Div(style={"marginBottom": "12px"}),
+        html.Div(id="an-live-template-status",
+                 style={"fontSize": "0.78rem", "marginTop": "4px",
+                        "marginBottom": "12px"}),
 
         dbc.Button(
             "Start monitoring", id="an-live-start",
@@ -861,34 +895,46 @@ def browse_live_template(n):
     return path or no_update
 
 
-# One callback per button (no ctx.triggered_id dependency) — most robust.
-# CSV needs no extra deps (xlsx would require openpyxl); opens in Excel fine.
+# Write the template to a path the user picks (the in-window webview can't do
+# browser downloads). CSV needs no extra deps; opens in Excel fine.
 @callback(
-    Output("an-template-download", "data"),
+    Output("an-batch-meta-status", "children", allow_duplicate=True),
     Input("an-batch-meta-dl", "n_clicks"),
     prevent_initial_call=True,
 )
 def download_batch_template(n_clicks):
-    """Download an empty batch-metadata template (.csv)."""
+    """Save an empty batch-metadata template (.csv) to a chosen path."""
     if not n_clicks:
         return no_update
+    path = _save_file("batch_metadata.csv", "Save batch metadata template")
+    if not path:
+        return no_update
     from eeg_seizure_analyzer.io.batch_metadata import empty_batch_template
-    return dcc.send_data_frame(
-        empty_batch_template().to_csv, "batch_metadata.csv", index=False)
+    try:
+        empty_batch_template().to_csv(path, index=False)
+    except Exception as e:
+        return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
+    return html.Span(f"Template saved: {path}", style={"color": "#2ea043"})
 
 
 @callback(
-    Output("an-template-download", "data", allow_duplicate=True),
+    Output("an-live-template-status", "children"),
     Input("an-live-template-dl", "n_clicks"),
     prevent_initial_call=True,
 )
 def download_live_template(n_clicks):
-    """Download an empty live channel template (.csv)."""
+    """Save an empty live channel template (.csv) to a chosen path."""
     if not n_clicks:
         return no_update
+    path = _save_file("live_template.csv", "Save live channel template")
+    if not path:
+        return no_update
     from eeg_seizure_analyzer.io.batch_metadata import empty_live_template
-    return dcc.send_data_frame(
-        empty_live_template().to_csv, "live_template.csv", index=False)
+    try:
+        empty_live_template().to_csv(path, index=False)
+    except Exception as e:
+        return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
+    return html.Span(f"Template saved: {path}", style={"color": "#2ea043"})
 
 
 # ── Single file: check if already processed ────────────────────────────
