@@ -830,8 +830,14 @@ def start_live_monitoring(
     cohort: str = "",
     group_id: str = "",
     classification_params: ClassificationParams | None = None,
+    live_template: dict | None = None,
 ):
-    """Start live monitoring in a background thread."""
+    """Start live monitoring in a background thread.
+
+    ``live_template`` is a file_metadata-shaped dict (channel_ids /
+    channel_cohort / channel_group, keyed by channel index) applied to every
+    incoming file — the live montage is fixed for the session.
+    """
     global _live_thread
 
     if _live_thread is not None and _live_thread.is_alive():
@@ -845,6 +851,7 @@ def start_live_monitoring(
             watch_folder, model_name, confidence_threshold,
             min_duration_sec, merge_gap_sec, wait_sec,
             process_backlog, cohort, group_id, classification_params,
+            live_template,
         ),
         daemon=True,
     )
@@ -865,6 +872,7 @@ def _live_monitor_worker(
     watch_folder, model_name, confidence_threshold,
     min_duration_sec, merge_gap_sec, wait_sec,
     process_backlog, cohort, group_id, classification_params,
+    live_template=None,
 ):
     """Background thread for live monitoring."""
     _update_status(
@@ -900,6 +908,7 @@ def _live_monitor_worker(
                     cohort=cohort,
                     group_id=group_id,
                     classification_params=classification_params,
+                    file_metadata=live_template,
                 )
                 with _status_lock:
                     _analysis_status["processed_files"] += 1
@@ -947,6 +956,7 @@ def _live_monitor_worker(
                     cohort=cohort,
                     group_id=group_id,
                     classification_params=classification_params,
+                    file_metadata=live_template,
                 )
                 with _status_lock:
                     _analysis_status["processed_files"] += 1

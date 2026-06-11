@@ -364,6 +364,7 @@ def layout(sid: str | None) -> html.Div:
             # ── Results summary (below modes) ──────────────────────
             html.Hr(style={"borderColor": "#21262d", "marginTop": "24px"}),
             html.Div(id="an-results-summary", children=_results_summary()),
+            dcc.Download(id="an-template-download"),
 
             # ── Stores & intervals ─────────────────────────────────
             dcc.Store(id="an-store", storage_type="session"),
@@ -454,6 +455,8 @@ def _batch_panel(store: dict) -> list:
                        outline=True, color="secondary", size="sm"),
             dbc.Button("Generate template", id="an-batch-meta-gen",
                        outline=True, color="info", size="sm"),
+            dbc.Button("Download empty", id="an-batch-meta-dl",
+                       outline=True, color="secondary", size="sm"),
         ], className="mb-1"),
         html.Div(id="an-batch-meta-status",
                  style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
@@ -525,6 +528,31 @@ def _live_panel(store: dict) -> list:
                 ),
             ], width=4),
         ], className="mb-3"),
+
+        # Per-channel metadata template, applied to every incoming file
+        # (the live montage is fixed for a session, so metadata is by channel).
+        html.Label("Channel metadata template (optional)",
+                   style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
+        dbc.InputGroup([
+            dbc.Input(
+                id="an-live-template",
+                value=store.get("live_template_path", ""),
+                placeholder="Path to filled live_template.xlsx...",
+                style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                       "border": "1px solid var(--ned-border)"},
+                size="sm",
+            ),
+            dbc.Button("Browse", id="an-live-template-browse",
+                       outline=True, color="secondary", size="sm"),
+            dbc.Button("Download empty", id="an-live-template-dl",
+                       outline=True, color="secondary", size="sm"),
+        ], className="mb-1"),
+        html.Small(
+            "Per-channel Animal ID / Cohort / Group applied to every incoming "
+            "file.",
+            style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem"},
+        ),
+        html.Div(style={"marginBottom": "12px"}),
 
         dbc.Button(
             "Start monitoring", id="an-live-start",
@@ -821,6 +849,36 @@ def generate_batch_template(n, folder, include_sub):
 def browse_live_folder(n):
     folder = _browse_folder("Select watch folder")
     return folder or no_update
+
+
+@callback(
+    Output("an-live-template", "value"),
+    Input("an-live-template-browse", "n_clicks"),
+    prevent_initial_call=True,
+)
+def browse_live_template(n):
+    path = _browse_file("Select live channel template")
+    return path or no_update
+
+
+@callback(
+    Output("an-template-download", "data"),
+    Input("an-batch-meta-dl", "n_clicks"),
+    Input("an-live-template-dl", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_template(n_batch, n_live):
+    """Send an empty metadata template (batch or live) as an .xlsx download."""
+    from eeg_seizure_analyzer.io.batch_metadata import (
+        empty_batch_template, empty_live_template,
+    )
+    if ctx.triggered_id == "an-live-template-dl":
+        df, fname = empty_live_template(), "live_template.xlsx"
+    elif ctx.triggered_id == "an-batch-meta-dl":
+        df, fname = empty_batch_template(), "batch_metadata.xlsx"
+    else:
+        return no_update
+    return dcc.send_bytes(lambda buf: df.to_excel(buf, index=False), fname)
 
 
 # ── Single file: check if already processed ────────────────────────────
@@ -1133,12 +1191,13 @@ def cancel_batch(n):
     State("an-hpd-freq", "value"),
     State("an-hpd-hfi", "value"),
     State("an-detection-type", "value"),
+    State("an-live-template", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_live(n, folder, backlog, wait_sec, model_name, threshold,
                min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
-               det_type, sid):
+               det_type, template_path, sid):
     if not n:
         return no_update, no_update, no_update
     if not model_name or not folder:
@@ -1167,11 +1226,21 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold,
         "live_folder": folder,
         "live_wait_sec": wait_sec or 30,
         "live_process_backlog": bool(backlog),
+        "live_template_path": template_path or "",
     })
     _set_analysis_store(state, store)
 
     # Init DB
     db.init_db()
+
+    # Load the per-channel live template (applied to every incoming file).
+    live_template = None
+    if template_path:
+        try:
+            from eeg_seizure_analyzer.io.batch_metadata import load_live_template
+            live_template = load_live_template(template_path)
+        except Exception:
+            live_template = None
 
     analysis.start_live_monitoring(
         watch_folder=folder,
@@ -1182,6 +1251,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold,
         wait_sec=int(wait_sec or 30),
         process_backlog=bool(backlog),
         classification_params=cls_params,
+        live_template=live_template,
     )
 
     hide = {"display": "none"}

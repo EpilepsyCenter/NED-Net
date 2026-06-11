@@ -147,3 +147,52 @@ def get_metadata_for_file(
     """
     fname = Path(edf_path).name
     return metadata.get(fname, {})
+
+
+# ── Live channel template ────────────────────────────────────────────
+# Live mode has no per-file load step and files arrive with unknown names, so
+# metadata is keyed by CHANNEL (a live session runs a fixed montage) and applied
+# to every incoming file. Columns: channel, animal_id, cohort, group.
+
+
+def empty_batch_template(n_channels: int = 8) -> "pd.DataFrame":
+    """Empty batch-metadata template (headers + one blank row to fill)."""
+    data = {"filename": [""], "cohort": [""], "group_id": [""]}
+    for i in range(n_channels):
+        data[f"animal_ch{i}"] = [""]
+        data[f"cohort_ch{i}"] = [""]
+        data[f"group_ch{i}"] = [""]
+    return pd.DataFrame(data)
+
+
+def empty_live_template(n_channels: int = 8) -> "pd.DataFrame":
+    """Empty live channel template — one row per channel index."""
+    return pd.DataFrame({
+        "channel": list(range(n_channels)),
+        "animal_id": [""] * n_channels,
+        "cohort": [""] * n_channels,
+        "group": [""] * n_channels,
+    })
+
+
+def load_live_template(path: str) -> dict:
+    """Load a live channel template into a ``file_metadata``-shaped dict applied
+    to every incoming file by channel index:
+    ``{channel_ids, channel_cohort, channel_group}``.
+    """
+    df = pd.read_excel(path, dtype=str).fillna("")
+    channel_ids, ch_cohort, ch_group = {}, {}, {}
+    for _, row in df.iterrows():
+        try:
+            ch = int(float(row.get("channel", "")))
+        except (ValueError, TypeError):
+            continue
+        if row.get("animal_id", ""):
+            channel_ids[ch] = row["animal_id"]
+        if row.get("cohort", ""):
+            ch_cohort[ch] = row["cohort"]
+        if row.get("group", ""):
+            ch_group[ch] = row["group"]
+    return {"channel_ids": channel_ids,
+            "channel_cohort": ch_cohort,
+            "channel_group": ch_group}
