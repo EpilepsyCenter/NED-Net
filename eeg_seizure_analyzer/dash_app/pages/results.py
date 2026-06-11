@@ -9,6 +9,9 @@ spectrogram (power over time), and all measured/computed parameters.
 from __future__ import annotations
 
 import os
+import platform
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +32,38 @@ from eeg_seizure_analyzer.dash_app.components import (
 )
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 from eeg_seizure_analyzer import db
+
+
+def _save_file(default_name: str, title: str = "Save file") -> str | None:
+    """Native 'Save as' dialog (the in-window webview can't do browser
+    downloads). Returns the chosen path, or None if cancelled."""
+    if platform.system() == "Darwin":
+        try:
+            r = subprocess.run(
+                ["osascript", "-e",
+                 f'POSIX path of (choose file name with prompt "{title}" '
+                 f'default name "{default_name}")'],
+                capture_output=True, text=True, timeout=120,
+            )
+            return r.stdout.strip() or None
+        except Exception:
+            pass
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", "\n".join([
+                "import tkinter as tk",
+                "from tkinter import filedialog",
+                "root = tk.Tk(); root.withdraw()",
+                "root.attributes('-topmost', True); root.update()",
+                f'p = filedialog.asksaveasfilename(title="{title}", '
+                f'initialfile="{default_name}", defaultextension=".csv")',
+                "root.destroy(); print(p or '')",
+            ])],
+            capture_output=True, text=True, timeout=120,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
 
 
 # ── Layout ─────────────────────────────────────────────────────────────
@@ -275,7 +310,8 @@ def layout(sid: str | None) -> html.Div:
             dbc.Button("Export CSV", id="res-export-csv",
                        outline=True, color="secondary", size="sm",
                        className="mt-3"),
-            dcc.Download(id="res-download"),
+            html.Span(id="res-export-status",
+                      style={"fontSize": "0.78rem", "marginLeft": "10px"}),
         ],
     )
 
@@ -958,7 +994,7 @@ def _minmax_downsample(time_axis, data, max_points=6000):
 
 
 @callback(
-    Output("res-download", "data"),
+    Output("res-export-status", "children"),
     Input("res-export-csv", "n_clicks"),
     State("res-date-start", "value"),
     State("res-date-end", "value"),
@@ -982,20 +1018,26 @@ def export_csv(n, date_start, date_end, animals, min_conf):
     # Excluded events are dropped from exports too.
     events = [e for e in events if not e.get("excluded")]
     if not events:
+        return html.Span("No events to export.", style={"color": "#d29922"})
+
+    # The in-window webview can't do browser downloads — write to a chosen path.
+    path = _save_file("analysis_results.csv", "Export results CSV")
+    if not path:
         return no_update
 
     import csv
-    import io
-
-    output = io.StringIO()
     fields = [
         "animal_id", "date", "start_sec", "end_sec", "duration_sec",
         "type", "subtype", "cnn_confidence", "convulsive_confidence",
-        "movement_flag", "hour_of_day", "path", "mode",
+        "movement_flag", "hour_of_day", "cohort", "group_id", "path", "mode",
     ]
-    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
-    for ev in events:
-        writer.writerow(ev)
-
-    return dict(content=output.getvalue(), filename="analysis_results.csv")
+    try:
+        with open(path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            for ev in events:
+                writer.writerow(ev)
+    except Exception as e:
+        return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
+    return html.Span(f"Exported {len(events)} event(s) to {path}",
+                     style={"color": "#2ea043"})
