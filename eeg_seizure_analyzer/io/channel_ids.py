@@ -214,26 +214,27 @@ def apply_channel_ids_from_excel(folder: str) -> int:
     return updated
 
 
-# ── Per-file metadata (cohort / group_id) ────────────────────────────
-# Stored in a sidecar next to the EDF, mirroring the channel-ID sidecar, and
-# kept schema-compatible with batch_metadata.xlsx (cohort, group_id, plus the
-# per-channel animal IDs which live in the channel-ID sidecar) so manual and
-# batch workflows populate the database identically.
+# ── Per-channel tags (cohort / group) ────────────────────────────────
+# Channels in one file can be different animals in different groups, so
+# cohort/group are stored PER CHANNEL alongside the animal IDs, in a sidecar
+# (<edf>_ned_meta.json). Importable from batch_metadata.xlsx (which is
+# per-file): the file's cohort/group is applied to all of its channels.
 
 
-def _file_meta_path(edf_path: str) -> Path:
-    """Derive the per-file metadata sidecar path from an EDF file path."""
+def _channel_tags_path(edf_path: str) -> Path:
+    """Derive the per-channel tags sidecar path from an EDF file path."""
     p = Path(edf_path)
     return p.with_suffix("").with_name(p.stem + "_ned_meta.json")
 
 
-def save_file_meta(edf_path: str, cohort: str = "", group_id: str = "") -> Path:
-    """Save per-file cohort/group_id next to the EDF (atomic write)."""
-    out_path = _file_meta_path(edf_path)
+def save_channel_tags(edf_path: str, cohort: dict[int, str],
+                      group: dict[int, str]) -> Path:
+    """Save per-channel cohort/group maps next to the EDF (atomic write)."""
+    out_path = _channel_tags_path(edf_path)
     payload = {
         "edf_path": str(edf_path),
-        "cohort": (cohort or "").strip(),
-        "group_id": (group_id or "").strip(),
+        "channel_cohort": {str(k): v for k, v in (cohort or {}).items() if v},
+        "channel_group": {str(k): v for k, v in (group or {}).items() if v},
     }
     fd, tmp_path = tempfile.mkstemp(
         suffix=".tmp", prefix=".ned_meta_", dir=str(out_path.parent)
@@ -251,27 +252,28 @@ def save_file_meta(edf_path: str, cohort: str = "", group_id: str = "") -> Path:
     return out_path
 
 
-def load_file_meta(edf_path: str) -> dict:
-    """Return ``{cohort, group_id}`` for an EDF (empty strings if unset)."""
-    path = _file_meta_path(edf_path)
+def load_channel_tags(edf_path: str) -> dict:
+    """Return ``{"cohort": {ch: str}, "group": {ch: str}}`` for an EDF."""
+    path = _channel_tags_path(edf_path)
     if not path.exists():
-        return {"cohort": "", "group_id": ""}
+        return {"cohort": {}, "group": {}}
     try:
         with open(path) as fp:
             data = json.load(fp)
-        return {"cohort": data.get("cohort", ""),
-                "group_id": data.get("group_id", "")}
+        return {
+            "cohort": {int(k): v for k, v in data.get("channel_cohort", {}).items()},
+            "group": {int(k): v for k, v in data.get("channel_group", {}).items()},
+        }
     except Exception:
-        return {"cohort": "", "group_id": ""}
+        return {"cohort": {}, "group": {}}
 
 
 def import_batch_metadata(excel_path: str, edf_dir: str) -> int:
     """Populate per-file sidecars from a ``batch_metadata.xlsx``.
 
-    Writes cohort/group_id (this module's sidecar) and per-channel animal IDs
-    (the channel-ID sidecar) for every listed file found under ``edf_dir``, so
-    loading the batch template fills the manual per-file metadata. Returns the
-    number of files updated.
+    The template is per-file (cohort, group_id) plus per-channel animal IDs;
+    importing writes the animal IDs and applies the file's cohort/group to all
+    of its channels. Returns the number of files updated.
     """
     from eeg_seizure_analyzer.io.batch_metadata import load_metadata
     meta = load_metadata(excel_path)  # {filename: {cohort, group_id, channel_ids}}
@@ -284,34 +286,16 @@ def import_batch_metadata(excel_path: str, edf_dir: str) -> int:
             if not matches:
                 continue
             edf = matches[0]
-        save_file_meta(str(edf), m.get("cohort", ""), m.get("group_id", ""))
-        ch_ids = m.get("channel_ids") or {}
+        ch_ids = {int(k): v for k, v in (m.get("channel_ids") or {}).items()}
         if ch_ids:
-            save_channel_ids(str(edf), {int(k): v for k, v in ch_ids.items()})
+            save_channel_ids(str(edf), ch_ids)
+        cohort, group = m.get("cohort", ""), m.get("group_id", "")
+        if cohort or group:
+            chans = list(ch_ids.keys())
+            save_channel_tags(
+                str(edf),
+                {ch: cohort for ch in chans},
+                {ch: group for ch in chans},
+            )
         updated += 1
     return updated
-
-
-def export_batch_metadata(edf_paths: list[str], out_path: str) -> str:
-    """Write a ``batch_metadata.xlsx`` from the per-file sidecars of ``edf_paths``.
-
-    Round-trips the manual per-file metadata into the batch-template format
-    (filename, cohort, group_id, animal_chN), so a manually-curated project can
-    be reused in Analysis batch mode.
-    """
-    records = []
-    max_ch = 0
-    for ep in edf_paths:
-        fm = load_file_meta(ep)
-        ch_ids = load_channel_ids(ep) or {}
-        max_ch = max(max_ch, (max(ch_ids) + 1) if ch_ids else 0)
-        records.append((Path(ep).name, fm["cohort"], fm["group_id"], ch_ids))
-
-    rows = []
-    for fname, cohort, group_id, ch_ids in records:
-        row = {"filename": fname, "cohort": cohort, "group_id": group_id}
-        for i in range(max_ch):
-            row[f"animal_ch{i}"] = ch_ids.get(i, "")
-        rows.append(row)
-    pd.DataFrame(rows).to_excel(out_path, index=False)
-    return out_path

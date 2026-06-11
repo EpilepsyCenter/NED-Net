@@ -25,8 +25,8 @@ from eeg_seizure_analyzer.io.edf_reader import auto_pair_channels
 from eeg_seizure_analyzer.io.channel_ids import (
     load_channel_ids,
     save_channel_ids,
-    load_file_meta,
-    save_file_meta,
+    load_channel_tags,
+    save_channel_tags,
     import_batch_metadata,
     read_channel_ids_excel,
     generate_channel_ids_template,
@@ -542,7 +542,8 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                 children=[
                     html.H6("Loaded Channels", style={"marginBottom": "4px"}),
                     html.P(
-                        "Assign an Animal ID to each channel (editable, saved automatically).",
+                        "Assign Animal ID, Cohort and Group per channel "
+                        "(editable, saved automatically).",
                         style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                                "marginBottom": "12px"},
                     ),
@@ -552,11 +553,15 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                         columnDefs=[
                             {"field": "index", "headerName": "#", "width": 60},
                             {"field": "name", "headerName": "Channel", "flex": 1},
-                            {"field": "unit", "headerName": "Unit", "width": 80},
+                            {"field": "unit", "headerName": "Unit", "width": 70},
                             {"field": "animal_id", "headerName": "Animal ID",
-                             "editable": True, "width": 180,
+                             "editable": True, "width": 130,
                              "cellStyle": {"color": "var(--ned-accent)",
                                            "fontWeight": "500"}},
+                            {"field": "cohort", "headerName": "Cohort",
+                             "editable": True, "width": 120},
+                            {"field": "group", "headerName": "Group",
+                             "editable": True, "width": 120},
                         ],
                         className="ag-theme-alpine-dark",
                         style={"height": f"{min(60 + rec.n_channels * 42, 400)}px"},
@@ -744,7 +749,8 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                 children=[
                     html.H6("Loaded Channels", style={"marginBottom": "4px"}),
                     html.P(
-                        "Assign an Animal ID to each channel (editable, saved automatically).",
+                        "Assign Animal ID, Cohort and Group per channel "
+                        "(editable, saved automatically).",
                         style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem",
                                "marginBottom": "12px"},
                     ),
@@ -754,11 +760,15 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                         columnDefs=[
                             {"field": "index", "headerName": "#", "width": 60},
                             {"field": "name", "headerName": "Channel", "flex": 1},
-                            {"field": "unit", "headerName": "Unit", "width": 80},
+                            {"field": "unit", "headerName": "Unit", "width": 70},
                             {"field": "animal_id", "headerName": "Animal ID",
-                             "editable": True, "width": 180,
+                             "editable": True, "width": 130,
                              "cellStyle": {"color": "var(--ned-accent)",
                                            "fontWeight": "500"}},
+                            {"field": "cohort", "headerName": "Cohort",
+                             "editable": True, "width": 120},
+                            {"field": "group", "headerName": "Group",
+                             "editable": True, "width": 120},
                         ],
                         className="ag-theme-alpine-dark",
                         style={"height": f"{min(60 + rec.n_channels * 42, 400)}px"},
@@ -766,87 +776,45 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                     ),
                     html.Div(id="upload-channel-ids-status",
                              style={"marginTop": "4px"}),
-                    # Copy the Animal IDs entered above onto the same channel
-                    # indices of every other loaded file in the project.
+                    # Copy the per-channel tags (IDs / Cohorts / Groups) onto the
+                    # same channel indices of every other loaded file.
                     html.Div(
                         style={"marginTop": "10px", "display": "flex",
-                               "alignItems": "center", "gap": "12px",
-                               "justifyContent": "flex-end"},
+                               "alignItems": "center", "gap": "10px",
+                               "justifyContent": "flex-end", "flexWrap": "wrap"},
                         children=[
-                            html.Span(id="upload-apply-ids-all-status",
+                            html.Span(id="upload-apply-all-status",
                                       style={"fontSize": "0.78rem"}),
-                            dbc.Button(
-                                "Apply IDs to all loaded files",
-                                id="upload-apply-ids-all-btn",
-                                className="btn-ned-secondary", size="sm",
-                            ),
+                            dbc.Button("Apply IDs to all",
+                                       id="upload-apply-ids-all-btn",
+                                       className="btn-ned-secondary", size="sm"),
+                            dbc.Button("Apply Cohorts to all",
+                                       id="upload-apply-cohorts-btn",
+                                       className="btn-ned-secondary", size="sm"),
+                            dbc.Button("Apply Groups to all",
+                                       id="upload-apply-groups-btn",
+                                       className="btn-ned-secondary", size="sm"),
                         ],
                     ),
                 ],
             ),
 
-            # Per-file metadata (cohort / group) — batch-template compatible
+            # Import per-channel tags from a batch_metadata.xlsx
+            # (applies each file's cohort/group to all of its channels).
             html.Div(
-                style={"marginTop": "20px"},
+                style={"marginTop": "16px", "maxWidth": "560px"},
                 children=[
-                    html.H6("File Metadata", style={"marginBottom": "4px"}),
-                    html.P(
-                        "Cohort and group for this file — used to split Results "
-                        "by group. Same schema as the batch metadata template.",
-                        style={"color": "var(--ned-text-muted)",
-                               "fontSize": "0.82rem", "marginBottom": "10px"},
-                    ),
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Cohort", style={"fontSize": "0.8rem",
-                                       "color": "var(--ned-text-muted)"}),
-                            dbc.Input(
-                                id="upload-file-cohort", type="text", size="sm",
-                                debounce=True,
-                                value=(load_file_meta(rec.source_path)["cohort"]
-                                       if getattr(rec, "source_path", None) else ""),
-                            ),
-                        ], width=3),
-                        dbc.Col([
-                            html.Label("Group", style={"fontSize": "0.8rem",
-                                       "color": "var(--ned-text-muted)"}),
-                            dbc.Input(
-                                id="upload-file-group", type="text", size="sm",
-                                debounce=True,
-                                value=(load_file_meta(rec.source_path)["group_id"]
-                                       if getattr(rec, "source_path", None) else ""),
-                            ),
-                        ], width=3),
-                        dbc.Col([
-                            html.Label(" ", style={"fontSize": "0.8rem",
-                                       "display": "block"}),
-                            dbc.Button("Apply to all loaded files",
-                                       id="upload-apply-meta-all-btn",
-                                       className="btn-ned-secondary", size="sm"),
-                        ], width="auto"),
-                    ], className="g-2", align="end"),
-                    html.Div(id="upload-file-meta-status",
+                    html.H6("Import metadata", style={"marginBottom": "6px"}),
+                    dbc.InputGroup([
+                        dbc.Input(
+                            id="upload-batch-meta-path", type="text",
+                            placeholder="/path/to/batch_metadata.xlsx", size="sm"),
+                        dbc.Button("Import batch template",
+                                   id="upload-import-meta-btn",
+                                   className="btn-ned-secondary", size="sm"),
+                    ], size="sm"),
+                    html.Div(id="upload-import-meta-status",
                              style={"fontSize": "0.78rem", "marginTop": "6px"}),
-
-                    # Import per-file metadata from a batch_metadata.xlsx
-                    html.Div(
-                        style={"marginTop": "14px", "maxWidth": "560px"},
-                        children=[
-                            dbc.InputGroup([
-                                dbc.Input(
-                                    id="upload-batch-meta-path", type="text",
-                                    placeholder="/path/to/batch_metadata.xlsx",
-                                    size="sm"),
-                                dbc.Button("Import batch template",
-                                           id="upload-import-meta-btn",
-                                           className="btn-ned-secondary",
-                                           size="sm"),
-                            ], size="sm"),
-                            html.Div(id="upload-import-meta-status",
-                                     style={"fontSize": "0.78rem",
-                                            "marginTop": "6px"}),
-                        ],
-                    ),
                 ],
             ),
 
@@ -909,22 +877,23 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
 
 
 def _build_channel_id_rows(rec, state):
-    """Build row data for the channel IDs grid, loading saved IDs."""
+    """Build row data for the channel grid: animal ID + per-channel cohort/group."""
     saved = load_channel_ids(rec.source_path) if rec.source_path else None
     # Also store in session for use by detection/annotation pages
     if saved:
         state.extra["channel_animal_ids"] = saved
+    tags = (load_channel_tags(rec.source_path) if rec.source_path
+            else {"cohort": {}, "group": {}})
 
     rows = []
     for i, (name, unit) in enumerate(zip(rec.channel_names, rec.units)):
-        aid = ""
-        if saved and i in saved:
-            aid = saved[i]
         rows.append({
             "index": i,
             "name": name,
             "unit": unit,
-            "animal_id": aid,
+            "animal_id": (saved or {}).get(i, ""),
+            "cohort": tags["cohort"].get(i, ""),
+            "group": tags["group"].get(i, ""),
         })
     return rows
 
@@ -1394,29 +1363,35 @@ def on_channel_id_edit(cell_changed, row_data, sid):
     if rec is None or not rec.source_path:
         return no_update
 
-    # Build mapping from grid data
-    mapping = {}
+    # Build maps from grid data: animal ID + per-channel cohort/group.
+    mapping, cohort_map, group_map = {}, {}, {}
     for row in row_data:
         ch_idx = row.get("index")
-        aid = row.get("animal_id", "").strip()
-        if ch_idx is not None and aid:
-            mapping[int(ch_idx)] = aid
+        if ch_idx is None:
+            continue
+        ch = int(ch_idx)
+        aid = (row.get("animal_id") or "").strip()
+        if aid:
+            mapping[ch] = aid
+        coh = (row.get("cohort") or "").strip()
+        if coh:
+            cohort_map[ch] = coh
+        grp = (row.get("group") or "").strip()
+        if grp:
+            group_map[ch] = grp
 
-    # Save to disk
     save_channel_ids(rec.source_path, mapping)
-
-    # Update session state
+    save_channel_tags(rec.source_path, cohort_map, group_map)
     state.extra["channel_animal_ids"] = mapping
 
-    n_assigned = len(mapping)
     return html.Div(
-        f"Saved {n_assigned} animal ID{'s' if n_assigned != 1 else ''}.",
+        "Saved.",
         style={"color": "var(--ned-success)", "fontSize": "0.78rem"},
     )
 
 
 @callback(
-    Output("upload-apply-ids-all-status", "children"),
+    Output("upload-apply-all-status", "children"),
     Input("upload-apply-ids-all-btn", "n_clicks"),
     State("upload-channel-ids-grid", "rowData"),
     State("session-id", "data"),
@@ -1479,58 +1454,67 @@ def apply_ids_to_all_files(n_clicks, row_data, sid):
     )
 
 
-@callback(
-    Output("upload-file-meta-status", "children"),
-    Input("upload-file-cohort", "value"),
-    Input("upload-file-group", "value"),
-    State("session-id", "data"),
-    prevent_initial_call=True,
-)
-def on_file_meta_edit(cohort, group, sid):
-    """Save this file's cohort/group to its sidecar when edited."""
-    state = server_state.get_session(sid)
-    rec = state.recording
-    if rec is None or not getattr(rec, "source_path", None):
-        return no_update
-    save_file_meta(rec.source_path, cohort or "", group or "")
-    return html.Span("Saved.", style={"color": "var(--ned-success)",
-                                       "fontSize": "0.78rem"})
-
-
-@callback(
-    Output("upload-file-meta-status", "children", allow_duplicate=True),
-    Input("upload-apply-meta-all-btn", "n_clicks"),
-    State("upload-file-cohort", "value"),
-    State("upload-file-group", "value"),
-    State("session-id", "data"),
-    prevent_initial_call=True,
-)
-def apply_meta_to_all(n_clicks, cohort, group, sid):
-    """Copy this file's cohort/group onto every other loaded file."""
-    if not n_clicks:
+def _apply_tag_to_all(n_clicks, row_data, sid, which):
+    """Copy the active file's per-channel `which` (cohort|group) tags onto the
+    same channel indices of every loaded file, preserving each file's other tag."""
+    if not n_clicks or not row_data:
         return no_update
     state = server_state.get_session(sid)
     rec = state.recording
+    tag_map = {}
+    for row in row_data:
+        ch = row.get("index")
+        val = (row.get(which) or "").strip()
+        if ch is not None and val:
+            tag_map[int(ch)] = val
+    if not tag_map:
+        return html.Span(f"No {which} tags to apply.",
+                         style={"color": "#d29922", "fontSize": "0.78rem"})
     project_files = state.extra.get("project_files", [])
     targets = [f["edf_path"] for f in project_files] or (
         [rec.source_path] if rec and getattr(rec, "source_path", None) else [])
     applied = 0
     for ep in targets:
         try:
-            save_file_meta(ep, cohort or "", group or "")
+            existing = load_channel_tags(ep)
+            if which == "cohort":
+                save_channel_tags(ep, tag_map, existing["group"])
+            else:
+                save_channel_tags(ep, existing["cohort"], tag_map)
             applied += 1
         except Exception:
             continue
     return html.Span(
-        f"Applied cohort/group to {applied} loaded file"
-        f"{'s' if applied != 1 else ''}.",
+        f"Applied {which}s to {applied} loaded file{'s' if applied != 1 else ''}.",
         style={"color": "var(--ned-success)", "fontSize": "0.78rem"})
 
 
 @callback(
+    Output("upload-apply-all-status", "children", allow_duplicate=True),
+    Input("upload-apply-cohorts-btn", "n_clicks"),
+    State("upload-channel-ids-grid", "rowData"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def apply_cohorts_to_all(n_clicks, row_data, sid):
+    """Copy this file's per-channel Cohort tags onto every loaded file."""
+    return _apply_tag_to_all(n_clicks, row_data, sid, "cohort")
+
+
+@callback(
+    Output("upload-apply-all-status", "children", allow_duplicate=True),
+    Input("upload-apply-groups-btn", "n_clicks"),
+    State("upload-channel-ids-grid", "rowData"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def apply_groups_to_all(n_clicks, row_data, sid):
+    """Copy this file's per-channel Group tags onto every loaded file."""
+    return _apply_tag_to_all(n_clicks, row_data, sid, "group")
+
+
+@callback(
     Output("upload-import-meta-status", "children"),
-    Output("upload-file-cohort", "value"),
-    Output("upload-file-group", "value"),
     Output("upload-channel-ids-grid", "rowData", allow_duplicate=True),
     Input("upload-import-meta-btn", "n_clicks"),
     State("upload-batch-meta-path", "value"),
@@ -1538,14 +1522,14 @@ def apply_meta_to_all(n_clicks, cohort, group, sid):
     prevent_initial_call=True,
 )
 def import_batch_meta(n_clicks, xlsx_path, sid):
-    """Fill per-file cohort/group + animal IDs from a batch_metadata.xlsx, then
-    refresh the active file's controls."""
+    """Fill per-channel animal IDs + cohort/group from a batch_metadata.xlsx,
+    then refresh the active file's channel table."""
     def warn(msg):
         return (html.Span(msg, style={"color": "#d29922", "fontSize": "0.78rem"}),
-                no_update, no_update, no_update)
+                no_update)
 
     if not n_clicks:
-        return no_update, no_update, no_update, no_update
+        return no_update, no_update
     if not xlsx_path or not Path(xlsx_path).exists():
         return warn("Enter a valid .xlsx path.")
 
@@ -1564,13 +1548,10 @@ def import_batch_meta(n_clicks, xlsx_path, sid):
     except Exception as e:
         return warn(f"Import failed: {e}")
 
-    fm = (load_file_meta(rec.source_path)
-          if rec and getattr(rec, "source_path", None)
-          else {"cohort": "", "group_id": ""})
     rows = _build_channel_id_rows(rec, state) if rec else no_update
     return (html.Span(f"Imported metadata for {n_updated} file(s).",
                       style={"color": "var(--ned-success)", "fontSize": "0.78rem"}),
-            fm["cohort"], fm["group_id"], rows)
+            rows)
 
 
 # ── Batch (Load Multiple) callbacks ─────────────────────────────────
