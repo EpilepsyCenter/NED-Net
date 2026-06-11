@@ -61,6 +61,37 @@ def layout(sid: str | None) -> html.Div:
                        "marginBottom": "16px"},
             ),
 
+            # ── Project database ──────────────────────────────────
+            html.Div(
+                style={"marginBottom": "16px", "padding": "12px",
+                       "border": "1px solid #30363d", "borderRadius": "6px"},
+                children=[
+                    html.Label(
+                        "Project database",
+                        style={"fontSize": "0.82rem", "fontWeight": "600",
+                               "color": "var(--ned-text-muted)"}),
+                    dbc.Row([
+                        dbc.Col(dcc.Dropdown(
+                            id="res-project-select",
+                            options=[{"label": p, "value": p}
+                                     for p in db.list_projects()],
+                            value=db.get_active_project(),
+                            clearable=False,
+                        ), width=4),
+                        dbc.Col(dbc.Input(
+                            id="res-project-new-name", type="text",
+                            placeholder="New project name…", size="sm",
+                        ), width=4),
+                        dbc.Col(dbc.Button(
+                            "Create project", id="res-project-create-btn",
+                            className="btn-ned-secondary", size="sm",
+                        ), width="auto"),
+                    ], className="g-2", align="center"),
+                    html.Div(id="res-project-status",
+                             style={"fontSize": "0.78rem", "marginTop": "6px"}),
+                ],
+            ),
+
             # ── Event category selector ───────────────────────────
             dbc.RadioItems(
                 id="res-source-selector",
@@ -216,12 +247,64 @@ def layout(sid: str | None) -> html.Div:
 
 
 @callback(
+    Output("res-project-select", "options"),
+    Output("res-project-select", "value"),
+    Output("res-project-status", "children"),
+    Input("res-project-create-btn", "n_clicks"),
+    State("res-project-new-name", "value"),
+    prevent_initial_call=True,
+)
+def res_create_project(n, new_name):
+    """Create a new project DB and switch to it. Setting the dropdown value
+    cascades into ``update_results``, which refreshes the panels for the new
+    (empty) project."""
+    try:
+        name = db.create_project(new_name)
+    except ValueError as e:
+        return no_update, no_update, html.Span(str(e), style={"color": "#d29922"})
+    options = [{"label": p, "value": p} for p in db.list_projects()]
+    return (options, name,
+            html.Span(f"Created and switched to '{name}'.",
+                      style={"color": "var(--ned-success)"}))
+
+
+@callback(
+    Output("res-animal-filter", "options"),
+    Output("res-animal-filter", "value"),
+    Output("res-file-filter", "options"),
+    Output("res-file-filter", "value"),
+    Output("res-date-start", "value"),
+    Output("res-date-end", "value"),
+    Input("res-project-select", "value"),
+    prevent_initial_call=True,
+)
+def res_on_project_switch(project):
+    """Refresh the DB-derived filter controls (animals, files, date range) the
+    instant the active project changes, so the user doesn't have to leave and
+    re-enter the tab. Carried-over selections are cleared (they belonged to the
+    previous project)."""
+    if project:
+        db.set_active_project(project)
+    try:
+        animals = db.get_all_animals()
+        files = db.get_all_files()
+        date_min, date_max = db.get_date_range()
+    except Exception:
+        animals, files, date_min, date_max = [], [], "", ""
+    animal_opts = [{"label": a, "value": a} for a in animals]
+    file_opts = [{"label": Path(f["path"]).name, "value": str(f["id"])}
+                 for f in files]
+    return animal_opts, [], file_opts, [], date_min or "", date_max or ""
+
+
+@callback(
     Output("res-summary", "children"),
     Output("res-daily-burden", "figure"),
     Output("res-circadian", "figure"),
     Output("res-events-table", "children"),
     Input("res-apply", "n_clicks"),
     Input("res-source-selector", "value"),
+    Input("res-project-select", "value"),
     State("res-date-start", "value"),
     State("res-date-end", "value"),
     State("res-mode-filter", "value"),
@@ -230,9 +313,18 @@ def layout(sid: str | None) -> html.Div:
     State("res-min-conf", "value"),
     State("res-file-filter", "value"),
 )
-def update_results(n, source, date_start, date_end, modes, animals, types,
-                   min_conf, file_ids):
+def update_results(n, source, project, date_start, date_end, modes, animals,
+                   types, min_conf, file_ids):
     """Re-query SQLite and update all panels."""
+    # Honour the active project DB (app-wide; shared with the Analysis tab).
+    if project and project != db.get_active_project():
+        db.set_active_project(project)
+    # On a project switch, filters carried over from the previous project are
+    # meaningless (different animals/files/date range). Ignore them for this
+    # render; res_on_project_switch resets the controls to match the new DB.
+    if ctx.triggered_id == "res-project-select":
+        date_start = date_end = None
+        animals = file_ids = None
     animal_id = animals[0] if animals and len(animals) == 1 else None
     event_type = types[0] if types and len(types) == 1 else None
     min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None

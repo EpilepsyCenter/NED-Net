@@ -6,6 +6,7 @@ No other part of the app should interact with SQLite directly.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -95,13 +96,135 @@ def init_db(db_path: str | Path | None = None) -> None:
 
 
 def _get_conn() -> sqlite3.Connection:
-    """Get a thread-local database connection."""
-    if not hasattr(_local, "conn") or _local.conn is None:
+    """Get a thread-local connection, reconnecting if the active DB changed.
+
+    The active project can be switched at runtime (``set_active_project``), so
+    a cached connection may point at a stale file. Reopen when the thread's
+    connection was made against a different path.
+    """
+    cur = getattr(_local, "conn", None)
+    if cur is None or getattr(_local, "conn_path", None) != str(_db_path):
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
         _local.conn = sqlite3.connect(str(_db_path), check_same_thread=False)
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
         _local.conn.execute("PRAGMA foreign_keys=ON")
+        _local.conn_path = str(_db_path)
     return _local.conn
+
+
+# ---------------------------------------------------------------------------
+# Project databases
+# ---------------------------------------------------------------------------
+# Each project is a separate SQLite file, switchable at runtime so users can
+# keep experiments apart and still add cohorts to an existing one later. The
+# "Default" project is the legacy ~/.eeg_seizure_analyzer/analysis.db; named
+# projects live in ~/.eeg_seizure_analyzer/projects/<name>.db. The active
+# project is app-wide (Analysis writes and Results reads the same file) and is
+# remembered across restarts via a small pointer file.
+
+_PROJECTS_DIR = _DEFAULT_DB_DIR / "projects"
+_ACTIVE_PTR = _DEFAULT_DB_DIR / "active_project.txt"
+_DEFAULT_PROJECT = "Default"
+_active_project: str = _DEFAULT_PROJECT
+
+
+def _sanitize_project_name(name: str) -> str:
+    """Filesystem-safe project name (alphanumerics, space, dash, underscore)."""
+    name = re.sub(r"[^A-Za-z0-9 _-]", "", (name or "").strip())
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def project_path(name: str) -> Path:
+    """Resolve a project name to its .db file path."""
+    safe = _sanitize_project_name(name)
+    if not safe or safe == _DEFAULT_PROJECT:
+        return _DEFAULT_DB_PATH
+    return _PROJECTS_DIR / f"{safe}.db"
+
+
+def list_projects() -> list[str]:
+    """Known project names: Default plus every projects/*.db, sorted."""
+    names = [_DEFAULT_PROJECT]
+    try:
+        if _PROJECTS_DIR.exists():
+            names += [p.stem for p in sorted(_PROJECTS_DIR.glob("*.db"))]
+    except Exception:
+        pass
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def get_active_project() -> str:
+    """Name of the currently active project."""
+    return _active_project
+
+
+def set_active_project(name: str) -> str:
+    """Switch the active project DB (creating its schema if needed) and persist
+    the choice. Thread connections pick up the change lazily via ``_get_conn``.
+    Returns the active project name.
+    """
+    global _active_project
+    path = project_path(name)
+    target = (
+        _DEFAULT_PROJECT if path == _DEFAULT_DB_PATH
+        else _sanitize_project_name(name)
+    )
+    # Idempotent: two callbacks can react to the same switch; skip the
+    # re-init / pointer write when this project is already active.
+    if target == _active_project and str(path) == str(_db_path):
+        return _active_project
+    init_db(path)
+    _active_project = target
+    try:
+        _DEFAULT_DB_DIR.mkdir(parents=True, exist_ok=True)
+        _ACTIVE_PTR.write_text(_active_project)
+    except Exception:
+        pass
+    return _active_project
+
+
+def create_project(name: str) -> str:
+    """Create a new, empty project DB and make it active.
+
+    Raises ValueError if the name is blank, reserved, or already taken.
+    Returns the new active project name.
+    """
+    safe = _sanitize_project_name(name)
+    if not safe:
+        raise ValueError("Enter a project name.")
+    if safe == _DEFAULT_PROJECT:
+        raise ValueError(f"'{_DEFAULT_PROJECT}' is a reserved name.")
+    if project_path(safe).exists():
+        raise ValueError(f"Project '{safe}' already exists.")
+    return set_active_project(safe)
+
+
+def _restore_active_project() -> None:
+    """On import, point ``_db_path`` at the persisted active project, if any."""
+    global _active_project, _db_path
+    try:
+        name = _ACTIVE_PTR.read_text().strip()
+    except Exception:
+        return
+    if not name:
+        return
+    _db_path = project_path(name)
+    _active_project = (
+        _DEFAULT_PROJECT if _db_path == _DEFAULT_DB_PATH else name
+    )
+
+
+_restore_active_project()
 
 
 # ---------------------------------------------------------------------------
