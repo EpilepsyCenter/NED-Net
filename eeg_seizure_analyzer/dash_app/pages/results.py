@@ -190,6 +190,28 @@ def layout(sid: str | None) -> html.Div:
                             ),
                         ], width=2),
                         dbc.Col([
+                            html.Label("Cohort",
+                                       style={"fontSize": "0.82rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Dropdown(
+                                id="res-cohort-filter",
+                                options=[{"label": c, "value": c}
+                                         for c in db.get_all_cohorts()],
+                                placeholder="All", clearable=True,
+                            ),
+                        ], width=2),
+                        dbc.Col([
+                            html.Label("Group",
+                                       style={"fontSize": "0.82rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Dropdown(
+                                id="res-group-filter",
+                                options=[{"label": g, "value": g}
+                                         for g in db.get_all_groups()],
+                                placeholder="All", clearable=True,
+                            ),
+                        ], width=2),
+                        dbc.Col([
                             html.Label("Event type",
                                        style={"fontSize": "0.82rem",
                                               "color": "var(--ned-text-muted)"}),
@@ -273,6 +295,10 @@ def layout(sid: str | None) -> html.Div:
     Output("res-file-filter", "value"),
     Output("res-date-start", "value"),
     Output("res-date-end", "value"),
+    Output("res-cohort-filter", "options"),
+    Output("res-cohort-filter", "value"),
+    Output("res-group-filter", "options"),
+    Output("res-group-filter", "value"),
     Input("res-project-select", "value"),
     prevent_initial_call=True,
 )
@@ -292,7 +318,13 @@ def res_on_project_switch(project):
     animal_opts = [{"label": a, "value": a} for a in animals]
     file_opts = [{"label": Path(f["path"]).name, "value": str(f["id"])}
                  for f in files]
-    return animal_opts, [], file_opts, [], date_min or "", date_max or ""
+    try:
+        cohort_opts = [{"label": c, "value": c} for c in db.get_all_cohorts()]
+        group_opts = [{"label": g, "value": g} for g in db.get_all_groups()]
+    except Exception:
+        cohort_opts, group_opts = [], []
+    return (animal_opts, [], file_opts, [], date_min or "", date_max or "",
+            cohort_opts, None, group_opts, None)
 
 
 @callback(
@@ -312,9 +344,12 @@ def res_on_project_switch(project):
     State("res-type-filter", "value"),
     State("res-min-conf", "value"),
     State("res-file-filter", "value"),
+    State("res-cohort-filter", "value"),
+    State("res-group-filter", "value"),
 )
 def update_results(n, source, project, detector, excl_signal, date_start,
-                   date_end, modes, animals, types, min_conf, file_ids):
+                   date_end, modes, animals, types, min_conf, file_ids,
+                   cohort, group_id):
     """Re-query SQLite and update all panels."""
     # Honour the active project DB (app-wide; shared with the Analysis tab).
     if project and project != db.get_active_project():
@@ -325,10 +360,13 @@ def update_results(n, source, project, detector, excl_signal, date_start,
     if ctx.triggered_id == "res-project-select":
         date_start = date_end = None
         animals = file_ids = None
+        cohort = group_id = None
     # The Seizures/Spikes radio picks the high-level category; the Detector
     # dropdown narrows to a specific source within it (ML or classical).
     category = "spike" if source == "spike_cnn" else "seizure"
     detector = detector or None
+    cohort = cohort or None
+    group_id = group_id or None
     animal_id = animals[0] if animals and len(animals) == 1 else None
     event_type = types[0] if types and len(types) == 1 else None
     min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None
@@ -341,6 +379,8 @@ def update_results(n, source, project, detector, excl_signal, date_start,
         "event_type": event_type,
         "category": category,
         "source": detector,
+        "cohort": cohort,
+        "group_id": group_id,
     }
     if modes and len(modes) < 3:
         filter_kw["mode"] = modes[0] if len(modes) == 1 else None
@@ -350,10 +390,10 @@ def update_results(n, source, project, detector, excl_signal, date_start,
         events = db.get_events(**filter_kw)
         daily = db.get_daily_burden(
             animal_id=animal_id, min_confidence=min_confidence,
-            source=detector, category=category)
+            source=detector, category=category, cohort=cohort, group_id=group_id)
         circadian = db.get_circadian(
             animal_id=animal_id, min_confidence=min_confidence,
-            source=detector, category=category)
+            source=detector, category=category, cohort=cohort, group_id=group_id)
     except Exception as e:
         empty_fig = go.Figure()
         apply_fig_theme(empty_fig)
@@ -830,6 +870,8 @@ def _build_events_table(events: list[dict]):
             "Type": ev.get("type", ""),
             "Detector": _DETECTOR_LABELS.get(ev.get("source", ""),
                                              ev.get("source", "")),
+            "Group": ev.get("group_id", "") or "",
+            "Cohort": ev.get("cohort", "") or "",
             "Subtype": ev.get("subtype", "") or "",
             "Confidence": round(ev.get("cnn_confidence", 0), 3),
             "Conv %": round((ev.get("convulsive_confidence") or 0) * 100, 0),
@@ -854,6 +896,8 @@ def _build_events_table(events: list[dict]):
         {"field": "Duration", "width": 75},
         {"field": "Type", "width": 100},
         {"field": "Detector", "width": 130},
+        {"field": "Group", "width": 100},
+        {"field": "Cohort", "width": 100},
         {"field": "Subtype", "width": 75},
         {"field": "Confidence", "width": 90},
         {"field": "Conv %", "width": 65},

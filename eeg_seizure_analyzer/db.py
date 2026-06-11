@@ -462,6 +462,7 @@ def get_summary(
     event_type: str | None = None,
     source: str | None = None,
     category: str | None = None,
+    group_id: str | None = None,
 ) -> dict:
     """Query summary statistics with optional filters.
 
@@ -473,9 +474,6 @@ def get_summary(
     conditions = ["c.status = 'ok'"]
     params: list = []
 
-    if cohort:
-        conditions.append("c.cohort = ?")
-        params.append(cohort)
     if date_start:
         conditions.append("c.date >= ?")
         params.append(date_start)
@@ -488,7 +486,7 @@ def get_summary(
 
     where = " AND ".join(conditions)
 
-    # Event-level filters
+    # Event-level filters (cohort/group are per-event)
     ev_conditions = []
     ev_params: list = []
     if animal_id:
@@ -506,14 +504,23 @@ def get_summary(
     if category:
         ev_conditions.append("e.category = ?")
         ev_params.append(category)
+    if cohort:
+        ev_conditions.append("e.cohort = ?")
+        ev_params.append(cohort)
+    if group_id:
+        ev_conditions.append("e.group_id = ?")
+        ev_params.append(group_id)
     # Excluded events never count toward summaries / plots.
     ev_conditions.append("e.excluded = 0")
 
     ev_where = (" AND " + " AND ".join(ev_conditions)) if ev_conditions else ""
 
-    # Files processed
+    # Files with matching events (honours the event-level filters)
     n_files = conn.execute(
-        f"SELECT COUNT(DISTINCT c.id) FROM chunks c WHERE {where}", params
+        f"""SELECT COUNT(DISTINCT e.chunk_id) FROM events e
+            JOIN chunks c ON e.chunk_id = c.id
+            WHERE {where}{ev_where}""",
+        params + ev_params,
     ).fetchone()[0]
 
     # Animals
@@ -591,6 +598,7 @@ def get_events(
     event_type: str | None = None,
     source: str | None = None,
     category: str | None = None,
+    group_id: str | None = None,
 ) -> list[dict]:
     """Query events with optional filters. Returns list of dicts.
 
@@ -603,7 +611,7 @@ def get_events(
     params: list = []
 
     if cohort:
-        conditions.append("c.cohort = ?")
+        conditions.append("e.cohort = ?")
         params.append(cohort)
     if date_start:
         conditions.append("c.date >= ?")
@@ -629,11 +637,15 @@ def get_events(
     if category:
         conditions.append("e.category = ?")
         params.append(category)
+    if group_id:
+        conditions.append("e.group_id = ?")
+        params.append(group_id)
 
     where = " AND ".join(conditions)
 
     rows = conn.execute(
-        f"""SELECT e.*, c.path, c.cohort, c.group_id, c.mode, c.date as chunk_date
+        f"""SELECT e.*, c.path, c.cohort as chunk_cohort,
+                   c.group_id as chunk_group, c.mode, c.date as chunk_date
             FROM events e
             JOIN chunks c ON e.chunk_id = c.id
             WHERE {where}
@@ -666,6 +678,26 @@ def get_all_animals() -> list[str]:
     return [r[0] for r in rows]
 
 
+def get_all_cohorts() -> list[str]:
+    """Return sorted list of distinct non-empty per-event cohorts."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT cohort FROM events "
+        "WHERE cohort IS NOT NULL AND cohort != '' ORDER BY cohort"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_all_groups() -> list[str]:
+    """Return sorted list of distinct non-empty per-event groups."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT group_id FROM events "
+        "WHERE group_id IS NOT NULL AND group_id != '' ORDER BY group_id"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def get_all_files() -> list[dict]:
     """Return list of all processed files with mode and date."""
     conn = _get_conn()
@@ -691,6 +723,8 @@ def get_daily_burden(
     min_confidence: float | None = None,
     source: str | None = None,
     category: str | None = None,
+    cohort: str | None = None,
+    group_id: str | None = None,
 ) -> list[dict]:
     """Return daily event counts grouped by date and type."""
     conn = _get_conn()
@@ -708,6 +742,12 @@ def get_daily_burden(
     if category:
         conditions.append("e.category = ?")
         params.append(category)
+    if cohort:
+        conditions.append("e.cohort = ?")
+        params.append(cohort)
+    if group_id:
+        conditions.append("e.group_id = ?")
+        params.append(group_id)
     conditions.append("e.excluded = 0")
 
     where = " AND ".join(conditions)
@@ -729,6 +769,8 @@ def get_circadian(
     min_confidence: float | None = None,
     source: str | None = None,
     category: str | None = None,
+    cohort: str | None = None,
+    group_id: str | None = None,
 ) -> list[dict]:
     """Return hourly event counts for circadian analysis."""
     conn = _get_conn()
@@ -746,6 +788,12 @@ def get_circadian(
     if category:
         conditions.append("e.category = ?")
         params.append(category)
+    if cohort:
+        conditions.append("e.cohort = ?")
+        params.append(cohort)
+    if group_id:
+        conditions.append("e.group_id = ?")
+        params.append(group_id)
     conditions.append("e.excluded = 0")
 
     where = " AND ".join(conditions)
