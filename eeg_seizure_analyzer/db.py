@@ -94,6 +94,34 @@ def init_db(db_path: str | Path | None = None) -> None:
     )
     conn.commit()
 
+    # Migration: per-event exclude flag. Excluded events are dropped from
+    # summaries/plots/exports but kept in the Results table so they can be
+    # toggled back.
+    try:
+        conn.execute("SELECT excluded FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE events ADD COLUMN excluded INTEGER DEFAULT 0")
+        conn.commit()
+
+    # Migration: high-level category (seizure | spike) kept separate from the
+    # specific detector in `source`, so classical detections show under the
+    # same Seizures/Spikes split as ML ones. Backfill from existing sources.
+    try:
+        conn.execute("SELECT category FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE events ADD COLUMN category TEXT")
+        conn.execute(
+            "UPDATE events SET category = 'spike' "
+            "WHERE category IS NULL AND source LIKE '%spike%'"
+        )
+        conn.execute("UPDATE events SET category = 'seizure' WHERE category IS NULL")
+        conn.commit()
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_events_excluded ON events(excluded)"
+    )
+    conn.commit()
+
 
 def _get_conn() -> sqlite3.Connection:
     """Get a thread-local connection, reconnecting if the active DB changed.
@@ -279,16 +307,26 @@ def write_chunk(path: str, meta: dict, mode: str) -> int:
     return cursor.lastrowid
 
 
-def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn") -> None:
-    """Insert list of event dicts for a chunk."""
+def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
+                 category: str | None = None) -> None:
+    """Insert list of event dicts for a chunk.
+
+    ``source`` is the specific detector (seizure_cnn, spike_cnn, autocorrelation,
+    spectral_band, spike_train, ensemble, ...). ``category`` is the high-level
+    seizure/spike bucket used by the Results Seizures/Spikes split; when omitted
+    it is derived from the source.
+    """
     conn = _get_conn()
     for ev in events:
+        ev_source = ev.get("source", source)
+        ev_cat = (ev.get("category") or category
+                  or ("spike" if "spike" in ev_source else "seizure"))
         conn.execute(
             """INSERT INTO events (chunk_id, animal_id, date, start_sec,
                end_sec, duration_sec, type, subtype, cnn_confidence,
                convulsive_confidence, movement_flag, recording_day, hour_of_day,
-               source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               source, category)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
                 ev.get("animal_id", ""),
@@ -303,9 +341,20 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn")
                 ev.get("movement_flag", False),
                 ev.get("recording_day"),
                 ev.get("hour_of_day"),
-                ev.get("source", source),
+                ev_source,
+                ev_cat,
             ),
         )
+    conn.commit()
+
+
+def set_event_excluded(event_id: int, excluded: bool) -> None:
+    """Mark a single event excluded (1) or included (0) in the active DB."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE events SET excluded = ? WHERE id = ?",
+        (1 if excluded else 0, int(event_id)),
+    )
     conn.commit()
 
 
@@ -361,6 +410,7 @@ def get_summary(
     min_confidence: float | None = None,
     event_type: str | None = None,
     source: str | None = None,
+    category: str | None = None,
 ) -> dict:
     """Query summary statistics with optional filters.
 
@@ -402,6 +452,11 @@ def get_summary(
     if source:
         ev_conditions.append("e.source = ?")
         ev_params.append(source)
+    if category:
+        ev_conditions.append("e.category = ?")
+        ev_params.append(category)
+    # Excluded events never count toward summaries / plots.
+    ev_conditions.append("e.excluded = 0")
 
     ev_where = (" AND " + " AND ".join(ev_conditions)) if ev_conditions else ""
 
@@ -484,8 +539,13 @@ def get_events(
     min_confidence: float | None = None,
     event_type: str | None = None,
     source: str | None = None,
+    category: str | None = None,
 ) -> list[dict]:
-    """Query events with optional filters. Returns list of dicts."""
+    """Query events with optional filters. Returns list of dicts.
+
+    Note: excluded events ARE returned (with ``excluded=1``) so the Results
+    table can show and un-exclude them; only the aggregate queries drop them.
+    """
     conn = _get_conn()
 
     conditions = ["c.status = 'ok'"]
@@ -515,6 +575,9 @@ def get_events(
     if source:
         conditions.append("e.source = ?")
         params.append(source)
+    if category:
+        conditions.append("e.category = ?")
+        params.append(category)
 
     where = " AND ".join(conditions)
 
@@ -576,6 +639,7 @@ def get_daily_burden(
     animal_id: str | None = None,
     min_confidence: float | None = None,
     source: str | None = None,
+    category: str | None = None,
 ) -> list[dict]:
     """Return daily event counts grouped by date and type."""
     conn = _get_conn()
@@ -590,6 +654,10 @@ def get_daily_burden(
     if source:
         conditions.append("e.source = ?")
         params.append(source)
+    if category:
+        conditions.append("e.category = ?")
+        params.append(category)
+    conditions.append("e.excluded = 0")
 
     where = " AND ".join(conditions)
     rows = conn.execute(
@@ -609,6 +677,7 @@ def get_circadian(
     animal_id: str | None = None,
     min_confidence: float | None = None,
     source: str | None = None,
+    category: str | None = None,
 ) -> list[dict]:
     """Return hourly event counts for circadian analysis."""
     conn = _get_conn()
@@ -623,6 +692,10 @@ def get_circadian(
     if source:
         conditions.append("e.source = ?")
         params.append(source)
+    if category:
+        conditions.append("e.category = ?")
+        params.append(category)
+    conditions.append("e.excluded = 0")
 
     where = " AND ".join(conditions)
     rows = conn.execute(

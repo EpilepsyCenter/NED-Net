@@ -34,6 +34,17 @@ from eeg_seizure_analyzer import db
 # ── Layout ─────────────────────────────────────────────────────────────
 
 
+# Friendly labels for the `source` (specific detector) column / filter.
+_DETECTOR_LABELS = {
+    "seizure_cnn": "CNN (seizure)",
+    "spike_cnn": "CNN (spike)",
+    "spike_train": "Spike-Train",
+    "spectral_band": "Spectral Band",
+    "autocorrelation": "Autocorrelation",
+    "ensemble": "Ensemble",
+}
+
+
 def layout(sid: str | None) -> html.Div:
     """Build Results tab with filter controls and data panels."""
     try:
@@ -61,7 +72,7 @@ def layout(sid: str | None) -> html.Div:
                        "marginBottom": "16px"},
             ),
 
-            # ── Project database ──────────────────────────────────
+            # ── Project database (read-only selector) ─────────────
             html.Div(
                 style={"marginBottom": "16px", "padding": "12px",
                        "border": "1px solid #30363d", "borderRadius": "6px"},
@@ -78,17 +89,7 @@ def layout(sid: str | None) -> html.Div:
                             value=db.get_active_project(),
                             clearable=False,
                         ), width=4),
-                        dbc.Col(dbc.Input(
-                            id="res-project-new-name", type="text",
-                            placeholder="New project name…", size="sm",
-                        ), width=4),
-                        dbc.Col(dbc.Button(
-                            "Create project", id="res-project-create-btn",
-                            className="btn-ned-secondary", size="sm",
-                        ), width="auto"),
                     ], className="g-2", align="center"),
-                    html.Div(id="res-project-status",
-                             style={"fontSize": "0.78rem", "marginTop": "6px"}),
                 ],
             ),
 
@@ -172,6 +173,19 @@ def layout(sid: str | None) -> html.Div:
                             ),
                         ], width=2),
                         dbc.Col([
+                            html.Label("Detector",
+                                       style={"fontSize": "0.82rem",
+                                              "color": "var(--ned-text-muted)"}),
+                            dcc.Dropdown(
+                                id="res-detector-filter",
+                                options=([{"label": "All detectors", "value": ""}]
+                                         + [{"label": v, "value": k}
+                                            for k, v in _DETECTOR_LABELS.items()]),
+                                value="",
+                                clearable=False,
+                            ),
+                        ], width=2),
+                        dbc.Col([
                             html.Label("Event type",
                                        style={"fontSize": "0.82rem",
                                               "color": "var(--ned-text-muted)"}),
@@ -228,6 +242,8 @@ def layout(sid: str | None) -> html.Div:
 
             # Hidden store for selected event data
             dcc.Store(id="res-selected-event"),
+            # Bumped when an event's Exclude checkbox is toggled, to re-render.
+            dcc.Store(id="res-exclude-signal", data=0),
 
             # ── Export ─────────────────────────────────────────────
             dbc.Button("Export CSV", id="res-export-csv",
@@ -244,28 +260,6 @@ def layout(sid: str | None) -> html.Div:
 
 
 # ── Main filter callback ───────────────────────────────────────────────
-
-
-@callback(
-    Output("res-project-select", "options"),
-    Output("res-project-select", "value"),
-    Output("res-project-status", "children"),
-    Input("res-project-create-btn", "n_clicks"),
-    State("res-project-new-name", "value"),
-    prevent_initial_call=True,
-)
-def res_create_project(n, new_name):
-    """Create a new project DB and switch to it. Setting the dropdown value
-    cascades into ``update_results``, which refreshes the panels for the new
-    (empty) project."""
-    try:
-        name = db.create_project(new_name)
-    except ValueError as e:
-        return no_update, no_update, html.Span(str(e), style={"color": "#d29922"})
-    options = [{"label": p, "value": p} for p in db.list_projects()]
-    return (options, name,
-            html.Span(f"Created and switched to '{name}'.",
-                      style={"color": "var(--ned-success)"}))
 
 
 @callback(
@@ -305,6 +299,8 @@ def res_on_project_switch(project):
     Input("res-apply", "n_clicks"),
     Input("res-source-selector", "value"),
     Input("res-project-select", "value"),
+    Input("res-detector-filter", "value"),
+    Input("res-exclude-signal", "data"),
     State("res-date-start", "value"),
     State("res-date-end", "value"),
     State("res-mode-filter", "value"),
@@ -313,8 +309,8 @@ def res_on_project_switch(project):
     State("res-min-conf", "value"),
     State("res-file-filter", "value"),
 )
-def update_results(n, source, project, date_start, date_end, modes, animals,
-                   types, min_conf, file_ids):
+def update_results(n, source, project, detector, excl_signal, date_start,
+                   date_end, modes, animals, types, min_conf, file_ids):
     """Re-query SQLite and update all panels."""
     # Honour the active project DB (app-wide; shared with the Analysis tab).
     if project and project != db.get_active_project():
@@ -325,6 +321,10 @@ def update_results(n, source, project, date_start, date_end, modes, animals,
     if ctx.triggered_id == "res-project-select":
         date_start = date_end = None
         animals = file_ids = None
+    # The Seizures/Spikes radio picks the high-level category; the Detector
+    # dropdown narrows to a specific source within it (ML or classical).
+    category = "spike" if source == "spike_cnn" else "seizure"
+    detector = detector or None
     animal_id = animals[0] if animals and len(animals) == 1 else None
     event_type = types[0] if types and len(types) == 1 else None
     min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None
@@ -335,7 +335,8 @@ def update_results(n, source, project, date_start, date_end, modes, animals,
         "animal_id": animal_id,
         "min_confidence": min_confidence,
         "event_type": event_type,
-        "source": source or None,
+        "category": category,
+        "source": detector,
     }
     if modes and len(modes) < 3:
         filter_kw["mode"] = modes[0] if len(modes) == 1 else None
@@ -345,10 +346,10 @@ def update_results(n, source, project, date_start, date_end, modes, animals,
         events = db.get_events(**filter_kw)
         daily = db.get_daily_burden(
             animal_id=animal_id, min_confidence=min_confidence,
-            source=source or None)
+            source=detector, category=category)
         circadian = db.get_circadian(
             animal_id=animal_id, min_confidence=min_confidence,
-            source=source or None)
+            source=detector, category=category)
     except Exception as e:
         empty_fig = go.Figure()
         apply_fig_theme(empty_fig)
@@ -366,10 +367,10 @@ def update_results(n, source, project, date_start, date_end, modes, animals,
     if types and len(types) < 2:
         events = [e for e in events if e.get("type") in types]
 
-    # Summary cards — adapt layout based on source type
+    # Summary cards — adapt layout based on category
     n_total = summary["total_events"]
 
-    if source == "spike_cnn":
+    if category == "spike":
         summary_cards = dbc.Row([
             dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
             dbc.Col(metric_card("Animals", str(summary["n_animals"])), width=2),
@@ -395,6 +396,32 @@ def update_results(n, source, project, date_start, date_end, modes, animals,
     table = _build_events_table(events)
 
     return summary_cards, daily_fig, circ_fig, table
+
+
+@callback(
+    Output("res-exclude-signal", "data"),
+    Input("res-grid", "cellValueChanged"),
+    State("res-exclude-signal", "data"),
+    prevent_initial_call=True,
+)
+def res_toggle_exclude(changed, sig):
+    """Persist an event's Exclude checkbox to the active project DB and bump the
+    signal so summaries/plots re-render (excluded events drop out, but the row
+    stays in the table so it can be toggled back)."""
+    if not changed:
+        return no_update
+    changes = changed if isinstance(changed, list) else [changed]
+    n = 0
+    for ch in changes:
+        if not isinstance(ch, dict) or ch.get("colId") != "Exclude":
+            continue
+        row = ch.get("data") or {}
+        eid = row.get("_event_id")
+        if eid is None:
+            continue
+        db.set_event_excluded(int(eid), bool(ch.get("value")))
+        n += 1
+    return (sig or 0) + 1 if n else no_update
 
 
 # ── Event selection from AG Grid ───────────────────────────────────────
@@ -789,6 +816,7 @@ def _build_events_table(events: list[dict]):
     for ev in events[:500]:
         edf_path = ev.get("path", "")
         rows.append({
+            "Exclude": bool(ev.get("excluded")),
             "Animal": ev.get("animal_id", ""),
             "File": Path(edf_path).name if edf_path else "",
             "Date": ev.get("date", ev.get("chunk_date", "")),
@@ -796,18 +824,24 @@ def _build_events_table(events: list[dict]):
             "End (s)": round(ev.get("end_sec", 0), 1),
             "Duration": round(ev.get("duration_sec", 0), 1),
             "Type": ev.get("type", ""),
+            "Detector": _DETECTOR_LABELS.get(ev.get("source", ""),
+                                             ev.get("source", "")),
             "Subtype": ev.get("subtype", "") or "",
             "Confidence": round(ev.get("cnn_confidence", 0), 3),
             "Conv %": round((ev.get("convulsive_confidence") or 0) * 100, 0),
             "Flagged": "Yes" if ev.get("movement_flag") else "",
             "Hour": ev.get("hour_of_day", ""),
             "Mode": ev.get("mode", ""),
-            # Hidden fields for inspector
+            # Hidden fields for inspector / exclude toggle
             "_path": edf_path,
             "_channel_idx": ev.get("chunk_id", 0),  # will improve with per-event channel
+            "_event_id": ev.get("id"),
         })
 
     columns = [
+        {"field": "Exclude", "width": 90, "editable": True,
+         "cellDataType": "boolean",
+         "headerTooltip": "Exclude from summaries, plots and export"},
         {"field": "Animal", "width": 80},
         {"field": "File", "width": 150},
         {"field": "Date", "width": 95},
@@ -815,6 +849,7 @@ def _build_events_table(events: list[dict]):
         {"field": "End (s)", "width": 80},
         {"field": "Duration", "width": 75},
         {"field": "Type", "width": 100},
+        {"field": "Detector", "width": 130},
         {"field": "Subtype", "width": 75},
         {"field": "Confidence", "width": 90},
         {"field": "Conv %", "width": 65},
@@ -824,6 +859,7 @@ def _build_events_table(events: list[dict]):
         # Hidden columns
         {"field": "_path", "hide": True},
         {"field": "_channel_idx", "hide": True},
+        {"field": "_event_id", "hide": True},
     ]
 
     return dag.AgGrid(
@@ -895,6 +931,8 @@ def export_csv(n, date_start, date_end, animals, min_conf):
         animal_id=animal_id,
         min_confidence=min_confidence,
     )
+    # Excluded events are dropped from exports too.
+    events = [e for e in events if not e.get("excluded")]
     if not events:
         return no_update
 
