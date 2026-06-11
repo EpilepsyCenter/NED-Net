@@ -271,12 +271,13 @@ def load_channel_tags(edf_path: str) -> dict:
 def import_batch_metadata(excel_path: str, edf_dir: str) -> int:
     """Populate per-file sidecars from a ``batch_metadata.xlsx``.
 
-    The template is per-file (cohort, group_id) plus per-channel animal IDs;
-    importing writes the animal IDs and applies the file's cohort/group to all
-    of its channels. Returns the number of files updated.
+    The template carries per-channel animal IDs and per-channel cohort/group
+    (with file-level cohort/group_id as the fallback default, resolved by
+    ``load_metadata``). Writes both sidecars for every listed file found under
+    ``edf_dir``. Returns the number of files updated.
     """
     from eeg_seizure_analyzer.io.batch_metadata import load_metadata
-    meta = load_metadata(excel_path)  # {filename: {cohort, group_id, channel_ids}}
+    meta = load_metadata(excel_path)
     root = Path(edf_dir)
     updated = 0
     for fname, m in meta.items():
@@ -289,13 +290,9 @@ def import_batch_metadata(excel_path: str, edf_dir: str) -> int:
         ch_ids = {int(k): v for k, v in (m.get("channel_ids") or {}).items()}
         if ch_ids:
             save_channel_ids(str(edf), ch_ids)
-        cohort, group = m.get("cohort", ""), m.get("group_id", "")
-        if cohort or group:
-            chans = list(ch_ids.keys())
-            save_channel_tags(
-                str(edf),
-                {ch: cohort for ch in chans},
-                {ch: group for ch in chans},
-            )
+        ch_cohort = {int(k): v for k, v in (m.get("channel_cohort") or {}).items()}
+        ch_group = {int(k): v for k, v in (m.get("channel_group") or {}).items()}
+        if ch_cohort or ch_group:
+            save_channel_tags(str(edf), ch_cohort, ch_group)
         updated += 1
     return updated

@@ -4,10 +4,13 @@ The Excel file maps EDF filenames to cohort, group, and animal IDs.
 Users prepare this alongside their EDF folder and load it during
 batch or live analysis.
 
-Template format (batch_metadata.xlsx):
-    filename          | cohort    | group_id | animal_ch0 | animal_ch1 | ...
-    recording_001.edf | Cohort_A  | Vehicle  | Mouse_01   | Mouse_02   |
-    recording_002.edf | Cohort_A  | Drug_X   | Mouse_03   | Mouse_04   |
+Template format (batch_metadata.xlsx) — one row per file. ``cohort``/``group_id``
+are file-level defaults; per-channel ``animal_chN`` / ``cohort_chN`` /
+``group_chN`` let channels in one file be different animals in different groups
+(a blank per-channel tag falls back to the file-level default):
+
+    filename          | cohort   | group_id | animal_ch0 | cohort_ch0 | group_ch0 | animal_ch1 | cohort_ch1 | group_ch1 | ...
+    recording_001.edf | Cohort_A |          | Mouse_01   |            | Vehicle   | Mouse_02   |            | Drug_X    |
 """
 
 from __future__ import annotations
@@ -47,13 +50,19 @@ def generate_template(
 
     filenames = [Path(f).name for f in edf_files]
 
+    n = len(filenames)
     data = {
         "filename": filenames,
-        "cohort": [""] * len(filenames),
-        "group_id": [""] * len(filenames),
+        # File-level defaults, applied to any channel without a per-channel tag.
+        "cohort": [""] * n,
+        "group_id": [""] * n,
     }
+    # Per channel: animal ID plus optional per-channel cohort/group overrides
+    # (channels in one file can be different animals in different groups).
     for i in range(n_channels):
-        data[f"animal_ch{i}"] = [""] * len(filenames)
+        data[f"animal_ch{i}"] = [""] * n
+        data[f"cohort_ch{i}"] = [""] * n
+        data[f"group_ch{i}"] = [""] * n
 
     df = pd.DataFrame(data)
 
@@ -68,7 +77,10 @@ def load_metadata(excel_path: str) -> dict[str, dict]:
     Returns
     -------
     dict[str, dict]
-        Mapping of filename → {cohort, group_id, channel_ids: {ch_idx: animal_id}}
+        Mapping of filename → ``{cohort, group_id, channel_ids,
+        channel_cohort, channel_group}``, where ``cohort``/``group_id`` are the
+        file-level defaults and the ``channel_*`` maps are per channel (a blank
+        per-channel tag falls back to the file-level default).
     """
     df = pd.read_excel(excel_path, dtype=str).fillna("")
 
@@ -78,24 +90,44 @@ def load_metadata(excel_path: str) -> dict[str, dict]:
         if not fname:
             continue
 
-        meta = {
-            "cohort": row.get("cohort", ""),
-            "group_id": row.get("group_id", ""),
-            "channel_ids": {},
-        }
+        file_cohort = row.get("cohort", "")
+        file_group = row.get("group_id", "")
+        channel_ids, ch_cohort, ch_group = {}, {}, {}
+        chans = set()
 
-        # Collect animal_chN columns
         for col in df.columns:
-            if col.startswith("animal_ch"):
-                try:
-                    ch_idx = int(col.replace("animal_ch", ""))
+            for prefix, store, is_animal in (
+                ("animal_ch", channel_ids, True),
+                ("cohort_ch", ch_cohort, False),
+                ("group_ch", ch_group, False),
+            ):
+                if col.startswith(prefix):
+                    try:
+                        ci = int(col[len(prefix):])
+                    except ValueError:
+                        break
                     val = row.get(col, "")
                     if val:
-                        meta["channel_ids"][ch_idx] = val
-                except ValueError:
-                    continue
+                        store[ci] = val
+                        if is_animal:
+                            chans.add(ci)
+                    break
 
-        result[fname] = meta
+        # Resolve per-channel cohort/group, falling back to the file-level
+        # default, for every channel with an animal ID or an explicit tag.
+        chans |= set(ch_cohort) | set(ch_group)
+        channel_cohort = {ci: (ch_cohort.get(ci) or file_cohort)
+                          for ci in chans if (ch_cohort.get(ci) or file_cohort)}
+        channel_group = {ci: (ch_group.get(ci) or file_group)
+                         for ci in chans if (ch_group.get(ci) or file_group)}
+
+        result[fname] = {
+            "cohort": file_cohort,
+            "group_id": file_group,
+            "channel_ids": channel_ids,
+            "channel_cohort": channel_cohort,
+            "channel_group": channel_group,
+        }
 
     return result
 
