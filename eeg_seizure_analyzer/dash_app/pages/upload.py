@@ -25,6 +25,9 @@ from eeg_seizure_analyzer.io.edf_reader import auto_pair_channels
 from eeg_seizure_analyzer.io.channel_ids import (
     load_channel_ids,
     save_channel_ids,
+    load_file_meta,
+    save_file_meta,
+    import_batch_metadata,
     read_channel_ids_excel,
     generate_channel_ids_template,
 )
@@ -782,6 +785,71 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                 ],
             ),
 
+            # Per-file metadata (cohort / group) — batch-template compatible
+            html.Div(
+                style={"marginTop": "20px"},
+                children=[
+                    html.H6("File Metadata", style={"marginBottom": "4px"}),
+                    html.P(
+                        "Cohort and group for this file — used to split Results "
+                        "by group. Same schema as the batch metadata template.",
+                        style={"color": "var(--ned-text-muted)",
+                               "fontSize": "0.82rem", "marginBottom": "10px"},
+                    ),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Cohort", style={"fontSize": "0.8rem",
+                                       "color": "var(--ned-text-muted)"}),
+                            dbc.Input(
+                                id="upload-file-cohort", type="text", size="sm",
+                                debounce=True,
+                                value=(load_file_meta(rec.source_path)["cohort"]
+                                       if getattr(rec, "source_path", None) else ""),
+                            ),
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Group", style={"fontSize": "0.8rem",
+                                       "color": "var(--ned-text-muted)"}),
+                            dbc.Input(
+                                id="upload-file-group", type="text", size="sm",
+                                debounce=True,
+                                value=(load_file_meta(rec.source_path)["group_id"]
+                                       if getattr(rec, "source_path", None) else ""),
+                            ),
+                        ], width=3),
+                        dbc.Col([
+                            html.Label(" ", style={"fontSize": "0.8rem",
+                                       "display": "block"}),
+                            dbc.Button("Apply to all loaded files",
+                                       id="upload-apply-meta-all-btn",
+                                       className="btn-ned-secondary", size="sm"),
+                        ], width="auto"),
+                    ], className="g-2", align="end"),
+                    html.Div(id="upload-file-meta-status",
+                             style={"fontSize": "0.78rem", "marginTop": "6px"}),
+
+                    # Import per-file metadata from a batch_metadata.xlsx
+                    html.Div(
+                        style={"marginTop": "14px", "maxWidth": "560px"},
+                        children=[
+                            dbc.InputGroup([
+                                dbc.Input(
+                                    id="upload-batch-meta-path", type="text",
+                                    placeholder="/path/to/batch_metadata.xlsx",
+                                    size="sm"),
+                                dbc.Button("Import batch template",
+                                           id="upload-import-meta-btn",
+                                           className="btn-ned-secondary",
+                                           size="sm"),
+                            ], size="sm"),
+                            html.Div(id="upload-import-meta-status",
+                                     style={"fontSize": "0.78rem",
+                                            "marginTop": "6px"}),
+                        ],
+                    ),
+                ],
+            ),
+
             # Video status + manual path input
             html.Div(
                 style={"marginTop": "16px"},
@@ -1409,6 +1477,100 @@ def apply_ids_to_all_files(n_clicks, row_data, sid):
         f"loaded file{'s' if applied != 1 else ''}.",
         style={"color": "var(--ned-success)", "fontSize": "0.78rem"},
     )
+
+
+@callback(
+    Output("upload-file-meta-status", "children"),
+    Input("upload-file-cohort", "value"),
+    Input("upload-file-group", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def on_file_meta_edit(cohort, group, sid):
+    """Save this file's cohort/group to its sidecar when edited."""
+    state = server_state.get_session(sid)
+    rec = state.recording
+    if rec is None or not getattr(rec, "source_path", None):
+        return no_update
+    save_file_meta(rec.source_path, cohort or "", group or "")
+    return html.Span("Saved.", style={"color": "var(--ned-success)",
+                                       "fontSize": "0.78rem"})
+
+
+@callback(
+    Output("upload-file-meta-status", "children", allow_duplicate=True),
+    Input("upload-apply-meta-all-btn", "n_clicks"),
+    State("upload-file-cohort", "value"),
+    State("upload-file-group", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def apply_meta_to_all(n_clicks, cohort, group, sid):
+    """Copy this file's cohort/group onto every other loaded file."""
+    if not n_clicks:
+        return no_update
+    state = server_state.get_session(sid)
+    rec = state.recording
+    project_files = state.extra.get("project_files", [])
+    targets = [f["edf_path"] for f in project_files] or (
+        [rec.source_path] if rec and getattr(rec, "source_path", None) else [])
+    applied = 0
+    for ep in targets:
+        try:
+            save_file_meta(ep, cohort or "", group or "")
+            applied += 1
+        except Exception:
+            continue
+    return html.Span(
+        f"Applied cohort/group to {applied} loaded file"
+        f"{'s' if applied != 1 else ''}.",
+        style={"color": "var(--ned-success)", "fontSize": "0.78rem"})
+
+
+@callback(
+    Output("upload-import-meta-status", "children"),
+    Output("upload-file-cohort", "value"),
+    Output("upload-file-group", "value"),
+    Output("upload-channel-ids-grid", "rowData", allow_duplicate=True),
+    Input("upload-import-meta-btn", "n_clicks"),
+    State("upload-batch-meta-path", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def import_batch_meta(n_clicks, xlsx_path, sid):
+    """Fill per-file cohort/group + animal IDs from a batch_metadata.xlsx, then
+    refresh the active file's controls."""
+    def warn(msg):
+        return (html.Span(msg, style={"color": "#d29922", "fontSize": "0.78rem"}),
+                no_update, no_update, no_update)
+
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update
+    if not xlsx_path or not Path(xlsx_path).exists():
+        return warn("Enter a valid .xlsx path.")
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+    project_files = state.extra.get("project_files", [])
+    if project_files:
+        edf_dir = str(Path(project_files[0]["edf_path"]).parent)
+    elif rec and getattr(rec, "source_path", None):
+        edf_dir = str(Path(rec.source_path).parent)
+    else:
+        return warn("No files loaded.")
+
+    try:
+        n_updated = import_batch_metadata(xlsx_path, edf_dir)
+    except Exception as e:
+        return warn(f"Import failed: {e}")
+
+    fm = (load_file_meta(rec.source_path)
+          if rec and getattr(rec, "source_path", None)
+          else {"cohort": "", "group_id": ""})
+    rows = _build_channel_id_rows(rec, state) if rec else no_update
+    return (html.Span(f"Imported metadata for {n_updated} file(s).",
+                      style={"color": "var(--ned-success)", "fontSize": "0.78rem"}),
+            fm["cohort"], fm["group_id"], rows)
 
 
 # ── Batch (Load Multiple) callbacks ─────────────────────────────────
