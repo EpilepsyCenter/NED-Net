@@ -650,6 +650,9 @@ def layout(sid: str | None) -> html.Div:
                     dbc.Button("Clear Results", id="sz-clear-btn",
                                className="btn-ned-danger",
                                style={"display": "inline-block" if has_results else "none"}),
+                    dbc.Button("Add to project database", id="sz-add-to-db-btn",
+                               className="btn-ned-secondary",
+                               style={"display": "inline-block" if has_results else "none"}),
                     html.Div(style={"flex": "1"}),
                     dbc.Button("Restore Defaults", id="sz-recall-defaults-btn",
                                className="btn-ned-secondary", size="sm"),
@@ -674,6 +677,7 @@ def layout(sid: str | None) -> html.Div:
             dcc.Store(id="sz-detect-all-running", data=False),
 
             html.Div(id="sz-settings-status", style={"marginBottom": "8px"}),
+            html.Div(id="sz-add-to-db-status", style={"marginBottom": "8px"}),
 
             dcc.Loading(html.Div(id="sz-status"), type="circle", color="#58a6ff"),
 
@@ -2762,6 +2766,109 @@ def run_detection(
 
 
 # ── Filter helpers ──────────────────────────────────────────────────
+
+
+@callback(
+    Output("sz-add-to-db-status", "children"),
+    Input("sz-add-to-db-btn", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def add_to_project_db(n_clicks, sid):
+    """Write the current post-filter detections to the active project DB.
+
+    Per-event cohort/group come from each channel's tags; the detector is
+    recorded as the event source. Non-destructive: ML or other-detector events
+    for the file survive; re-adding replaces only this detector's events.
+    """
+    if not n_clicks:
+        return no_update
+    from eeg_seizure_analyzer import db
+    from eeg_seizure_analyzer.io.channel_ids import (
+        load_channel_tags, load_channel_ids,
+    )
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+    src_path = getattr(rec, "source_path", "") if rec else ""
+    if not rec or not src_path or not src_path.lower().endswith(".edf"):
+        return alert("Load an EDF file and run detection first.", "warning")
+    if not state.seizure_events:
+        return alert("No detections to add. Run detection first.", "warning")
+
+    # Post-filter set (mirror the results view).
+    fv = {**_FILTER_DEFAULTS, **state.extra.get("sz_filter_values", {})}
+    classify = state.extra.get("sz_classify_subtypes", True)
+    if state.extra.get("sz_filter_enabled", True):
+        events = _apply_filters(
+            rec, state.seizure_events, classify,
+            **{k: fv.get(k, v) for k, v in _FILTER_DEFAULTS.items()})
+    else:
+        events = list(state.seizure_events)
+    if not events:
+        return alert("No events pass the current filters.", "warning")
+
+    method = state.extra.get("sz_method", "spike_train")
+    tags = load_channel_tags(src_path)
+    ch_ids = state.extra.get("channel_animal_ids") or load_channel_ids(src_path) or {}
+    try:
+        from eeg_seizure_analyzer.analysis import (
+            parse_date_from_path, _get_file_start_hour,
+        )
+        date = parse_date_from_path(src_path) or ""
+        start_hour = _get_file_start_hour(src_path)
+    except Exception:
+        date, start_hour = "", None
+
+    def _ev_source(ev):
+        dm = (ev.features or {}).get("detection_method", "")
+        if dm == "ml_bendr":
+            return "seizure_bendr"
+        if dm == "ml_unet":
+            return "seizure_unet"
+        return method
+
+    by_source: dict[str, list] = {}
+    n_no_id = 0
+    for ev in events:
+        ch = ev.channel
+        feat = ev.features or {}
+        subtype = feat.get("seizure_subtype", "non_convulsive")
+        db_type = "convulsive" if subtype == "convulsive" else "non_convulsive"
+        hour = ((start_hour + int(ev.onset_sec // 3600)) % 24
+                if start_hour is not None else None)
+        aid = ev.animal_id or ch_ids.get(ch, "")
+        if not aid:
+            n_no_id += 1
+        by_source.setdefault(_ev_source(ev), []).append({
+            "animal_id": aid,
+            "date": date,
+            "start_sec": ev.onset_sec,
+            "end_sec": ev.offset_sec,
+            "duration_sec": ev.duration_sec,
+            "type": db_type,
+            "subtype": feat.get("nonconvulsive_subtype"),
+            "cnn_confidence": ev.confidence,
+            "convulsive_confidence": feat.get("convulsive_probability", 0.0),
+            "movement_flag": ev.movement_flag,
+            "hour_of_day": hour,
+            "cohort": tags["cohort"].get(ch, ""),
+            "group_id": tags["group"].get(ch, ""),
+        })
+
+    try:
+        total = sum(
+            db.add_manual_events(src_path, dicts, source=src, category="seizure")
+            for src, dicts in by_source.items()
+        )
+    except Exception as e:
+        return alert(f"Failed to add events: {e}", "danger")
+
+    proj = db.get_active_project()
+    note = f" ({n_no_id} without an Animal ID)" if n_no_id else ""
+    return alert(
+        f"Added {total} event(s) to project '{proj}'{note}. "
+        f"View them in the Results tab.", "success")
 
 
 def _apply_filters(rec, seizures, classify_on, *,

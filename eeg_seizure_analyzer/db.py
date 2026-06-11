@@ -122,6 +122,21 @@ def init_db(db_path: str | Path | None = None) -> None:
     )
     conn.commit()
 
+    # Migration: per-event cohort/group. Cohort/group are per channel, so a
+    # chunk's single cohort/group_id can't represent them. Backfill existing
+    # events from their chunk so prior data stays filterable.
+    for col in ("cohort", "group_id"):
+        try:
+            conn.execute(f"SELECT {col} FROM events LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
+            conn.execute(
+                f"UPDATE events SET {col} = "
+                f"(SELECT c.{col} FROM chunks c WHERE c.id = events.chunk_id) "
+                f"WHERE {col} IS NULL"
+            )
+            conn.commit()
+
 
 def _get_conn() -> sqlite3.Connection:
     """Get a thread-local connection, reconnecting if the active DB changed.
@@ -325,8 +340,8 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
             """INSERT INTO events (chunk_id, animal_id, date, start_sec,
                end_sec, duration_sec, type, subtype, cnn_confidence,
                convulsive_confidence, movement_flag, recording_day, hour_of_day,
-               source, category)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               source, category, cohort, group_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
                 ev.get("animal_id", ""),
@@ -343,6 +358,8 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
                 ev.get("hour_of_day"),
                 ev_source,
                 ev_cat,
+                ev.get("cohort", ""),
+                ev.get("group_id", ""),
             ),
         )
     conn.commit()
@@ -356,6 +373,40 @@ def set_event_excluded(event_id: int, excluded: bool) -> None:
         (1 if excluded else 0, int(event_id)),
     )
     conn.commit()
+
+
+def add_manual_events(edf_path: str, event_dicts: list[dict], source: str,
+                      category: str = "seizure", mode: str = "manual") -> int:
+    """Add classical/manual detection events to the active project DB.
+
+    Non-destructive across detectors: finds or creates the file's chunk WITHOUT
+    deleting it (so ML or other-detector events for the same file survive), then
+    replaces only this ``source``'s events for the file (replace-on-re-add).
+    Returns the number of events written.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id FROM chunks WHERE path = ?", (str(edf_path),)
+    ).fetchone()
+    if row:
+        chunk_id = row["id"]
+    else:
+        date = event_dicts[0].get("date", "") if event_dicts else ""
+        cur = conn.execute(
+            """INSERT INTO chunks (path, cohort, group_id, date, chunk_start_sec,
+               chunk_end_sec, processed_at, processing_sec, status, mode)
+               VALUES (?, '', '', ?, 0, 0, ?, 0, 'ok', ?)""",
+            (str(edf_path), date, datetime.now(timezone.utc).isoformat(), mode),
+        )
+        chunk_id = cur.lastrowid
+    # Replace only this detector's events for the file (keep other sources).
+    conn.execute(
+        "DELETE FROM events WHERE chunk_id = ? AND source = ?",
+        (chunk_id, source),
+    )
+    conn.commit()
+    write_events(chunk_id, event_dicts, source=source, category=category)
+    return len(event_dicts)
 
 
 def write_summary(chunk_id: int, animal_id: str, summary: dict) -> None:
