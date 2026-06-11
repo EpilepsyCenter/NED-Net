@@ -861,25 +861,34 @@ def browse_live_template(n):
     return path or no_update
 
 
+# One callback per button (no ctx.triggered_id dependency) — most robust.
+# CSV needs no extra deps (xlsx would require openpyxl); opens in Excel fine.
 @callback(
     Output("an-template-download", "data"),
     Input("an-batch-meta-dl", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_batch_template(n_clicks):
+    """Download an empty batch-metadata template (.csv)."""
+    if not n_clicks:
+        return no_update
+    from eeg_seizure_analyzer.io.batch_metadata import empty_batch_template
+    return dcc.send_data_frame(
+        empty_batch_template().to_csv, "batch_metadata.csv", index=False)
+
+
+@callback(
+    Output("an-template-download", "data", allow_duplicate=True),
     Input("an-live-template-dl", "n_clicks"),
     prevent_initial_call=True,
 )
-def download_template(n_batch, n_live):
-    """Send an empty metadata template (batch or live) as an .xlsx download."""
-    from eeg_seizure_analyzer.io.batch_metadata import (
-        empty_batch_template, empty_live_template,
-    )
-    if ctx.triggered_id == "an-live-template-dl":
-        df, fname = empty_live_template(), "live_template.csv"
-    elif ctx.triggered_id == "an-batch-meta-dl":
-        df, fname = empty_batch_template(), "batch_metadata.csv"
-    else:
+def download_live_template(n_clicks):
+    """Download an empty live channel template (.csv)."""
+    if not n_clicks:
         return no_update
-    # CSV needs no extra deps (xlsx would require openpyxl); opens in Excel fine.
-    return dcc.send_data_frame(df.to_csv, fname, index=False)
+    from eeg_seizure_analyzer.io.batch_metadata import empty_live_template
+    return dcc.send_data_frame(
+        empty_live_template().to_csv, "live_template.csv", index=False)
 
 
 # ── Single file: check if already processed ────────────────────────────
