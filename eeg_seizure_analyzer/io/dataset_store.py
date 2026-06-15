@@ -34,7 +34,12 @@ def scan_annotation_files(
     list[dict]
         One dict per annotated file with keys:
         ``edf_path``, ``annotation_path``, ``n_confirmed``, ``n_rejected``,
-        ``n_pending``, ``n_total``.
+        ``n_pending``, ``n_total``.  For seizure annotations the confirmed
+        and rejected counts are additionally split into convulsive vs
+        non-convulsive (``n_confirmed_conv``, ``n_confirmed_nonconv``,
+        ``n_rejected_conv``, ``n_rejected_nonconv``).  An event is counted
+        as convulsive when ``features.convulsive`` is truthy; untagged
+        seizures count as non-convulsive.
     """
     suffix = _SEIZURE_SUFFIX if annotation_type == "seizure" else _SPIKE_SUFFIX
     results: list[dict] = []
@@ -66,6 +71,19 @@ def scan_annotation_files(
                 1 for a in annotations if a.get("label", "pending") == "pending"
             )
 
+            # Convulsive vs non-convulsive split (seizures only)
+            def _is_conv(a: dict) -> bool:
+                return bool((a.get("features") or {}).get("convulsive", False))
+
+            n_confirmed_conv = sum(
+                1 for a in annotations
+                if a.get("label") == "confirmed" and _is_conv(a)
+            )
+            n_rejected_conv = sum(
+                1 for a in annotations
+                if a.get("label") == "rejected" and _is_conv(a)
+            )
+
             results.append(
                 {
                     "edf_path": edf_path,
@@ -74,6 +92,10 @@ def scan_annotation_files(
                     "n_rejected": n_rejected,
                     "n_pending": n_pending,
                     "n_total": len(annotations),
+                    "n_confirmed_conv": n_confirmed_conv,
+                    "n_confirmed_nonconv": n_confirmed - n_confirmed_conv,
+                    "n_rejected_conv": n_rejected_conv,
+                    "n_rejected_nonconv": n_rejected - n_rejected_conv,
                 }
             )
 

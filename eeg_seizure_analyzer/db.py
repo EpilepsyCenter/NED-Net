@@ -72,10 +72,35 @@ def init_db(db_path: str | Path | None = None) -> None:
             total_duration_sec  REAL
         );
 
+        -- Which animals were recorded in each file and for how long, captured
+        -- at analysis time from the channel→animal map. Independent of events,
+        -- so per-animal recording time is exact even for animals with zero
+        -- detected events (the denominator for per-hour rates / coverage).
+        CREATE TABLE IF NOT EXISTS file_animals (
+            chunk_id   INTEGER REFERENCES chunks(id),
+            animal_id  TEXT,
+            valid_sec  REAL,
+            cohort     TEXT,
+            group_id   TEXT
+        );
+
+        -- Per-animal review status: exclude an animal from aggregations, or
+        -- censor it after a date (e.g. died / dropped mid-experiment). Keyed by
+        -- animal_id within the project DB.
+        CREATE TABLE IF NOT EXISTS animal_status (
+            animal_id            TEXT PRIMARY KEY,
+            excluded             INTEGER DEFAULT 0,
+            valid_until          TEXT,
+            notes                TEXT,
+            recording_start_date TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_events_chunk ON events(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_events_animal ON events(animal_id);
         CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
         CREATE INDEX IF NOT EXISTS idx_chunk_summary_chunk ON chunk_summary(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_file_animals_chunk ON file_animals(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_file_animals_animal ON file_animals(animal_id);
     """)
     conn.commit()
 
@@ -121,6 +146,16 @@ def init_db(db_path: str | Path | None = None) -> None:
         "CREATE INDEX IF NOT EXISTS idx_events_excluded ON events(excluded)"
     )
     conn.commit()
+
+    # Migration: per-animal recording_start_date (day-1 reference for the
+    # longitudinal view, so cohorts with different calendar starts align).
+    try:
+        conn.execute("SELECT recording_start_date FROM animal_status LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE animal_status ADD COLUMN recording_start_date TEXT"
+        )
+        conn.commit()
 
     # Migration: per-event cohort/group. Cohort/group are per channel, so a
     # chunk's single cohort/group_id can't represent them. Backfill existing
@@ -321,6 +356,7 @@ def write_chunk(path: str, meta: dict, mode: str) -> int:
         chunk_id = existing["id"]
         conn.execute("DELETE FROM events WHERE chunk_id = ?", (chunk_id,))
         conn.execute("DELETE FROM chunk_summary WHERE chunk_id = ?", (chunk_id,))
+        conn.execute("DELETE FROM file_animals WHERE chunk_id = ?", (chunk_id,))
         conn.execute("DELETE FROM chunks WHERE id = ?", (chunk_id,))
 
     cursor = conn.execute(
@@ -398,28 +434,62 @@ def set_event_excluded(event_id: int, excluded: bool) -> None:
     conn.commit()
 
 
+def write_file_animals(chunk_id: int, animals: dict | None) -> None:
+    """Replace the per-animal observation rows for a chunk.
+
+    ``animals`` maps animal_id -> ``{"valid_sec", "cohort", "group_id"}``.
+    Records which animals were recorded in this file and for how long.
+    """
+    conn = _get_conn()
+    conn.execute("DELETE FROM file_animals WHERE chunk_id = ?", (chunk_id,))
+    for aid, info in (animals or {}).items():
+        if not aid:
+            continue
+        info = info or {}
+        conn.execute(
+            """INSERT INTO file_animals (chunk_id, animal_id, valid_sec,
+               cohort, group_id) VALUES (?, ?, ?, ?, ?)""",
+            (chunk_id, aid, float(info.get("valid_sec") or 0),
+             info.get("cohort", "") or "", info.get("group_id", "") or ""),
+        )
+    conn.commit()
+
+
 def add_manual_events(edf_path: str, event_dicts: list[dict], source: str,
-                      category: str = "seizure", mode: str = "manual") -> int:
+                      category: str = "seizure", mode: str = "manual",
+                      recording_sec: float | None = None,
+                      file_animals: dict | None = None) -> int:
     """Add classical/manual detection events to the active project DB.
 
     Non-destructive across detectors: finds or creates the file's chunk WITHOUT
     deleting it (so ML or other-detector events for the same file survive), then
     replaces only this ``source``'s events for the file (replace-on-re-add).
-    Returns the number of events written.
+
+    ``recording_sec`` is the file's full recording length (seconds), used as the
+    denominator for per-hour rates in Results. It is stored as the chunk's
+    duration when the chunk is first created here, and backfilled if an existing
+    chunk has no duration yet — but never overwrites a real value (e.g. one set
+    by the ML analysis path). Returns the number of events written.
     """
     conn = _get_conn()
     row = conn.execute(
-        "SELECT id FROM chunks WHERE path = ?", (str(edf_path),)
+        "SELECT id, chunk_end_sec FROM chunks WHERE path = ?", (str(edf_path),)
     ).fetchone()
     if row:
         chunk_id = row["id"]
+        if recording_sec and not (row["chunk_end_sec"] or 0):
+            conn.execute(
+                "UPDATE chunks SET chunk_end_sec = ? WHERE id = ?",
+                (float(recording_sec), chunk_id),
+            )
     else:
         date = event_dicts[0].get("date", "") if event_dicts else ""
         cur = conn.execute(
             """INSERT INTO chunks (path, cohort, group_id, date, chunk_start_sec,
                chunk_end_sec, processed_at, processing_sec, status, mode)
-               VALUES (?, '', '', ?, 0, 0, ?, 0, 'ok', ?)""",
-            (str(edf_path), date, datetime.now(timezone.utc).isoformat(), mode),
+               VALUES (?, '', '', ?, 0, ?, ?, 0, 'ok', ?)""",
+            (str(edf_path), date, float(recording_sec or 0),
+             datetime.now(timezone.utc).isoformat(), mode),
         )
         chunk_id = cur.lastrowid
     # Replace only this detector's events for the file (keep other sources).
@@ -429,6 +499,26 @@ def add_manual_events(edf_path: str, event_dicts: list[dict], source: str,
     )
     conn.commit()
     write_events(chunk_id, event_dicts, source=source, category=category)
+
+    # Record per-animal observation, but only if this file has none yet — don't
+    # clobber a mapping written by the ML analysis path. Fall back to the event
+    # animals when no explicit mapping is supplied.
+    if file_animals is None and recording_sec:
+        file_animals = {}
+        for ev in event_dicts:
+            aid = ev.get("animal_id")
+            if aid:
+                file_animals.setdefault(aid, {
+                    "valid_sec": recording_sec,
+                    "cohort": ev.get("cohort", ""),
+                    "group_id": ev.get("group_id", ""),
+                })
+    if file_animals:
+        has = conn.execute(
+            "SELECT COUNT(*) FROM file_animals WHERE chunk_id = ?", (chunk_id,)
+        ).fetchone()[0]
+        if not has:
+            write_file_animals(chunk_id, file_animals)
     return len(event_dicts)
 
 
@@ -830,3 +920,105 @@ def get_circadian(
         params,
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_file_animals(
+    date_start: str | None = None,
+    date_end: str | None = None,
+    animal_id: str | None = None,
+    mode: str | None = None,
+    cohort: str | None = None,
+    group_id: str | None = None,
+) -> list[dict]:
+    """Per-(file, animal) observation rows with the file's date.
+
+    Used to compute exact per-animal/group recording time (the denominator for
+    rates and coverage). Honours the same file-level filters as the event
+    queries, but NOT event-level ones (confidence/type/detector) — an animal's
+    observation time does not depend on which events you are looking at.
+    """
+    conn = _get_conn()
+    conditions = ["c.status = 'ok'"]
+    params: list = []
+    if date_start:
+        conditions.append("c.date >= ?")
+        params.append(date_start)
+    if date_end:
+        conditions.append("c.date <= ?")
+        params.append(date_end)
+    if mode:
+        conditions.append("c.mode = ?")
+        params.append(mode)
+    if animal_id:
+        conditions.append("fa.animal_id = ?")
+        params.append(animal_id)
+    if cohort:
+        conditions.append("fa.cohort = ?")
+        params.append(cohort)
+    if group_id:
+        conditions.append("fa.group_id = ?")
+        params.append(group_id)
+    where = " AND ".join(conditions)
+    rows = conn.execute(
+        f"""SELECT fa.chunk_id, fa.animal_id, fa.valid_sec,
+                   fa.cohort, fa.group_id, c.date as date, c.mode, c.path
+            FROM file_animals fa
+            JOIN chunks c ON fa.chunk_id = c.id
+            WHERE {where}""",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_animal_status() -> dict:
+    """Return {animal_id: {excluded, valid_until, notes, recording_start_date}}
+    for the active DB."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT animal_id, excluded, valid_until, notes, recording_start_date "
+        "FROM animal_status"
+    ).fetchall()
+    return {
+        r["animal_id"]: {
+            "excluded": bool(r["excluded"]),
+            "valid_until": r["valid_until"] or "",
+            "notes": r["notes"] or "",
+            "recording_start_date": r["recording_start_date"] or "",
+        }
+        for r in rows
+    }
+
+
+def set_animal_status(animal_id: str, excluded: bool | None = None,
+                      valid_until: str | None = None,
+                      notes: str | None = None,
+                      recording_start_date: str | None = None) -> None:
+    """Upsert per-animal status. Only the arguments passed (non-None) change;
+    string fields set to an empty string clear that field."""
+    if not animal_id:
+        return
+    conn = _get_conn()
+    cur = conn.execute(
+        "SELECT excluded, valid_until, notes, recording_start_date "
+        "FROM animal_status WHERE animal_id = ?",
+        (animal_id,),
+    ).fetchone()
+    if cur:
+        ex = cur["excluded"] if excluded is None else (1 if excluded else 0)
+        vu = cur["valid_until"] if valid_until is None else (valid_until or None)
+        nt = cur["notes"] if notes is None else (notes or None)
+        rs = (cur["recording_start_date"] if recording_start_date is None
+              else (recording_start_date or None))
+        conn.execute(
+            "UPDATE animal_status SET excluded = ?, valid_until = ?, notes = ?, "
+            "recording_start_date = ? WHERE animal_id = ?",
+            (ex, vu, nt, rs, animal_id),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO animal_status (animal_id, excluded, valid_until, notes, "
+            "recording_start_date) VALUES (?, ?, ?, ?, ?)",
+            (animal_id, 1 if excluded else 0, valid_until or None,
+             notes or None, recording_start_date or None),
+        )
+    conn.commit()

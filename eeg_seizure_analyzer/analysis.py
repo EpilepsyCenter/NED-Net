@@ -292,6 +292,25 @@ def parse_date_from_path(path: str) -> str:
     return ""
 
 
+def _build_file_animals(eeg_idx, ch_ids, ch_cohort, ch_group,
+                        rec_duration, cohort, group_id) -> dict:
+    """Map each animal recorded in this file to its observation seconds and
+    per-channel cohort/group, for the ``file_animals`` table. All EEG channels
+    share the file's wall clock, so every animal's valid time is the full
+    recording length. Channels without an assigned animal ID are skipped."""
+    out: dict = {}
+    for ch in eeg_idx:
+        aid = ch_ids.get(ch, "")
+        if not aid or aid in out:
+            continue
+        out[aid] = {
+            "valid_sec": rec_duration,
+            "cohort": ch_cohort.get(ch, cohort),
+            "group_id": ch_group.get(ch, group_id),
+        }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Core: process_chunk — used by all three modes
 # ---------------------------------------------------------------------------
@@ -397,6 +416,14 @@ def process_chunk(
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "status": "ok",
     }, mode)
+
+    # Record which animals were recorded in this file (independent of events)
+    # so per-animal recording time / coverage is exact even for quiet animals.
+    db.write_file_animals(
+        chunk_id,
+        _build_file_animals(eeg_idx, ch_ids, ch_cohort, ch_group,
+                            rec_duration, cohort, group_id),
+    )
 
     try:
         # Run CNN detection (wraps existing predict_seizures)
@@ -564,6 +591,12 @@ def process_spike_chunk(
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "status": "ok",
     }, mode)
+
+    db.write_file_animals(
+        chunk_id,
+        _build_file_animals(eeg_idx, ch_ids, ch_cohort, ch_group,
+                            rec_duration, cohort, group_id),
+    )
 
     try:
         events = predict_spikes(

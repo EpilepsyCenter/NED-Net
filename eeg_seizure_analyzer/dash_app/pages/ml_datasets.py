@@ -366,6 +366,8 @@ def scan_folder(n_clicks, folder, ann_type, sid):
         if not ch_ids:
             files_missing_ids.append(os.path.basename(r["edf_path"]))
 
+    is_seizure = ann_type == "seizure"
+
     # Build AgGrid table
     rows = []
     for r in results:
@@ -376,6 +378,13 @@ def scan_folder(n_clicks, folder, ann_type, sid):
             "rejected": r["n_rejected"],
             "pending": r["n_pending"],
             "total": r["n_total"],
+            # convulsive / non-convulsive split (seizures only; carried in
+            # row data so the selection-based summary can re-aggregate)
+            "confirmed_conv": r["n_confirmed_conv"],
+            "confirmed_nonconv": r["n_confirmed_nonconv"],
+            "rejected_conv": r["n_rejected_conv"],
+            "rejected_nonconv": r["n_rejected_nonconv"],
+            "is_seizure": is_seizure,
         })
 
     col_defs = [
@@ -395,6 +404,12 @@ def scan_folder(n_clicks, folder, ann_type, sid):
          "type": "numericColumn"},
         {"field": "total", "headerName": "Total", "width": 100,
          "type": "numericColumn"},
+        # hidden — used only to re-aggregate the summary on selection change
+        {"field": "confirmed_conv", "hide": True},
+        {"field": "confirmed_nonconv", "hide": True},
+        {"field": "rejected_conv", "hide": True},
+        {"field": "rejected_nonconv", "hide": True},
+        {"field": "is_seizure", "hide": True},
     ]
 
     grid = dag.AgGrid(
@@ -416,7 +431,14 @@ def scan_folder(n_clicks, folder, ann_type, sid):
     total_rej = sum(r["n_rejected"] for r in results)
     total_pend = sum(r["n_pending"] for r in results)
 
-    summary = _build_summary(len(results), total_conf, total_rej, total_pend)
+    summary = _build_summary(
+        len(results), total_conf, total_rej, total_pend,
+        conf_conv=sum(r["n_confirmed_conv"] for r in results),
+        conf_nonconv=sum(r["n_confirmed_nonconv"] for r in results),
+        rej_conv=sum(r["n_rejected_conv"] for r in results),
+        rej_nonconv=sum(r["n_rejected_nonconv"] for r in results),
+        is_seizure=is_seizure,
+    )
 
     # Animal ID warning
     id_warning = []
@@ -440,14 +462,33 @@ def scan_folder(n_clicks, folder, ann_type, sid):
     return content, rows, {"display": "block", "marginTop": "24px"}, {"display": "block", "marginTop": "8px"}
 
 
-def _build_summary(n_files, n_confirmed, n_rejected, n_pending):
-    """Build metric cards summarising the selected dataset."""
+def _build_summary(n_files, n_confirmed, n_rejected, n_pending,
+                   conf_conv=0, conf_nonconv=0, rej_conv=0, rej_nonconv=0,
+                   is_seizure=True):
+    """Build metric cards summarising the selected dataset.
+
+    For seizures the confirmed/rejected counts are split into separate
+    convulsive vs non-convulsive cards; for spikes the plain cards are used.
+    """
+    if is_seizure:
+        confirmed_cards = [
+            metric_card("Confirmed · Convulsive", str(conf_conv), accent=True),
+            metric_card("Confirmed · Non-conv", str(conf_nonconv), accent=True),
+        ]
+        rejected_cards = [
+            metric_card("Rejected · Convulsive", str(rej_conv)),
+            metric_card("Rejected · Non-conv", str(rej_nonconv)),
+        ]
+    else:
+        confirmed_cards = [metric_card("Confirmed", str(n_confirmed), accent=True)]
+        rejected_cards = [metric_card("Rejected", str(n_rejected))]
+
     return html.Div(
         style={"display": "flex", "gap": "16px", "flexWrap": "wrap"},
         children=[
             metric_card("Files", str(n_files)),
-            metric_card("Confirmed", str(n_confirmed), accent=True),
-            metric_card("Rejected", str(n_rejected)),
+            *confirmed_cards,
+            *rejected_cards,
             metric_card("Pending", str(n_pending)),
             metric_card("Total Events",
                         str(n_confirmed + n_rejected + n_pending)),
@@ -473,7 +514,14 @@ def update_summary(selected_rows):
     total_rej = sum(r.get("rejected", 0) for r in selected_rows)
     total_pend = sum(r.get("pending", 0) for r in selected_rows)
 
-    return _build_summary(n_files, total_conf, total_rej, total_pend)
+    return _build_summary(
+        n_files, total_conf, total_rej, total_pend,
+        conf_conv=sum(r.get("confirmed_conv", 0) for r in selected_rows),
+        conf_nonconv=sum(r.get("confirmed_nonconv", 0) for r in selected_rows),
+        rej_conv=sum(r.get("rejected_conv", 0) for r in selected_rows),
+        rej_nonconv=sum(r.get("rejected_nonconv", 0) for r in selected_rows),
+        is_seizure=bool(selected_rows[0].get("is_seizure", True)),
+    )
 
 
 # ── Save dataset ─────────────────────────────────────────────────────
