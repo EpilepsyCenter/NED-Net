@@ -167,6 +167,7 @@ def layout(sid: str | None) -> html.Div:
     models = _model_options(prev_det_type)
     prev_model = store.get("model_path")
     prev_threshold = store.get("confidence_threshold", 0.5)
+    prev_conv_threshold = store.get("convulsive_threshold", 0.5)
     prev_min_dur = store.get("min_duration_sec", 5.0)
     prev_merge_gap = store.get("merge_gap_sec", 2.0)
     prev_hvsw_freq = store.get("hvsw_max_freq_hz", 4.0)
@@ -264,7 +265,7 @@ def layout(sid: str | None) -> html.Div:
                     ),
                 ], width=6),
                 dbc.Col([
-                    html.Label("Confidence threshold",
+                    html.Label("Seizure threshold (ch0)",
                                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                     dcc.Slider(
                         id="an-threshold",
@@ -273,7 +274,18 @@ def layout(sid: str | None) -> html.Div:
                         marks={},
                         tooltip=None,
                     ),
-                ], width=5),
+                ], width=3),
+                dbc.Col([
+                    html.Label("Convulsive threshold (ch1)",
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
+                    dcc.Slider(
+                        id="an-conv-threshold",
+                        min=0.1, max=1.0, step=0.01,
+                        value=prev_conv_threshold,
+                        marks={},
+                        tooltip=None,
+                    ),
+                ], width=3),
             ], className="g-3 mb-3"),
 
             # ── Detection parameters ──────────────────────────────
@@ -798,20 +810,24 @@ def show_model_info(model_name):
             dbc.Row([
                 dbc.Col(metric_card("Dataset", meta.get("dataset_name", "—")), width=2),
                 dbc.Col(metric_card("Event F1",
-                                    f"{best.get('event_f1', 0):.3f}",
+                                    f"{best.get('best_event_f1', best.get('event_f1', 0)):.3f}",
                                     accent=True), width=2),
                 dbc.Col(metric_card("Precision",
-                                    f"{best.get('event_precision', 0):.3f}"), width=2),
+                                    f"{best.get('best_event_precision', best.get('event_precision', 0)):.3f}"), width=2),
                 dbc.Col(metric_card("Recall",
-                                    f"{best.get('event_recall', 0):.3f}"), width=2),
+                                    f"{best.get('best_event_recall', best.get('event_recall', 0)):.3f}"), width=2),
                 dbc.Col(metric_card("Params",
                                     f"{meta.get('n_params', 0):,}"), width=2),
                 dbc.Col(metric_card("Classes",
                                     str(meta.get("n_classes", 1))), width=2),
             ], className="g-2"),
             html.Div(
-                f"Trained: {meta.get('created', '—')[:10]}  —  "
-                f"Window: {dc.get('window_sec', 60)}s @ {dc.get('target_fs', 250)}Hz",
+                "Metrics at the model's best threshold"
+                + (f" ({best['best_threshold']})" if best.get('best_threshold') is not None else "")
+                + (f"  —  Convulsive best F1: {best['conv_best_event_f1']:.3f}"
+                   if best.get('conv_best_event_f1') is not None else "")
+                + f"  —  Trained: {meta.get('created', '—')[:10]}"
+                + f"  —  Window: {dc.get('window_sec', 60)}s @ {dc.get('target_fs', 250)}Hz",
                 style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                        "marginTop": "8px"},
             ),
@@ -971,6 +987,7 @@ def check_single_processed(path):
     State("an-single-path", "value"),
     State("an-model", "value"),
     State("an-threshold", "value"),
+    State("an-conv-threshold", "value"),
     State("an-min-duration", "value"),
     State("an-merge-gap", "value"),
     State("an-hvsw-freq", "value"),
@@ -981,7 +998,7 @@ def check_single_processed(path):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def run_single(n_clicks, edf_path, model_name, threshold,
+def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
                min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
                det_type, sid):
     if not n_clicks:
@@ -1009,6 +1026,7 @@ def run_single(n_clicks, edf_path, model_name, threshold,
         "detection_type": det_type,
         "model_path": model_name,
         "confidence_threshold": threshold,
+        "convulsive_threshold": conv_threshold,
         "single_file_path": edf_path,
         "min_duration_sec": min_dur,
         "merge_gap_sec": merge_gap,
@@ -1050,6 +1068,7 @@ def run_single(n_clicks, edf_path, model_name, threshold,
                     edf_path=edf_path,
                     model_name=model_name,
                     confidence_threshold=threshold,
+                    convulsive_threshold=float(conv_threshold or 0.5),
                     min_duration_sec=float(min_dur or 5.0),
                     merge_gap_sec=float(merge_gap or 2.0),
                     mode="single",
@@ -1119,6 +1138,7 @@ def scan_batch_folder(n, folder, include_sub):
     State("an-batch-sub", "value"),
     State("an-model", "value"),
     State("an-threshold", "value"),
+    State("an-conv-threshold", "value"),
     State("an-min-duration", "value"),
     State("an-merge-gap", "value"),
     State("an-hvsw-freq", "value"),
@@ -1130,7 +1150,7 @@ def scan_batch_folder(n, folder, include_sub):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def run_batch(n, folder, include_sub, model_name, threshold,
+def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
               min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
               det_type, meta_path, sid):
     if not n:
@@ -1157,6 +1177,7 @@ def run_batch(n, folder, include_sub, model_name, threshold,
         "detection_type": det_type,
         "model_path": model_name,
         "confidence_threshold": threshold,
+        "convulsive_threshold": conv_threshold,
         "min_duration_sec": min_dur,
         "merge_gap_sec": merge_gap,
         "hvsw_max_freq_hz": hvsw_freq,
@@ -1172,6 +1193,7 @@ def run_batch(n, folder, include_sub, model_name, threshold,
     # Launch batch in background
     batch_kwargs = {
         "confidence_threshold": threshold,
+        "convulsive_threshold": float(conv_threshold or 0.5),
         "min_duration_sec": float(min_dur or (0.002 if is_spike else 5.0)),
         "merge_gap_sec": float(merge_gap or (0.05 if is_spike else 2.0)),
         "include_subfolders": include_sub,
@@ -1240,6 +1262,7 @@ def cancel_batch(n):
     State("an-live-wait", "value"),
     State("an-model", "value"),
     State("an-threshold", "value"),
+    State("an-conv-threshold", "value"),
     State("an-min-duration", "value"),
     State("an-merge-gap", "value"),
     State("an-hvsw-freq", "value"),
@@ -1251,7 +1274,7 @@ def cancel_batch(n):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def start_live(n, folder, backlog, wait_sec, model_name, threshold,
+def start_live(n, folder, backlog, wait_sec, model_name, threshold, conv_threshold,
                min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
                det_type, template_path, sid):
     if not n:
@@ -1273,6 +1296,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold,
         "mode": "live",
         "model_path": model_name,
         "confidence_threshold": threshold,
+        "convulsive_threshold": conv_threshold,
         "min_duration_sec": min_dur,
         "merge_gap_sec": merge_gap,
         "hvsw_max_freq_hz": hvsw_freq,
@@ -1302,6 +1326,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold,
         watch_folder=folder,
         model_name=model_name,
         confidence_threshold=threshold,
+        convulsive_threshold=float(conv_threshold or 0.5),
         min_duration_sec=float(min_dur or 5.0),
         merge_gap_sec=float(merge_gap or 2.0),
         wait_sec=int(wait_sec or 30),

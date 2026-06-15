@@ -30,6 +30,7 @@ def predict_seizures(
     model_name: str,
     channels: list[int] | None = None,
     threshold: float = 0.5,
+    convulsive_threshold: float = 0.5,
     min_duration_sec: float = 3.0,
     merge_gap_sec: float = 2.0,
     overlap_sec: float = 15.0,
@@ -49,7 +50,10 @@ def predict_seizures(
     channels : list[int], optional
         EEG channel indices to process. None = auto-detect all EEG channels.
     threshold : float
-        Probability threshold for seizure detection.
+        Probability threshold for seizure detection (channel 0, all seizures).
+    convulsive_threshold : float
+        Threshold on the convulsive channel (1) mean probability for labelling a
+        detected event convulsive vs non-convulsive.
     min_duration_sec : float
         Minimum seizure duration (shorter events are discarded).
     merge_gap_sec : float
@@ -195,6 +199,7 @@ def predict_seizures(
             animal_id=animal_id,
             start_event_id=event_id,
             convulsive_probs=avg_conv,
+            convulsive_threshold=convulsive_threshold,
             architecture=architecture,
         )
         event_id += len(ch_events)
@@ -216,6 +221,7 @@ def _extract_events(
     animal_id: str = "",
     start_event_id: int = 1,
     convulsive_probs: np.ndarray | None = None,
+    convulsive_threshold: float = 0.5,
     architecture: str = "unet",
 ) -> list[DetectedEvent]:
     """Convert binary prediction array to DetectedEvent list.
@@ -287,7 +293,7 @@ def _extract_events(
             seg_conv = convulsive_probs[seg_start:seg_end]
             conv_confidence = float(np.mean(seg_conv))
             feat["convulsive_probability"] = round(conv_confidence, 3)
-            feat["convulsive"] = conv_confidence > 0.5
+            feat["convulsive"] = conv_confidence > convulsive_threshold
 
         events.append(DetectedEvent(
             onset_sec=round(onset_sec, 3),
