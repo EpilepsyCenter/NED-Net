@@ -1572,10 +1572,13 @@ def _build_events_table(events: list[dict]):
             "Conv %": round((ev.get("convulsive_confidence") or 0) * 100, 0),
             "Flagged": "Yes" if ev.get("movement_flag") else "",
             "Hour": ev.get("hour_of_day", ""),
+            "Ch": ev.get("channel") if ev.get("channel") is not None else "",
             "Mode": ev.get("mode", ""),
             # Hidden fields for inspector / exclude toggle
             "_path": edf_path,
-            "_channel_idx": ev.get("chunk_id", 0),  # will improve with per-event channel
+            # Real per-event EDF channel; older events (NULL) fall back to the
+            # first EEG channel in the inspector.
+            "_channel_idx": ev.get("channel") if ev.get("channel") is not None else 0,
             "_event_id": ev.get("id"),
         })
 
@@ -1598,6 +1601,7 @@ def _build_events_table(events: list[dict]):
         {"field": "Conv %", "width": 65},
         {"field": "Flagged", "width": 65},
         {"field": "Hour", "width": 50},
+        {"field": "Ch", "width": 55},
         {"field": "Mode", "width": 65},
         # Hidden columns
         {"field": "_path", "hide": True},

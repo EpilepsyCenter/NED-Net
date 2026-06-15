@@ -60,7 +60,8 @@ def init_db(db_path: str | Path | None = None) -> None:
             movement_flag   BOOLEAN,
             recording_day   INTEGER,
             hour_of_day     INTEGER,
-            source          TEXT DEFAULT 'seizure_cnn'
+            source          TEXT DEFAULT 'seizure_cnn',
+            channel         INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS chunk_summary (
@@ -146,6 +147,14 @@ def init_db(db_path: str | Path | None = None) -> None:
         "CREATE INDEX IF NOT EXISTS idx_events_excluded ON events(excluded)"
     )
     conn.commit()
+
+    # Migration: per-event EDF channel index (so Results can inspect the right
+    # channel; older events have NULL and fall back to the first EEG channel).
+    try:
+        conn.execute("SELECT channel FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE events ADD COLUMN channel INTEGER")
+        conn.commit()
 
     # Migration: per-animal recording_start_date (day-1 reference for the
     # longitudinal view, so cohorts with different calendar starts align).
@@ -399,8 +408,8 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
             """INSERT INTO events (chunk_id, animal_id, date, start_sec,
                end_sec, duration_sec, type, subtype, cnn_confidence,
                convulsive_confidence, movement_flag, recording_day, hour_of_day,
-               source, category, cohort, group_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               source, category, cohort, group_id, channel)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
                 ev.get("animal_id", ""),
@@ -419,6 +428,7 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
                 ev_cat,
                 ev.get("cohort", ""),
                 ev.get("group_id", ""),
+                ev.get("channel"),
             ),
         )
     conn.commit()
