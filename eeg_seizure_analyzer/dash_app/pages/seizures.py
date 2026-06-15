@@ -2901,9 +2901,33 @@ def add_to_project_db(n_clicks, sid):
             "group_id": tags["group"].get(ch, ""),
         })
 
+    # Full recording length (header-only read) so Results can normalise
+    # per-hour rates for these classical/manual detections.
+    try:
+        from eeg_seizure_analyzer.io.edf_reader import scan_edf_channels
+        _ci = scan_edf_channels(src_path)
+        rec_sec = max((c["n_samples"] / c["fs"]
+                       for c in _ci if c.get("fs")), default=0.0)
+    except Exception:
+        rec_sec = 0.0
+
+    # Per-animal observation for every assigned channel (independent of events),
+    # so quiet animals still get recording time / coverage.
+    fa_map: dict = {}
+    for ch, aid in (ch_ids or {}).items():
+        if not aid or aid in fa_map:
+            continue
+        fa_map[aid] = {
+            "valid_sec": rec_sec,
+            "cohort": tags["cohort"].get(ch, ""),
+            "group_id": tags["group"].get(ch, ""),
+        }
+
     try:
         total = sum(
-            db.add_manual_events(src_path, dicts, source=src, category="seizure")
+            db.add_manual_events(src_path, dicts, source=src,
+                                 category="seizure", recording_sec=rec_sec,
+                                 file_animals=fa_map)
             for src, dicts in by_source.items()
         )
     except Exception as e:

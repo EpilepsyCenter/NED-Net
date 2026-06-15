@@ -288,11 +288,106 @@ def layout(sid: str | None) -> html.Div:
             # ── Summary cards ──────────────────────────────────────
             html.Div(id="res-summary"),
 
+            # ── Panel visibility ───────────────────────────────────
+            html.Div(
+                style={"display": "flex", "alignItems": "center",
+                       "gap": "12px", "marginBottom": "8px"},
+                children=[
+                    html.Span("Show:", style={"fontSize": "0.82rem",
+                                              "fontWeight": "600",
+                                              "color": "var(--ned-text-muted)"}),
+                    dbc.Checklist(
+                        id="res-panels-toggle",
+                        options=[
+                            {"label": "Daily burden", "value": "daily"},
+                            {"label": "Circadian", "value": "circadian"},
+                            {"label": "Group comparison", "value": "groups"},
+                            {"label": "Per-animal", "value": "animals"},
+                            {"label": "Distributions", "value": "dist"},
+                            {"label": "Longitudinal", "value": "long"},
+                        ],
+                        value=["daily", "circadian", "groups", "animals",
+                               "dist", "long"],
+                        inline=True,
+                        style={"fontSize": "0.82rem"},
+                    ),
+                ],
+            ),
+
             # ── Plots ──────────────────────────────────────────────
             dbc.Row([
-                dbc.Col(dcc.Graph(id="res-daily-burden"), width=6),
-                dbc.Col(dcc.Graph(id="res-circadian"), width=6),
+                dbc.Col(dcc.Graph(id="res-daily-burden",
+                                  config={"responsive": True}),
+                        id="res-col-daily", width=6),
+                dbc.Col(dcc.Graph(id="res-circadian",
+                                  config={"responsive": True}),
+                        id="res-col-circadian", width=6),
             ], className="mb-3"),
+
+            # ── Cross-group / per-animal analysis ──────────────────
+            html.Div(id="res-panel-groups", children=[
+                html.Div(
+                    style={"display": "flex", "alignItems": "center",
+                           "gap": "16px", "marginTop": "8px"},
+                    children=[
+                        html.H6("Group & cohort comparison",
+                                style={"color": "var(--ned-accent)",
+                                       "margin": 0}),
+                        html.Span("Normalise:",
+                                  style={"fontSize": "0.82rem",
+                                         "color": "var(--ned-text-muted)"}),
+                        dbc.RadioItems(
+                            id="res-normalize",
+                            options=[
+                                {"label": " Raw counts", "value": "raw"},
+                                {"label": " Per animal-hour",
+                                 "value": "per_hour"},
+                            ],
+                            value="raw", inline=True,
+                            style={"fontSize": "0.82rem"},
+                        ),
+                    ],
+                ),
+                html.P(
+                    "Rates use each animal's recorded time (file length per "
+                    "file it was recorded in). In the per-animal table below, "
+                    "untick Include to drop an animal from these views, or set "
+                    "Valid until to censor it after a date (e.g. died "
+                    "mid-experiment). Low coverage / early-ended animals are "
+                    "flagged for review.",
+                    style={"color": "var(--ned-text-muted)",
+                           "fontSize": "0.78rem", "margin": "4px 0 8px 0"},
+                ),
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="res-group-compare",
+                                      config={"responsive": True}), width=6),
+                    dbc.Col(html.Div(id="res-group-table"), width=6),
+                ], className="mb-3"),
+            ]),
+
+            html.Div(id="res-panel-animals", children=[
+                html.H6("Per-animal summary",
+                        style={"color": "var(--ned-accent)",
+                               "marginTop": "8px"}),
+                html.Div(id="res-animal-table", className="mb-3"),
+            ]),
+
+            html.Div(id="res-panel-dist", children=[
+                html.H6("Distributions",
+                        style={"color": "var(--ned-accent)",
+                               "marginTop": "8px"}),
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="res-dist-duration",
+                                      config={"responsive": True}), width=6),
+                    dbc.Col(dcc.Graph(id="res-dist-confidence",
+                                      config={"responsive": True}), width=6),
+                ], className="mb-3"),
+            ]),
+
+            html.Div(id="res-panel-long", children=[
+                dcc.Graph(id="res-longitudinal", className="mb-3",
+                          config={"responsive": True}),
+            ]),
 
             # ── Events table ───────────────────────────────────────
             html.H6("Events", style={"color": "var(--ned-accent)", "marginTop": "16px"}),
@@ -305,6 +400,8 @@ def layout(sid: str | None) -> html.Div:
             dcc.Store(id="res-selected-event"),
             # Bumped when an event's Exclude checkbox is toggled, to re-render.
             dcc.Store(id="res-exclude-signal", data=0),
+            # Bumped when a per-animal Include / Valid-until edit is persisted.
+            dcc.Store(id="res-animal-signal", data=0),
 
             # ── Export ─────────────────────────────────────────────
             dbc.Button("Export CSV", id="res-export-csv",
@@ -368,11 +465,19 @@ def res_on_project_switch(project):
     Output("res-daily-burden", "figure"),
     Output("res-circadian", "figure"),
     Output("res-events-table", "children"),
+    Output("res-group-compare", "figure"),
+    Output("res-group-table", "children"),
+    Output("res-animal-table", "children"),
+    Output("res-dist-duration", "figure"),
+    Output("res-dist-confidence", "figure"),
+    Output("res-longitudinal", "figure"),
     Input("res-apply", "n_clicks"),
     Input("res-source-selector", "value"),
     Input("res-project-select", "value"),
     Input("res-detector-filter", "value"),
     Input("res-exclude-signal", "data"),
+    Input("res-animal-signal", "data"),
+    Input("res-normalize", "value"),
     State("res-date-start", "value"),
     State("res-date-end", "value"),
     State("res-mode-filter", "value"),
@@ -383,9 +488,9 @@ def res_on_project_switch(project):
     State("res-cohort-filter", "value"),
     State("res-group-filter", "value"),
 )
-def update_results(n, source, project, detector, excl_signal, date_start,
-                   date_end, modes, animals, types, min_conf, file_ids,
-                   cohort, group_id):
+def update_results(n, source, project, detector, excl_signal, animal_signal,
+                   normalize, date_start, date_end, modes, animals, types,
+                   min_conf, file_ids, cohort, group_id):
     """Re-query SQLite and update all panels."""
     # Honour the active project DB (app-wide; shared with the Analysis tab).
     if project and project != db.get_active_project():
@@ -434,7 +539,9 @@ def update_results(n, source, project, detector, excl_signal, date_start,
         empty_fig = go.Figure()
         apply_fig_theme(empty_fig)
         return (alert(f"Database error: {e}", "danger"),
-                empty_fig, empty_fig, html.Div())
+                empty_fig, empty_fig, html.Div(),
+                empty_fig, html.Div(), html.Div(),
+                empty_fig, empty_fig, empty_fig)
 
     # Post-filter by file IDs
     if file_ids:
@@ -471,11 +578,54 @@ def update_results(n, source, project, detector, excl_signal, date_start,
             dbc.Col(metric_card("Flagged", str(summary["n_flagged"])), width=2),
         ], className="g-2 mb-3")
 
-    daily_fig = _build_daily_burden(daily)
-    circ_fig = _build_circadian(circadian)
+    daily_fig = _panel_legend(_build_daily_burden(daily))
+    circ_fig = _panel_legend(_build_circadian(circadian))
     table = _build_events_table(events)
 
-    return summary_cards, daily_fig, circ_fig, table
+    # Cross-group / per-animal views — computed from the filtered event list
+    # (drops per-event excludes) so they inherit every filter applied above.
+    is_seizure = category == "seizure"
+    agg_events = _active_events(events)
+
+    # Observation rows (exact recording time) + per-animal review status.
+    try:
+        fa_rows = db.get_file_animals(
+            date_start=date_start or None, date_end=date_end or None,
+            animal_id=animal_id, mode=filter_kw.get("mode"),
+            cohort=cohort, group_id=group_id)
+        status = db.get_animal_status()
+    except Exception:
+        fa_rows, status = [], {}
+    if file_ids:
+        fa_rows = [r for r in fa_rows if r.get("chunk_id") in chunk_ids]
+    if animals and len(animals) > 1:
+        fa_rows = [r for r in fa_rows if r.get("animal_id") in animals]
+
+    # Censor after each animal's valid_until, then split off excluded animals
+    # (kept in the per-animal table, dropped from aggregations/plots).
+    agg_events, fa_rows = _apply_censor(agg_events, fa_rows, status)
+    excluded = {a for a, s in status.items() if s.get("excluded")}
+    vis_events = [e for e in agg_events
+                  if (e.get("animal_id") or "") not in excluded]
+    vis_fa = [r for r in fa_rows if (r.get("animal_id") or "") not in excluded]
+
+    group_rollup = _group_rollup(vis_events, vis_fa)
+    animal_rollup = _animal_rollup(agg_events, fa_rows, status)
+    # Per-animal day-1 reference (override or earliest recorded date) so the
+    # longitudinal view aligns cohorts with different calendar starts.
+    animal_starts = {r["animal"]: r["rec_start"]
+                     for r in animal_rollup if r["rec_start"]}
+    group_fig = _panel_legend(
+        _build_group_comparison(group_rollup, normalize, is_seizure))
+    group_table = _build_group_table(group_rollup, is_seizure)
+    animal_table = _build_animal_table(animal_rollup, is_seizure)
+    dur_fig = _panel_legend(_build_duration_hist(vis_events, is_seizure))
+    conf_fig = _panel_legend(_build_confidence_hist(vis_events, is_seizure))
+    long_fig = _panel_legend(_build_longitudinal(vis_events, animal_starts))
+
+    return (summary_cards, daily_fig, circ_fig, table,
+            group_fig, group_table, animal_table,
+            dur_fig, conf_fig, long_fig)
 
 
 @callback(
@@ -502,6 +652,60 @@ def res_toggle_exclude(changed, sig):
         db.set_event_excluded(int(eid), bool(ch.get("value")))
         n += 1
     return (sig or 0) + 1 if n else no_update
+
+
+@callback(
+    Output("res-animal-signal", "data"),
+    Input("res-animal-grid", "cellValueChanged"),
+    State("res-animal-signal", "data"),
+    prevent_initial_call=True,
+)
+def res_edit_animal(changed, sig):
+    """Persist per-animal Include / Valid-until edits to animal_status and bump
+    the signal so the comparison/per-animal/plot panels re-render."""
+    if not changed:
+        return no_update
+    changes = changed if isinstance(changed, list) else [changed]
+    n = 0
+    for ch in changes:
+        if not isinstance(ch, dict):
+            continue
+        row = ch.get("data") or {}
+        aid = row.get("_animal")
+        if not aid:
+            continue
+        col = ch.get("colId")
+        if col == "Include":
+            db.set_animal_status(aid, excluded=not bool(ch.get("value")))
+            n += 1
+        elif col == "Valid until":
+            db.set_animal_status(aid, valid_until=(ch.get("value") or "").strip())
+            n += 1
+        elif col == "Rec start":
+            db.set_animal_status(
+                aid, recording_start_date=(ch.get("value") or "").strip())
+            n += 1
+    return (sig or 0) + 1 if n else no_update
+
+
+@callback(
+    Output("res-col-daily", "style"),
+    Output("res-col-circadian", "style"),
+    Output("res-panel-groups", "style"),
+    Output("res-panel-animals", "style"),
+    Output("res-panel-dist", "style"),
+    Output("res-panel-long", "style"),
+    Input("res-panels-toggle", "value"),
+)
+def res_toggle_panels(shown):
+    """Show/hide each results panel from the 'Show:' checklist."""
+    shown = shown or []
+
+    def st(key):
+        return {} if key in shown else {"display": "none"}
+
+    return (st("daily"), st("circadian"), st("groups"),
+            st("animals"), st("dist"), st("long"))
 
 
 # ── Event selection from AG Grid ───────────────────────────────────────
@@ -816,6 +1020,20 @@ def _inspector_params_panel(ev_data: dict, computed: dict | None = None):
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _panel_legend(fig):
+    """Place the legend below the plot (left-aligned title above it) so the
+    title and legend never overlap. Call AFTER apply_fig_theme, which resets the
+    margins — this re-sets them with headroom for the title and footroom for the
+    horizontal legend."""
+    fig.update_layout(
+        title=dict(x=0.0, xanchor="left", y=0.97, yanchor="top"),
+        legend=dict(orientation="h", yanchor="top", y=-0.28, x=0,
+                    font=dict(size=10)),
+        margin=dict(l=60, r=20, t=46, b=78),
+    )
+    return fig
+
+
 def _build_daily_burden(daily: list[dict]) -> go.Figure:
     fig = go.Figure()
     if not daily:
@@ -878,6 +1096,447 @@ def _build_circadian(circadian: list[dict]) -> go.Figure:
         xaxis_title="Hour of day", yaxis_title="Events",
         legend=dict(orientation="h", y=1.1),
     )
+    apply_fig_theme(fig)
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Cross-group / per-animal analysis
+# ═══════════════════════════════════════════════════════════════════════
+#
+# These views are computed in Python from the already-filtered event list so
+# they honour every filter the callback applies (file IDs, multi-animal, type,
+# exclude) without re-implementing the SQL WHERE clause.
+#
+# Recording time / coverage comes from the per-file observation rows
+# (db.get_file_animals): one row per animal per file, valid_sec = the file's
+# recording length, written at analysis time from the channel→animal map. This
+# is exact even for animals with zero detected events. A group's animal-hours is
+# the sum of valid_sec over its rows. Older projects without observation data
+# fall back to raw counts (rates show as "—").
+
+_CONV_COLOR = "#f85149"
+_NONCONV_COLOR = "#58a6ff"
+_GROUP_PALETTE = ["#58a6ff", "#f85149", "#3fb950", "#d29922", "#bc8cff",
+                  "#39c5cf", "#ff7b72", "#a5d6ff"]
+
+
+def _active_events(events: list[dict]) -> list[dict]:
+    """Drop excluded events — aggregations never count them."""
+    return [e for e in events if not e.get("excluded")]
+
+
+def _ev_date(e: dict) -> str:
+    return e.get("date") or e.get("chunk_date") or ""
+
+
+def _apply_censor(events, fa_rows, status):
+    """Drop events and observation that fall after an animal's valid_until
+    cutoff (an animal that died/dropped mid-experiment is counted only for the
+    period it was still recorded)."""
+    vu = {a: s["valid_until"] for a, s in status.items() if s.get("valid_until")}
+    if not vu:
+        return events, fa_rows
+    kept_ev = [e for e in events
+               if not (vu.get(e.get("animal_id") or "")
+                       and _ev_date(e) > vu[e.get("animal_id") or ""])]
+    kept_fa = [r for r in fa_rows
+               if not (vu.get(r.get("animal_id") or "")
+                       and (r.get("date") or "") > vu[r.get("animal_id") or ""])]
+    return kept_ev, kept_fa
+
+
+def _group_rollup(events: list[dict], fa_rows: list[dict]) -> list[dict]:
+    """Per-group event counts plus recording time from observation rows.
+
+    Event counts come from ``events``; animals, files and recording hours come
+    from ``fa_rows`` (one row per animal per file) so quiet animals still count
+    toward the denominator. Older projects without observation data fall back to
+    animals/files derived from events, with hours = 0 (rates show as raw)."""
+    groups: dict = {}
+
+    def _st(g):
+        return groups.setdefault(g, {
+            "group": g, "n": 0, "conv": 0, "nonconv": 0,
+            "animals": set(), "files": set(), "rec_sec": 0.0})
+
+    for e in events:
+        st = _st(e.get("group_id") or "(unlabeled)")
+        st["n"] += 1
+        if e.get("type") == "convulsive":
+            st["conv"] += 1
+        else:
+            st["nonconv"] += 1
+        if e.get("animal_id"):
+            st["animals"].add(e["animal_id"])
+        st["files"].add(e.get("chunk_id"))
+    for r in fa_rows:
+        st = _st(r.get("group_id") or "(unlabeled)")
+        if r.get("animal_id"):
+            st["animals"].add(r["animal_id"])
+        st["files"].add(r.get("chunk_id"))
+        st["rec_sec"] += float(r.get("valid_sec") or 0)
+
+    out = []
+    for st in groups.values():
+        hours = st["rec_sec"] / 3600.0
+        out.append({
+            "group": st["group"], "n": st["n"],
+            "conv": st["conv"], "nonconv": st["nonconv"],
+            "n_animals": len(st["animals"]), "n_files": len(st["files"]),
+            "rec_hours": hours,
+            "rate": (st["n"] / hours) if hours > 0 else None,
+            "conv_rate": (st["conv"] / hours) if hours > 0 else None,
+            "nonconv_rate": (st["nonconv"] / hours) if hours > 0 else None,
+        })
+    out.sort(key=lambda d: d["group"])
+    return out
+
+
+def _animal_rollup(events, fa_rows, status) -> list[dict]:
+    """Per-animal totals, recording hours, coverage and review status.
+
+    Universe is every animal seen in events OR recorded (fa_rows), so quiet and
+    excluded animals still appear. Coverage % and the dropout flag are relative
+    to the animal's own group."""
+    A: dict = {}
+
+    def _st(a):
+        return A.setdefault(a, {
+            "animal": a, "groups": set(), "cohorts": set(), "files": set(),
+            "n": 0, "conv": 0, "nonconv": 0, "dur": 0.0, "rec_sec": 0.0,
+            "dates": set()})
+
+    for e in events:
+        st = _st(e.get("animal_id") or "(unknown)")
+        st["n"] += 1
+        if e.get("type") == "convulsive":
+            st["conv"] += 1
+        else:
+            st["nonconv"] += 1
+        if e.get("group_id"):
+            st["groups"].add(e["group_id"])
+        if e.get("cohort"):
+            st["cohorts"].add(e["cohort"])
+        st["files"].add(e.get("chunk_id"))
+        st["dur"] += float(e.get("duration_sec") or 0)
+        if _ev_date(e):
+            st["dates"].add(_ev_date(e))
+    for r in fa_rows:
+        st = _st(r.get("animal_id") or "(unknown)")
+        if r.get("group_id"):
+            st["groups"].add(r["group_id"])
+        if r.get("cohort"):
+            st["cohorts"].add(r["cohort"])
+        st["files"].add(r.get("chunk_id"))
+        st["rec_sec"] += float(r.get("valid_sec") or 0)
+        if r.get("date"):
+            st["dates"].add(r["date"])
+
+    out = []
+    for st in A.values():
+        hours = st["rec_sec"] / 3600.0
+        dates = sorted(st["dates"])
+        sstat = status.get(st["animal"], {})
+        first_date = dates[0] if dates else ""
+        out.append({
+            "animal": st["animal"],
+            "groups": ", ".join(sorted(st["groups"])),
+            "primary_group": (sorted(st["groups"])[0]
+                              if st["groups"] else "(unlabeled)"),
+            "cohorts": ", ".join(sorted(st["cohorts"])),
+            "n_files": len(st["files"]),
+            "n": st["n"], "conv": st["conv"], "nonconv": st["nonconv"],
+            "mean_dur": (st["dur"] / st["n"]) if st["n"] else 0.0,
+            "rec_hours": hours,
+            "rate": (st["n"] / hours) if hours > 0 else None,
+            "rec_days": len(st["dates"]),
+            "first_date": first_date,
+            "last_date": dates[-1] if dates else "",
+            "excluded": bool(sstat.get("excluded")),
+            "valid_until": sstat.get("valid_until", ""),
+            "notes": sstat.get("notes", ""),
+            # Day-1 reference for the longitudinal view: explicit override if
+            # set, else the animal's earliest recorded date. Aligns cohorts
+            # that started on different calendar dates.
+            "rec_start_override": sstat.get("recording_start_date", ""),
+            "rec_start": sstat.get("recording_start_date") or first_date,
+        })
+
+    # Coverage % and dropout flags, relative to each animal's primary group.
+    by_g: dict = {}
+    for r in out:
+        by_g.setdefault(r["primary_group"], []).append(r)
+    for rows in by_g.values():
+        max_h = max((r["rec_hours"] for r in rows), default=0.0)
+        last = max((r["last_date"] for r in rows if r["last_date"]), default="")
+        for r in rows:
+            r["coverage"] = (round(100 * r["rec_hours"] / max_h)
+                             if max_h > 0 else None)
+            flags = []
+            if r["coverage"] is not None and r["coverage"] < 70:
+                flags.append("low coverage")
+            if last and r["last_date"] and r["last_date"] < last:
+                flags.append(f"ended {r['last_date']}")
+            if r["valid_until"]:
+                flags.append(f"censored {r['valid_until']}")
+            r["flag"] = ", ".join(flags)
+    out.sort(key=lambda d: d["animal"])
+    return out
+
+
+def _build_group_comparison(rollup, normalize, is_seizure) -> go.Figure:
+    fig = go.Figure()
+    if not rollup:
+        apply_fig_theme(fig)
+        fig.update_layout(title="Group comparison")
+        return fig
+
+    per_hour = normalize == "per_hour"
+    note = ""
+    if per_hour and not any((r["rec_hours"] or 0) > 0 for r in rollup):
+        per_hour = False
+        note = "  (no recording-time data — showing counts)"
+
+    groups = [r["group"] for r in rollup]
+    if is_seizure:
+        if per_hour:
+            conv_y = [r["conv_rate"] or 0 for r in rollup]
+            nonconv_y = [r["nonconv_rate"] or 0 for r in rollup]
+        else:
+            conv_y = [r["conv"] for r in rollup]
+            nonconv_y = [r["nonconv"] for r in rollup]
+        fig.add_trace(go.Bar(x=groups, y=conv_y, name="Convulsive",
+                             marker_color=_CONV_COLOR))
+        fig.add_trace(go.Bar(x=groups, y=nonconv_y, name="Non-convulsive",
+                             marker_color=_NONCONV_COLOR))
+        fig.update_layout(barmode="stack")
+    else:
+        y = [(r["rate"] or 0) if per_hour else r["n"] for r in rollup]
+        fig.add_trace(go.Bar(x=groups, y=y, name="Events",
+                             marker_color=_NONCONV_COLOR))
+
+    ytitle = "Events / animal-hour" if per_hour else "Events"
+    fig.update_layout(
+        title="Group comparison" + note, xaxis_title="Group",
+        yaxis_title=ytitle, legend=dict(orientation="h", y=1.1))
+    apply_fig_theme(fig)
+    return fig
+
+
+def _build_group_table(rollup, is_seizure):
+    if not rollup:
+        return html.Div()
+    rows = []
+    for r in rollup:
+        row = {
+            "Group": r["group"],
+            "Animals": r["n_animals"],
+            "Files": r["n_files"],
+            "Rec h": round(r["rec_hours"], 1),
+            "Events": r["n"],
+            "Events/h": round(r["rate"], 3) if r["rate"] is not None else "—",
+        }
+        if is_seizure:
+            row["Conv"] = r["conv"]
+            row["Non-conv"] = r["nonconv"]
+        rows.append(row)
+    cols = [{"field": "Group", "width": 130}, {"field": "Animals", "width": 90},
+            {"field": "Files", "width": 80}, {"field": "Rec h", "width": 90}]
+    if is_seizure:
+        cols += [{"field": "Conv", "width": 80},
+                 {"field": "Non-conv", "width": 95}]
+    cols += [{"field": "Events", "width": 90}, {"field": "Events/h", "width": 95}]
+    return dag.AgGrid(
+        rowData=rows, columnDefs=cols,
+        defaultColDef={"sortable": True, "resizable": True},
+        style={"height": f"{min(60 + len(rows) * 42, 320)}px"},
+        className="ag-theme-alpine-dark",
+    )
+
+
+def _build_animal_table(rollup, is_seizure):
+    if not rollup:
+        return html.P("No events found.",
+                      style={"color": "var(--ned-text-muted)",
+                             "fontSize": "0.85rem"})
+    rows = []
+    for r in rollup:
+        span = (f"{r['first_date']} – {r['last_date']}"
+                if r["first_date"] else "")
+        row = {
+            "Include": not r["excluded"],
+            "Animal": r["animal"],
+            "Group": r["groups"],
+            "Cohort": r["cohorts"],
+            "Files": r["n_files"],
+            "Events": r["n"],
+            "Mean dur (s)": round(r["mean_dur"], 1),
+            "Rec days": r["rec_days"],
+            "Rec h": round(r["rec_hours"], 1),
+            "Coverage %": r["coverage"] if r["coverage"] is not None else "—",
+            "Span": span,
+            "Events/h": round(r["rate"], 3) if r["rate"] is not None else "—",
+            "Rec start": r["rec_start"],
+            "Valid until": r["valid_until"],
+            "Flag": r["flag"],
+            # hidden
+            "_animal": r["animal"],
+            "Excluded": r["excluded"],
+        }
+        if is_seizure:
+            row["Conv"] = r["conv"]
+            row["Non-conv"] = r["nonconv"]
+        rows.append(row)
+
+    cols = [
+        {"field": "Include", "width": 90, "editable": True,
+         "cellDataType": "boolean",
+         "headerTooltip": "Untick to drop this animal from group "
+                          "comparison, rates and plots"},
+        {"field": "Animal", "width": 100},
+        {"field": "Group", "width": 100},
+        {"field": "Cohort", "width": 100},
+        {"field": "Files", "width": 70},
+    ]
+    if is_seizure:
+        cols += [{"field": "Conv", "width": 70},
+                 {"field": "Non-conv", "width": 85}]
+    cols += [
+        {"field": "Events", "width": 80},
+        {"field": "Mean dur (s)", "width": 110},
+        {"field": "Rec days", "width": 90},
+        {"field": "Rec h", "width": 75},
+        {"field": "Coverage %", "width": 100},
+        {"field": "Span", "width": 160},
+        {"field": "Events/h", "width": 85},
+        {"field": "Rec start", "width": 115, "editable": True,
+         "headerTooltip": "Day-1 reference for the longitudinal plot "
+                          "(YYYY-MM-DD); blank = earliest recorded date"},
+        {"field": "Valid until", "width": 110, "editable": True,
+         "headerTooltip": "Censor after this date (YYYY-MM-DD); clear to undo"},
+        {"field": "Flag", "width": 180},
+        {"field": "_animal", "hide": True},
+        {"field": "Excluded", "hide": True},
+    ]
+    return dag.AgGrid(
+        id="res-animal-grid",
+        rowData=rows, columnDefs=cols,
+        defaultColDef={
+            "sortable": True, "filter": True, "resizable": True,
+            # Grey out rows for excluded animals (kept visible, toggleable).
+            "cellStyle": {"styleConditions": [
+                {"condition": "params.data.Excluded",
+                 "style": {"color": "#6e7681"}}]},
+        },
+        style={"height": f"{min(60 + len(rows) * 42, 380)}px"},
+        dashGridOptions={"animateRows": False},
+        className="ag-theme-alpine-dark",
+    )
+
+
+def _build_duration_hist(events, is_seizure) -> go.Figure:
+    fig = go.Figure()
+    durs = [float(e["duration_sec"]) for e in events if e.get("duration_sec")]
+    if not durs:
+        apply_fig_theme(fig)
+        fig.update_layout(title="Event duration")
+        return fig
+    if is_seizure:
+        conv = [float(e["duration_sec"]) for e in events
+                if e.get("type") == "convulsive" and e.get("duration_sec")]
+        nonconv = [float(e["duration_sec"]) for e in events
+                   if e.get("type") != "convulsive" and e.get("duration_sec")]
+        fig.add_trace(go.Histogram(x=conv, name="Convulsive",
+                                   marker_color=_CONV_COLOR, opacity=0.65))
+        fig.add_trace(go.Histogram(x=nonconv, name="Non-convulsive",
+                                   marker_color=_NONCONV_COLOR, opacity=0.65))
+        fig.update_layout(barmode="overlay")
+    else:
+        fig.add_trace(go.Histogram(x=durs, marker_color=_NONCONV_COLOR))
+    fig.update_layout(title="Event duration", xaxis_title="Duration (s)",
+                      yaxis_title="Count", legend=dict(orientation="h", y=1.1))
+    apply_fig_theme(fig)
+    return fig
+
+
+def _build_confidence_hist(events, is_seizure) -> go.Figure:
+    fig = go.Figure()
+    confs = [float(e["cnn_confidence"]) for e in events
+             if e.get("cnn_confidence") is not None]
+    if not confs:
+        apply_fig_theme(fig)
+        fig.update_layout(title="Confidence")
+        return fig
+    if is_seizure:
+        conv = [float(e["cnn_confidence"]) for e in events
+                if e.get("type") == "convulsive"
+                and e.get("cnn_confidence") is not None]
+        nonconv = [float(e["cnn_confidence"]) for e in events
+                   if e.get("type") != "convulsive"
+                   and e.get("cnn_confidence") is not None]
+        fig.add_trace(go.Histogram(x=conv, name="Convulsive",
+                                   marker_color=_CONV_COLOR, opacity=0.65))
+        fig.add_trace(go.Histogram(x=nonconv, name="Non-convulsive",
+                                   marker_color=_NONCONV_COLOR, opacity=0.65))
+        fig.update_layout(barmode="overlay")
+    else:
+        fig.add_trace(go.Histogram(x=confs, marker_color=_NONCONV_COLOR))
+    fig.update_layout(title="Detector confidence", xaxis_title="Confidence",
+                      yaxis_title="Count", legend=dict(orientation="h", y=1.1))
+    apply_fig_theme(fig)
+    return fig
+
+
+def _build_longitudinal(events, starts) -> go.Figure:
+    """Events per recording day, one trace per group.
+
+    Each event's day index is computed against its animal's recording start —
+    ``starts[animal_id]`` (explicit override, else the animal's earliest
+    recorded date). Day N = (event date − that animal's start) + 1, so cohorts
+    that began on different calendar dates align on a common day-1. Events
+    without a parseable date, or whose animal has no known start, are skipped.
+    The day-1 reference is per animal, so the timeline is *not* anchored to a
+    single calendar date (no global day-1 label)."""
+    from datetime import date as _date
+
+    fig = go.Figure()
+
+    def _parse(d):
+        try:
+            return _date.fromisoformat(d)
+        except (ValueError, TypeError):
+            return None
+
+    start_dt = {a: _parse(s) for a, s in (starts or {}).items()}
+    by_group: dict = {}  # group -> {day_index: count}
+    for e in events:
+        dt = _parse(_ev_date(e))
+        s = start_dt.get(e.get("animal_id") or "")
+        if dt is None or s is None:
+            continue
+        di = (dt - s).days + 1
+        g = e.get("group_id") or "(unlabeled)"
+        by_group.setdefault(g, {})
+        by_group[g][di] = by_group[g].get(di, 0) + 1
+
+    if not by_group:
+        apply_fig_theme(fig)
+        fig.update_layout(
+            title="Longitudinal (no date data)",
+            xaxis_title="Recording day", yaxis_title="Events")
+        return fig
+
+    for i, g in enumerate(sorted(by_group)):
+        days = sorted(by_group[g])
+        fig.add_trace(go.Scatter(
+            x=days, y=[by_group[g][d] for d in days], mode="lines+markers",
+            name=g, line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)])))
+    fig.update_layout(
+        title="Longitudinal — events per recording day "
+              "(day 1 = each animal's recording start)",
+        xaxis_title="Recording day", yaxis_title="Events",
+        legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
     return fig
 
