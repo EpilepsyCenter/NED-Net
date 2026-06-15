@@ -548,8 +548,10 @@ def train_model(
         # --- Validate ---
         model.eval()
         val_losses = []
-        all_preds = []
+        all_preds = []      # channel 0: all seizures
         all_targets = []
+        all_preds_c = []    # channel 1: convulsive subset
+        all_targets_c = []
 
         with torch.no_grad():
             for eeg, mask, meta in val_loader:
@@ -563,15 +565,30 @@ def train_model(
                 probs = torch.sigmoid(logits).cpu().numpy()
                 targets = mask.cpu().numpy()
 
-                # Use seizure channel (0) for event-level metrics
+                # ch 0 = all seizures, ch 1 = convulsive — score both.
                 for i in range(probs.shape[0]):
                     all_preds.append(probs[i, 0])
                     all_targets.append(targets[i, 0])
+                    if probs.shape[1] > 1:
+                        all_preds_c.append(probs[i, 1])
+                        all_targets_c.append(targets[i, 1])
 
         avg_val_loss = np.mean(val_losses) if val_losses else float("inf")
         val_metrics = _compute_metrics(
             all_preds, all_targets, fs=dataset_config.target_fs
         ) if all_preds else {}
+        # Convulsive-channel readout (only meaningful where convulsive events
+        # exist in the val set).
+        if all_preds_c and any(t.max() > 0.5 for t in all_targets_c):
+            cm = _compute_metrics(
+                all_preds_c, all_targets_c, fs=dataset_config.target_fs)
+            cbt, cbm = _best_threshold_metrics(
+                all_preds_c, all_targets_c, fs=dataset_config.target_fs)
+            val_metrics["conv_event_f1"] = cm.get("event_f1", 0.0)
+            val_metrics["conv_event_precision"] = cm.get("event_precision", 0.0)
+            val_metrics["conv_event_recall"] = cm.get("event_recall", 0.0)
+            val_metrics["conv_best_event_f1"] = cbm.get("event_f1", 0.0)
+            val_metrics["conv_best_threshold"] = round(cbt, 2)
         if all_preds:
             best_t, best_m = _best_threshold_metrics(
                 all_preds, all_targets, fs=dataset_config.target_fs)
