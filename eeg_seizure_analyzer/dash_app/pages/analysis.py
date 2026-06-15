@@ -60,13 +60,18 @@ def _browse_folder(title: str = "Select folder") -> str | None:
         return None
 
 
-def _browse_file(title: str = "Select EDF file") -> str | None:
-    """Native file picker for EDF files."""
+def _browse_file(title: str = "Select EDF file",
+                 file_types: tuple[str, ...] = ("edf",)) -> str | None:
+    """Native file picker. ``file_types`` is the list of allowed extensions
+    (without the dot); an empty tuple allows any file."""
+    exts = [e.lstrip(".") for e in (file_types or ())]
     if platform.system() == "Darwin":
         try:
+            of_type = (f' of type {{{", ".join(chr(34)+e+chr(34) for e in exts)}}}'
+                       if exts else "")
             r = subprocess.run(
                 ["osascript", "-e",
-                 f'POSIX path of (choose file with prompt "{title}" of type {{"edf"}})'],
+                 f'POSIX path of (choose file with prompt "{title}"{of_type})'],
                 capture_output=True, text=True, timeout=120,
             )
             path = r.stdout.strip()
@@ -74,6 +79,12 @@ def _browse_file(title: str = "Select EDF file") -> str | None:
         except Exception:
             pass
     try:
+        if exts:
+            label = "/".join(e.upper() for e in exts) + " files"
+            pattern = " ".join(f"*.{e}" for e in exts)
+            filetypes = [(label, pattern), ("All files", "*.*")]
+        else:
+            filetypes = [("All files", "*.*")]
         r = subprocess.run(
             [sys.executable, "-c", "\n".join([
                 "import tkinter as tk",
@@ -82,7 +93,7 @@ def _browse_file(title: str = "Select EDF file") -> str | None:
                 "root.attributes('-topmost', True)", "root.update()",
                 'path = filedialog.askopenfilename(',
                 f'    title="{title}",',
-                '    filetypes=[("EDF files", "*.edf")],',
+                f'    filetypes={filetypes!r},',
                 ')',
                 "root.destroy()", "print(path or '')",
             ])],
@@ -865,7 +876,8 @@ def browse_batch_folder(n):
     prevent_initial_call=True,
 )
 def browse_batch_meta(n):
-    path = _browse_file("Select batch_metadata.xlsx")
+    path = _browse_file("Select batch metadata (CSV or Excel)",
+                        file_types=("csv", "xlsx"))
     return path or no_update
 
 
@@ -907,7 +919,8 @@ def browse_live_folder(n):
     prevent_initial_call=True,
 )
 def browse_live_template(n):
-    path = _browse_file("Select live channel template")
+    path = _browse_file("Select live channel template (CSV or Excel)",
+                        file_types=("csv", "xlsx"))
     return path or no_update
 
 
