@@ -743,12 +743,15 @@ def _to_int(v, default: int) -> int:
 
 
 # Columns shown in the per-epoch table and copied as TSV.
+# "Seiz" = all seizures (channel 0); "Conv" = convulsive subset (channel 1).
 _EPOCH_COLS = [
     ("epoch", "Epoch"), ("train_loss", "Train loss"), ("val_loss", "Val loss"),
-    ("event_f1", "Event F1@.5"), ("event_precision", "Event P"),
-    ("event_recall", "Event R"), ("best_event_f1", "Best F1"),
-    ("best_threshold", "@thr"), ("sample_f1", "Sample F1"),
-    ("lr", "LR"), ("elapsed_sec", "Sec"),
+    ("event_f1", "Seiz F1@.5"), ("event_precision", "Seiz P"),
+    ("event_recall", "Seiz R"), ("best_event_f1", "Seiz Best F1"),
+    ("best_threshold", "Seiz @thr"),
+    ("conv_event_f1", "Conv F1@.5"), ("conv_event_recall", "Conv R"),
+    ("conv_best_event_f1", "Conv Best F1"), ("conv_best_threshold", "Conv @thr"),
+    ("sample_f1", "Sample F1"), ("lr", "LR"), ("elapsed_sec", "Sec"),
 ]
 
 
@@ -769,7 +772,7 @@ def _fmt(key: str, v) -> str:
         return ""
     if key == "lr":
         return f"{v:.1e}"
-    if key == "best_threshold":
+    if key in ("best_threshold", "conv_best_threshold"):
         return f"{float(v):.2f}"
     if key in ("epoch", "elapsed_sec"):
         return str(int(round(float(v))))
