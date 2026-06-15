@@ -2899,6 +2899,7 @@ def add_to_project_db(n_clicks, sid):
             "hour_of_day": hour,
             "cohort": tags["cohort"].get(ch, ""),
             "group_id": tags["group"].get(ch, ""),
+            "channel": ch,
         })
 
     # Full recording length (header-only read) so Results can normalise

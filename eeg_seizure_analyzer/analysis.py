@@ -486,6 +486,7 @@ def process_chunk(
                 "source": _arch_source(feat.get("detection_method"), "seizure"),
                 "cohort": ch_cohort.get(ev.channel, cohort),
                 "group_id": ch_group.get(ev.channel, group_id),
+                "channel": ev.channel,
             })
 
         db.write_events(chunk_id, event_dicts, source="seizure_cnn")
@@ -636,6 +637,7 @@ def process_spike_chunk(
                                        "spike"),
                 "cohort": ch_cohort.get(ev.channel, cohort),
                 "group_id": ch_group.get(ev.channel, group_id),
+                "channel": ev.channel,
             })
 
         db.write_events(chunk_id, event_dicts, source="spike_cnn")
