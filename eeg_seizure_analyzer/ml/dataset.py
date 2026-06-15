@@ -568,13 +568,24 @@ def split_by_animal(
 ) -> tuple[list[WindowSpec], list[WindowSpec]]:
     """Split window specs into train/val sets by animal ID.
 
-    All windows from the same animal go into the same set to prevent
-    data leakage.
+    All windows from the same animal go into the same set to prevent data
+    leakage.
+
+    The split is **convulsive-aware**: animals that have convulsive events form
+    one stratum and the rest another, and ~``val_fraction`` of *each* stratum is
+    allocated to validation. So when ≥2 animals had convulsive seizures, the
+    validation set is guaranteed to contain convulsive events to score against
+    and the training set keeps convulsive events to learn from — instead of
+    leaving convulsive coverage to the luck of a random split. (Convulsive
+    seizures are typically concentrated in a minority of animals, so a plain
+    random split can land them all on one side.) With only one convulsive animal
+    it is kept in train, since the model can't both learn and be validated on a
+    single subject's convulsive events.
 
     Parameters
     ----------
     specs : all window specs
-    val_fraction : approximate fraction for validation
+    val_fraction : approximate fraction for validation (applied per stratum)
     seed : random seed
 
     Returns
@@ -591,7 +602,6 @@ def split_by_animal(
         animals.setdefault(aid, []).append(s)
 
     animal_ids = sorted(animals.keys())
-    rng.shuffle(animal_ids)
 
     if len(animal_ids) < 2:
         raise ValueError(
@@ -602,22 +612,51 @@ def split_by_animal(
             "different channels on the Load tab."
         )
 
-    # Allocate animals to val until we hit the target fraction
-    total = len(specs)
-    val_count = 0
-    val_animals = set()
+    def _has_convulsive(aid: str) -> bool:
+        return any(s.convulsive_intervals for s in animals[aid])
 
-    for aid in animal_ids:
-        if val_count / max(total, 1) >= val_fraction:
-            break
-        val_animals.add(aid)
-        val_count += len(animals[aid])
+    conv_ids = [a for a in animal_ids if _has_convulsive(a)]
+    other_ids = [a for a in animal_ids if not _has_convulsive(a)]
 
-    # Ensure at least one animal in val
+    def _n_conv(aid: str) -> int:
+        return sum(1 for s in animals[aid] if s.convulsive_intervals)
+
+    val_animals: set[str] = set()
+
+    def _allocate(group: list[str], weight, ensure_both_sides: bool) -> None:
+        """Move whole animals into validation until ~val_fraction of this
+        stratum's ``weight`` is reached. ``weight(aid)`` is the quantity being
+        balanced — total windows for the background stratum, convulsive windows
+        for the convulsive stratum (so validation gets a representative share of
+        convulsive events, not just any animal that happens to have some). When
+        ``ensure_both_sides`` and the stratum has ≥2 animals, guarantee at least
+        one animal on each side."""
+        group = list(group)
+        rng.shuffle(group)
+        grp_w = sum(weight(a) for a in group)
+        taken = 0
+        for aid in group:
+            if grp_w and taken / grp_w >= val_fraction:
+                break
+            val_animals.add(aid)
+            taken += weight(aid)
+        if ensure_both_sides and len(group) >= 2:
+            in_val = [a for a in group if a in val_animals]
+            if not in_val:  # none picked → add the smallest
+                val_animals.add(min(group, key=lambda a: len(animals[a])))
+            elif len(in_val) == len(group):  # all picked → keep largest in train
+                val_animals.discard(max(group, key=lambda a: len(animals[a])))
+
+    # Convulsive stratum: balance by convulsive-window count, and only split
+    # across train/val when ≥2 such animals exist; a lone convulsive animal
+    # stays in train so the model can learn it.
+    if len(conv_ids) >= 2:
+        _allocate(conv_ids, _n_conv, ensure_both_sides=True)
+    _allocate(other_ids, lambda a: len(animals[a]), ensure_both_sides=True)
+
+    # Overall safety: at least one animal on each side.
     if not val_animals:
         val_animals.add(animal_ids[0])
-
-    # Ensure at least one animal in train
     if val_animals == set(animal_ids):
         val_animals.discard(animal_ids[-1])
 
