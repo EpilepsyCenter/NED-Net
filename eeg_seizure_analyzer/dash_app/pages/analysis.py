@@ -267,23 +267,23 @@ def layout(sid: str | None) -> html.Div:
                 dbc.Col([
                     html.Label("Seizure threshold (ch0)",
                                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Slider(
-                        id="an-threshold",
-                        min=0.1, max=1.0, step=0.01,
-                        value=prev_threshold,
-                        marks={},
-                        tooltip={"placement": "bottom", "always_visible": True},
+                    dbc.Input(
+                        id="an-threshold", type="text",
+                        value=prev_threshold, min=0.05, max=1.0, step=0.01,
+                        size="sm",
+                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                               "border": "1px solid var(--ned-border)"},
                     ),
                 ], width=3),
                 dbc.Col([
                     html.Label("Convulsive threshold (ch1)",
                                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Slider(
-                        id="an-conv-threshold",
-                        min=0.1, max=1.0, step=0.01,
-                        value=prev_conv_threshold,
-                        marks={},
-                        tooltip={"placement": "bottom", "always_visible": True},
+                    dbc.Input(
+                        id="an-conv-threshold", type="text",
+                        value=prev_conv_threshold, min=0.05, max=1.0, step=0.01,
+                        size="sm",
+                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                               "border": "1px solid var(--ned-border)"},
                     ),
                 ], width=3),
             ], className="g-3 mb-3"),
@@ -293,23 +293,23 @@ def layout(sid: str | None) -> html.Div:
                 dbc.Col([
                     html.Label("Min event duration (s)",
                                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Slider(
-                        id="an-min-duration",
-                        min=1, max=30, step=0.5,
-                        value=prev_min_dur,
-                        marks={},
-                        tooltip={"placement": "bottom", "always_visible": True},
+                    dbc.Input(
+                        id="an-min-duration", type="text",
+                        value=prev_min_dur, min=0, step=0.5,
+                        size="sm",
+                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                               "border": "1px solid var(--ned-border)"},
                     ),
                 ], width=5),
                 dbc.Col([
                     html.Label("Merge gap (s)",
                                style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Slider(
-                        id="an-merge-gap",
-                        min=0.5, max=10, step=0.5,
-                        value=prev_merge_gap,
-                        marks={},
-                        tooltip={"placement": "bottom", "always_visible": True},
+                    dbc.Input(
+                        id="an-merge-gap", type="text",
+                        value=prev_merge_gap, min=0, step=0.5,
+                        size="sm",
+                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+                               "border": "1px solid var(--ned-border)"},
                     ),
                 ], width=5),
             ], className="g-3 mb-3"),
@@ -325,7 +325,7 @@ def layout(sid: str | None) -> html.Div:
                                        className="param-label",
                                        style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
-                                id="an-hvsw-freq", type="number",
+                                id="an-hvsw-freq", type="text",
                                 value=prev_hvsw_freq, min=1, max=10, step=0.5,
                                 size="sm",
                                 style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
@@ -337,7 +337,7 @@ def layout(sid: str | None) -> html.Div:
                                        className="param-label",
                                        style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
-                                id="an-hvsw-swi", type="number",
+                                id="an-hvsw-swi", type="text",
                                 value=prev_hvsw_swi, min=0, max=1, step=0.05,
                                 size="sm",
                                 style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
@@ -349,7 +349,7 @@ def layout(sid: str | None) -> html.Div:
                                        className="param-label",
                                        style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
-                                id="an-hpd-freq", type="number",
+                                id="an-hpd-freq", type="text",
                                 value=prev_hpd_freq, min=5, max=50, step=1,
                                 size="sm",
                                 style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
@@ -361,7 +361,7 @@ def layout(sid: str | None) -> html.Div:
                                        className="param-label",
                                        style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
                             dbc.Input(
-                                id="an-hpd-hfi", type="number",
+                                id="an-hpd-hfi", type="text",
                                 value=prev_hpd_hfi, min=0, max=1, step=0.05,
                                 size="sm",
                                 style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
@@ -560,7 +560,7 @@ def _live_panel(store: dict) -> list:
                 html.Label("Wait before processing (seconds)",
                            style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
                 dbc.Input(
-                    id="an-live-wait", type="number",
+                    id="an-live-wait", type="text",
                     value=prev_wait, min=5, max=300, step=5,
                     style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
                            "border": "1px solid var(--ned-border)"},
@@ -1009,6 +1009,8 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
     if not edf_path or not os.path.isfile(edf_path):
         return alert("Select a valid EDF file.", "warning"), True, False
 
+    threshold = float(threshold or 0.5)
+    conv_threshold = float(conv_threshold or 0.5)
     is_spike = det_type == "spike"
 
     cls_params = ClassificationParams(
@@ -1160,6 +1162,8 @@ def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
     if not folder or not os.path.isdir(folder):
         return alert("Select a valid folder.", "warning"), True, False, True, True
 
+    threshold = float(threshold or 0.5)
+    conv_threshold = float(conv_threshold or 0.5)
     is_spike = det_type == "spike"
 
     cls_params = ClassificationParams(
@@ -1282,6 +1286,8 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold, conv_thresho
     if not model_name or not folder:
         return no_update, no_update, no_update
 
+    threshold = float(threshold or 0.5)
+    conv_threshold = float(conv_threshold or 0.5)
     cls_params = ClassificationParams(
         hvsw_max_freq_hz=float(hvsw_freq or 4.0),
         hvsw_min_slow_wave_index=float(hvsw_swi or 0.5),
