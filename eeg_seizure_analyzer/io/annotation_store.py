@@ -337,7 +337,20 @@ def merge_annotations(
                 break
 
         if not found_match:
-            # Orphaned: no matching detection any more
+            # Existing event no longer matched by any new detection. Keep it
+            # ONLY if a human has reviewed it (confirmed/rejected, manual, or
+            # annotated) — that work must never be lost. Drop stale, still-
+            # 'pending' detector events from previous runs, so re-running
+            # detection REPLACES its candidates instead of accumulating them
+            # across runs (the cause of first-file annotation inflation).
+            human_reviewed = (
+                ex.label in ("confirmed", "rejected")
+                or ex.source == "manual"
+                or bool(ex.annotator)
+            )
+            if not human_reviewed:
+                continue
+            # Orphaned human-reviewed event — keep, flag in notes.
             orphan = AnnotatedEvent(
                 file_path=ex.file_path,
                 animal_id=ex.animal_id,
