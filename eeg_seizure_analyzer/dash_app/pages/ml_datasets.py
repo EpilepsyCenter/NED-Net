@@ -187,9 +187,8 @@ def layout(sid: str | None) -> html.Div:
                                                style={"fontSize": "0.78rem",
                                                       "color": "var(--ned-text-muted)"}),
                                     dbc.Input(
-                                        id="ml-encoder-lr", type="number",
-                                        value=0.00001, min=0.000001, max=0.001,
-                                        step=0.000001,
+                                        id="ml-encoder-lr", type="text",
+                                        value="0.00001",
                                         className="form-control", size="sm",
                                     ),
                                 ], width=2),
@@ -198,8 +197,8 @@ def layout(sid: str | None) -> html.Div:
                                                style={"fontSize": "0.78rem",
                                                       "color": "var(--ned-text-muted)"}),
                                     dbc.Input(
-                                        id="ml-freeze-epochs", type="number",
-                                        value=5, min=0, max=50, step=1,
+                                        id="ml-freeze-epochs", type="text",
+                                        value="5",
                                         className="form-control", size="sm",
                                     ),
                                 ], width=2),
@@ -215,6 +214,19 @@ def layout(sid: str | None) -> html.Div:
                                     ),
                                 ], width=4),
                             ], className="g-2 mb-3"),
+                            dbc.Checklist(
+                                id="ml-freeze-backbone",
+                                options=[{
+                                    "label": " Freeze backbone — train decoder "
+                                             "head only (recommended for small "
+                                             "datasets; curbs overfitting)",
+                                    "value": "freeze",
+                                }],
+                                value=[],
+                                switch=True,
+                                style={"fontSize": "0.82rem",
+                                       "marginBottom": "8px"},
+                            ),
                         ],
                     ),
 
@@ -223,64 +235,80 @@ def layout(sid: str | None) -> html.Div:
                         dbc.Col([
                             html.Label("Epochs",
                                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dbc.Input(id="ml-epochs", type="number",
-                                      value=50, min=1, max=500, step=1,
+                            dbc.Input(id="ml-epochs", type="text",
+                                      value="50",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Batch size",
                                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dbc.Input(id="ml-batch-size", type="number",
-                                      value=8, min=1, max=128, step=1,
+                            dbc.Input(id="ml-batch-size", type="text",
+                                      value="8",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Learning rate",
                                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dbc.Input(id="ml-lr", type="number",
-                                      value=0.001, min=0.00001, max=0.1,
-                                      step=0.0001,
+                            dbc.Input(id="ml-lr", type="text",
+                                      value="0.001",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Patience",
                                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dbc.Input(id="ml-patience", type="number",
-                                      value=10, min=1, max=100, step=1,
+                            dbc.Input(id="ml-patience", type="text",
+                                      value="10",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Pos weight",
                                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dbc.Input(id="ml-pos-weight", type="number",
-                                      value=5.0, min=0.1, max=50.0, step=0.5,
+                            dbc.Input(id="ml-pos-weight", type="text",
+                                      value="5.0",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
                             html.Label("Neg/Pos ratio",
                                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dbc.Input(id="ml-neg-ratio", type="number",
-                                      value=2.0, min=0.5, max=10.0, step=0.5,
+                            dbc.Input(id="ml-neg-ratio", type="text",
+                                      value="2.0",
                                       className="form-control", size="sm"),
                         ], width=2),
                     ], className="g-2 mb-3"),
 
-                    # Train button
-                    dbc.Button(
-                        "🚀 Start Training",
-                        id="ml-train-btn",
-                        style={
-                            "backgroundColor": "#238636",
-                            "border": "1px solid #2ea043",
-                            "color": "#fff",
-                            "fontWeight": "600",
-                        },
-                        size="lg",
+                    # Train / Stop buttons
+                    html.Div(
+                        style={"display": "flex", "gap": "10px",
+                               "alignItems": "center"},
                         className="mb-3",
+                        children=[
+                            dbc.Button(
+                                "🚀 Start Training",
+                                id="ml-train-btn",
+                                style={
+                                    "backgroundColor": "#238636",
+                                    "border": "1px solid #2ea043",
+                                    "color": "#fff",
+                                    "fontWeight": "600",
+                                },
+                                size="lg",
+                            ),
+                            dbc.Button(
+                                "■ Stop",
+                                id="ml-stop-btn",
+                                color="danger",
+                                outline=True,
+                                size="lg",
+                                disabled=True,
+                            ),
+                        ],
                     ),
 
                     # Progress area
                     html.Div(id="ml-train-progress"),
+
+                    # Per-epoch metrics table (live, copyable)
+                    html.Div(id="ml-train-epochs"),
 
                     # Training results
                     html.Div(id="ml-train-results"),
@@ -676,11 +704,138 @@ def _read_train_progress(sid) -> dict | None:
         return None
 
 
+def _stop_path(sid: str) -> _Path:
+    return _TRAIN_PROGRESS_DIR / f"train_stop_{sid}.flag"
+
+
+def _request_stop(sid: str) -> None:
+    _TRAIN_PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _stop_path(sid).write_text("stop")
+    except Exception:
+        pass
+
+
+def _stop_requested(sid: str) -> bool:
+    return _stop_path(sid).exists()
+
+
+def _clear_stop(sid: str) -> None:
+    try:
+        _stop_path(sid).unlink()
+    except OSError:
+        pass
+
+
+def _to_float(v, default: float) -> float:
+    """Parse a (possibly text-input) value to float, falling back on default."""
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(v, default: int) -> int:
+    try:
+        return int(round(float(str(v).strip())))
+    except (TypeError, ValueError):
+        return default
+
+
+# Columns shown in the per-epoch table and copied as TSV.
+_EPOCH_COLS = [
+    ("epoch", "Epoch"), ("train_loss", "Train loss"), ("val_loss", "Val loss"),
+    ("event_f1", "Event F1@.5"), ("event_precision", "Event P"),
+    ("event_recall", "Event R"), ("best_event_f1", "Best F1"),
+    ("best_threshold", "@thr"), ("sample_f1", "Sample F1"),
+    ("lr", "LR"), ("elapsed_sec", "Sec"),
+]
+
+
+def _epoch_row_values(h: dict) -> list:
+    """Flatten one history entry into the _EPOCH_COLS order."""
+    m = h.get("val_metrics", {}) or {}
+    out = []
+    for key, _ in _EPOCH_COLS:
+        if key in ("epoch", "train_loss", "val_loss", "lr", "elapsed_sec"):
+            out.append(h.get(key, ""))
+        else:
+            out.append(m.get(key, ""))
+    return out
+
+
+def _fmt(key: str, v) -> str:
+    if v == "" or v is None:
+        return ""
+    if key == "lr":
+        return f"{v:.1e}"
+    if key == "best_threshold":
+        return f"{float(v):.2f}"
+    if key in ("epoch", "elapsed_sec"):
+        return str(int(round(float(v))))
+    try:
+        return f"{float(v):.4f}"
+    except (ValueError, TypeError):
+        return str(v)
+
+
+def _render_epochs(history: list, best_epoch: int = 0):
+    """Build the per-epoch table + a Copy (TSV) button from the history list."""
+    if not history:
+        return None
+    headers = [label for _, label in _EPOCH_COLS]
+    tsv_lines = ["\t".join(headers)]
+    body = []
+    for h in history:
+        vals = _epoch_row_values(h)
+        tsv_lines.append("\t".join(
+            _fmt(key, v) for (key, _), v in zip(_EPOCH_COLS, vals)))
+        is_best = best_epoch and h.get("epoch") == best_epoch
+        body.append(html.Tr(
+            [html.Td(_fmt(key, v),
+                     style={"padding": "2px 10px", "fontSize": "0.78rem",
+                            "whiteSpace": "nowrap"})
+             for (key, _), v in zip(_EPOCH_COLS, vals)],
+            style={"backgroundColor": "rgba(46,160,67,0.15)"} if is_best else {},
+        ))
+    tsv = "\n".join(tsv_lines)
+    head = html.Thead(html.Tr([
+        html.Th(h, style={"padding": "2px 10px", "fontSize": "0.78rem",
+                          "textAlign": "left",
+                          "color": "var(--ned-text-muted)"})
+        for h in headers]))
+    return html.Div([
+        html.Div(
+            style={"display": "flex", "alignItems": "center", "gap": "8px",
+                   "margin": "10px 0 4px 0"},
+            children=[
+                html.Span("Per-epoch metrics",
+                          style={"fontSize": "0.82rem", "fontWeight": "600",
+                                 "color": "var(--ned-text-muted)"}),
+                dcc.Clipboard(
+                    content=tsv, title="Copy all epochs (TSV)",
+                    style={"cursor": "pointer", "fontSize": "1rem"},
+                ),
+            ],
+        ),
+        html.Div(
+            html.Table([head, html.Tbody(body)],
+                       style={"borderCollapse": "collapse", "width": "100%"}),
+            style={"maxHeight": "260px", "overflowY": "auto",
+                   "border": "1px solid var(--ned-border)",
+                   "borderRadius": "4px"},
+        ),
+    ])
+
+
 def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
     """Background thread: run training and write progress after each epoch."""
     from eeg_seizure_analyzer.ml.train import train_model
 
+    history: list = []  # accumulate so the UI can show every epoch live
+
     def _on_epoch(info):
+        history.append(info)
         _write_train_progress(sid, {
             "status": "training",
             "epoch": info["epoch"],
@@ -691,6 +846,7 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
             "best_epoch": info["best_epoch"],
             "lr": info.get("lr", 0),
             "elapsed_sec": info.get("elapsed_sec", 0),
+            "history": history,
         })
 
     try:
@@ -706,6 +862,7 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
             train_config=train_config,
             model_name=model_name,
             progress_callback=_on_epoch,
+            stop_check_fn=lambda: _stop_requested(sid),
         )
 
         _write_train_progress(sid, {
@@ -717,6 +874,7 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
             "model_path": result["model_path"],
             "model_name": result["model_name"],
             "n_params": result["n_params"],
+            "stopped": result.get("stopped_by_user", False),
             "history": result["history"],
         })
     except Exception as e:
@@ -769,13 +927,14 @@ def toggle_bendr_train_params(architecture):
     State("ml-encoder-lr", "value"),
     State("ml-freeze-epochs", "value"),
     State("ml-pretrained-weights", "value"),
+    State("ml-freeze-backbone", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
                    ann_type, epochs, batch_size, lr, patience, pos_weight,
                    neg_ratio, architecture, encoder_lr, freeze_epochs,
-                   pretrained_weights, sid):
+                   pretrained_weights, freeze_backbone, sid):
     """Start model training in a background thread."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -806,27 +965,30 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
     from eeg_seizure_analyzer.ml.train import TrainConfig
 
     dataset_config = DatasetConfig(
-        neg_pos_ratio=float(neg_ratio or 2.0),
+        neg_pos_ratio=_to_float(neg_ratio, 2.0),
     )
     _arch = architecture or "unet"
     train_config = TrainConfig(
-        epochs=int(epochs or 50),
-        batch_size=int(batch_size or 8),
-        learning_rate=float(lr or 1e-3),
-        patience=int(patience or 10),
-        pos_weight=float(pos_weight or 5.0),
+        epochs=_to_int(epochs, 50),
+        batch_size=_to_int(batch_size, 8),
+        learning_rate=_to_float(lr, 1e-3),
+        patience=_to_int(patience, 10),
+        pos_weight=_to_float(pos_weight, 5.0),
         architecture=_arch,
     )
     if _arch == "bendr":
-        train_config.encoder_lr = float(encoder_lr or 1e-5)
-        train_config.freeze_encoder_epochs = int(freeze_epochs or 5)
+        train_config.encoder_lr = _to_float(encoder_lr, 1e-5)
+        train_config.freeze_encoder_epochs = _to_int(freeze_epochs, 5)
+        train_config.freeze_backbone = bool(
+            freeze_backbone and "freeze" in freeze_backbone)
         if pretrained_weights:
             train_config.pretrained_path = pretrained_weights
 
-    # Clear old progress
+    # Clear old progress + any stale stop request
     p = _progress_path(sid)
     if p.exists():
         p.unlink()
+    _clear_stop(sid)
 
     # Launch training thread
     t = _threading.Thread(
@@ -835,6 +997,22 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
         daemon=True,
     )
     t.start()
+
+    # Echo the settings this run actually received, so it's obvious whether UI
+    # edits (LR, pos_weight, freeze backbone…) took effect — no guessing.
+    settings = (
+        f"arch={train_config.architecture} · "
+        f"LR={train_config.learning_rate:.1e} · "
+        f"pos_weight={train_config.pos_weight:g} · "
+        f"neg/pos={dataset_config.neg_pos_ratio:g} · "
+        f"epochs={train_config.epochs} · patience={train_config.patience}"
+    )
+    if train_config.architecture == "bendr":
+        settings += (
+            f" · freeze_backbone={train_config.freeze_backbone} · "
+            f"encoder_LR={train_config.encoder_lr:.1e} · "
+            f"pretrained={'yes' if train_config.pretrained_path else 'NO'}"
+        )
 
     progress_bar = html.Div([
         dbc.Progress(
@@ -848,9 +1026,39 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
             style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                    "textAlign": "center"},
         ),
+        html.Div(
+            f"Settings in use — {settings}",
+            style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                   "textAlign": "center", "marginTop": "4px"},
+        ),
     ])
 
     return progress_bar, False, True, True  # enable polling, disable button
+
+
+@callback(
+    Output("ml-stop-btn", "disabled"),
+    Output("ml-stop-btn", "children"),
+    Input("ml-train-running", "data"),
+)
+def toggle_stop_btn(running):
+    """Enable Stop only while training is running; (re)set its label."""
+    return (not running), "■ Stop"
+
+
+@callback(
+    Output("ml-stop-btn", "children", allow_duplicate=True),
+    Input("ml-stop-btn", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def stop_training(n_clicks, sid):
+    """Request cooperative cancellation; training stops after the current batch
+    and keeps the best model saved so far."""
+    if not n_clicks:
+        return no_update
+    _request_stop(sid)
+    return "Stopping…"
 
 
 @callback(
@@ -859,6 +1067,7 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
     Output("ml-train-running", "data", allow_duplicate=True),
     Output("ml-train-btn", "disabled", allow_duplicate=True),
     Output("ml-train-results", "children"),
+    Output("ml-train-epochs", "children", allow_duplicate=True),
     Input("ml-train-poll", "n_intervals"),
     State("ml-train-running", "data"),
     State("session-id", "data"),
@@ -867,11 +1076,11 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
 def poll_training(n_intervals, is_running, sid):
     """Poll training progress and update UI."""
     if not is_running:
-        return no_update, True, no_update, no_update, no_update
+        return no_update, True, no_update, no_update, no_update, no_update
 
     info = _read_train_progress(sid)
     if info is None:
-        return no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update
 
     status = info.get("status", "")
 
@@ -888,7 +1097,7 @@ def poll_training(n_intervals, is_running, sid):
                        "textAlign": "center"},
             ),
         ])
-        return bar, no_update, no_update, no_update, no_update
+        return bar, no_update, no_update, no_update, no_update, ""
 
     if status == "training":
         epoch = info.get("epoch", 0)
@@ -921,7 +1130,9 @@ def poll_training(n_intervals, is_running, sid):
                        "textAlign": "center"},
             ),
         ])
-        return bar, no_update, no_update, no_update, no_update
+        epochs = _render_epochs(info.get("history", []),
+                                info.get("best_epoch", 0))
+        return bar, no_update, no_update, no_update, no_update, epochs
 
     if status == "done":
         # Training complete
@@ -929,11 +1140,14 @@ def poll_training(n_intervals, is_running, sid):
         history = info.get("history", [])
         model_path = info.get("model_path", "")
         n_params = info.get("n_params", 0)
+        was_stopped = info.get("stopped", False)
+        title = ("⏹ Training Stopped (best model kept)" if was_stopped
+                 else "✅ Training Complete")
 
         # Build results summary
         results = html.Div([
             html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
-            html.H5("✅ Training Complete",
+            html.H5(title,
                      style={"color": "var(--ned-success)", "marginBottom": "12px"}),
             dbc.Row([
                 dbc.Col(metric_card("Model", info.get("model_name", "")),
@@ -980,13 +1194,16 @@ def poll_training(n_intervals, is_running, sid):
             ),
         ])
 
-        # Clean up progress file
+        epochs = _render_epochs(history, info.get("epoch", 0))
+
+        # Clean up progress + stop flag
         try:
             _progress_path(sid).unlink()
         except Exception:
             pass
+        _clear_stop(sid)
 
-        return done_bar, True, False, False, results
+        return done_bar, True, False, False, results, epochs
 
     if status == "error":
         err = info.get("error", "Unknown error")
@@ -1003,7 +1220,8 @@ def poll_training(n_intervals, is_running, sid):
             _progress_path(sid).unlink()
         except Exception:
             pass
+        _clear_stop(sid)
 
-        return error_bar, True, False, False, no_update
+        return error_bar, True, False, False, no_update, no_update
 
-    return no_update, no_update, no_update, no_update, no_update
+    return no_update, no_update, no_update, no_update, no_update, no_update

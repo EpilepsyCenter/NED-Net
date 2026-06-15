@@ -230,6 +230,23 @@ def _compute_metrics(
     }
 
 
+def _best_threshold_metrics(
+    all_preds: list[np.ndarray],
+    all_targets: list[np.ndarray],
+    fs: int = 250,
+) -> tuple[float, dict]:
+    """Sweep decision thresholds and return (best_threshold, metrics) by event
+    F1. Reveals whether the model has *ranking* signal even when its outputs are
+    miscalibrated (e.g. saturated all-positive at 0.5)."""
+    best_t, best = 0.5, None
+    for i in range(1, 20):  # 0.05 .. 0.95
+        t = i / 20.0
+        m = _compute_metrics(all_preds, all_targets, threshold=t, fs=fs)
+        if best is None or m["event_f1"] > best["event_f1"]:
+            best, best_t = m, t
+    return best_t, (best or {})
+
+
 # ---------------------------------------------------------------------------
 # Training configuration
 # ---------------------------------------------------------------------------
@@ -260,6 +277,10 @@ class TrainConfig:
     context_heads: int = 8  # BENDR attention heads
     encoder_lr: float = 1e-5  # lower LR for pre-trained encoder
     freeze_encoder_epochs: int = 5  # freeze encoder for first N epochs
+    freeze_backbone: bool = False  # freeze encoder AND transformer for the
+    #   whole run, training only the decoder head (linear-probe style). Best for
+    #   small datasets — slashes trainable params (~155M -> ~5M) to curb
+    #   overfitting. Overrides freeze_encoder_epochs / unfreezing.
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +294,7 @@ def train_model(
     train_config: TrainConfig | None = None,
     model_name: str | None = None,
     progress_callback: Callable[[dict], None] | None = None,
+    stop_check_fn: Callable[[], bool] | None = None,
 ) -> dict:
     """Train a seizure detection model from a dataset definition.
 
@@ -371,6 +393,7 @@ def train_model(
     if is_bendr:
         pretrained = train_config.pretrained_path or None
         in_channels = n_eeg_channels + n_act_channels
+        freeze_backbone = train_config.freeze_backbone
         model = build_bendr_model(
             n_eeg_channels=in_channels,
             encoder_h=train_config.encoder_h,
@@ -378,11 +401,20 @@ def train_model(
             context_layers=train_config.context_layers,
             context_heads=train_config.context_heads,
             pretrained_path=pretrained,
-            freeze_encoder=train_config.freeze_encoder_epochs > 0,
+            freeze_encoder=freeze_backbone or train_config.freeze_encoder_epochs > 0,
+            freeze_contextualizer=freeze_backbone,
             finetuning=True,
             decoder_dropout=train_config.dropout,
         )
+        if freeze_backbone:
+            # Ensure frozen even when no pretrained weights were loaded
+            # (freezing otherwise happens inside load_pretrained_combined).
+            model.encoder.freeze(True)
+            model.contextualizer.freeze(True)
         print(f"Architecture: BENDR (encoder_h={train_config.encoder_h})")
+        if freeze_backbone:
+            print("Backbone FROZEN (encoder + transformer) — training decoder "
+                  "head only (linear-probe).")
         if pretrained:
             print(f"Pre-trained weights: {pretrained}")
     else:
@@ -408,7 +440,15 @@ def train_model(
     criterion = DiceBCELoss(pos_weight=train_config.pos_weight)
     criterion = criterion.to(device)
 
-    if is_bendr and train_config.pretrained_path:
+    if is_bendr and train_config.freeze_backbone:
+        # Backbone frozen: optimise the decoder head only.
+        optimizer = torch.optim.AdamW(
+            [p for p in model.decoder.parameters() if p.requires_grad],
+            lr=train_config.learning_rate,
+            weight_decay=train_config.weight_decay,
+        )
+        print(f"Head-only LR: {train_config.learning_rate:.1e}")
+    elif is_bendr and train_config.pretrained_path:
         # Differential learning rate: lower LR for pre-trained encoder,
         # higher LR for new decoder head
         encoder_params = list(model.encoder.parameters()) + list(model.contextualizer.parameters())
@@ -433,6 +473,7 @@ def train_model(
     # ── Training loop ────────────────────────────────────────────
     history = []
     best_val_loss = float("inf")
+    best_val_f1 = -1.0
     best_metrics = {}
     best_epoch = 0
     epochs_without_improvement = 0
@@ -441,12 +482,15 @@ def train_model(
     model_dir = MODELS_DIR / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
+    stopped = False
     for epoch in range(1, train_config.epochs + 1):
         t0 = time.time()
 
-        # Unfreeze encoder after initial frozen epochs (BENDR only)
+        # Unfreeze encoder after initial frozen epochs (BENDR only). Skipped
+        # entirely when the backbone is frozen for the whole run.
         if (
             is_bendr
+            and not train_config.freeze_backbone
             and train_config.freeze_encoder_epochs > 0
             and epoch == train_config.freeze_encoder_epochs + 1
         ):
@@ -479,6 +523,10 @@ def train_model(
         model.train()
         train_losses = []
         for eeg, mask, meta in train_loader:
+            # Cooperative stop: break promptly (within a batch) on user request.
+            if stop_check_fn is not None and stop_check_fn():
+                stopped = True
+                break
             eeg = eeg.to(device)
             mask = mask.to(device)
 
@@ -489,6 +537,11 @@ def train_model(
             optimizer.step()
 
             train_losses.append(loss.item())
+
+        if stopped:
+            print(f"Training stopped by user during epoch {epoch}. "
+                  f"Keeping best model so far (epoch {best_epoch}).")
+            break
 
         avg_train_loss = np.mean(train_losses)
 
@@ -519,12 +572,29 @@ def train_model(
         val_metrics = _compute_metrics(
             all_preds, all_targets, fs=dataset_config.target_fs
         ) if all_preds else {}
+        if all_preds:
+            best_t, best_m = _best_threshold_metrics(
+                all_preds, all_targets, fs=dataset_config.target_fs)
+            val_metrics["best_threshold"] = round(best_t, 2)
+            val_metrics["best_event_f1"] = best_m.get("event_f1", 0.0)
+            val_metrics["best_event_precision"] = best_m.get("event_precision", 0.0)
+            val_metrics["best_event_recall"] = best_m.get("event_recall", 0.0)
 
         # Scheduler step
         scheduler.step(avg_val_loss)
 
-        # Check for improvement
-        if avg_val_loss < best_val_loss:
+        # Check for improvement. Select the best model by validation event F1,
+        # NOT val_loss: with sparse seizure masks an all-negative prediction can
+        # have a lower loss than a useful detector, so loss-based selection
+        # would happily pick a model that detects nothing. Tie-break on lower
+        # val_loss (and that also covers the early all-zero-F1 epochs).
+        val_f1 = float(val_metrics.get("best_event_f1",
+                                       val_metrics.get("event_f1", 0.0)) or 0.0)
+        is_better = (val_f1 > best_val_f1 + 1e-9) or (
+            abs(val_f1 - best_val_f1) <= 1e-9 and avg_val_loss < best_val_loss
+        )
+        if is_better:
+            best_val_f1 = val_f1
             best_val_loss = avg_val_loss
             best_metrics = val_metrics
             best_epoch = epoch
@@ -568,6 +638,11 @@ def train_model(
 
     # ── Save final artifacts ─────────────────────────────────────
 
+    # If stopped before any epoch completed validation, there is no best
+    # checkpoint yet — save the current weights so the model is usable.
+    if best_epoch == 0:
+        torch.save(model.state_dict(), model_dir / "best_model.pt")
+
     # Save training metadata
     metadata = {
         "model_name": model_name,
@@ -591,6 +666,7 @@ def train_model(
         "best_val_loss": round(float(best_val_loss), 4),
         "best_metrics": best_metrics,
         "n_epochs_trained": len(history),
+        "stopped_by_user": stopped,
         "history": history,
     }
 
@@ -613,6 +689,7 @@ def train_model(
         "best_metrics": best_metrics,
         "history": history,
         "n_params": n_params,
+        "stopped_by_user": stopped,
     }
 
 
