@@ -3632,18 +3632,28 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     )
 
     method = sz_params.get("sz-method", "spike_train")
-    detector, params, detector_name, (bp_low, bp_high) = (
-        _build_per_channel_detector(method, sz_params)
-    )
-    # start_detect_all already rejects methods batch can't run
-    # (ensemble/bendr/unet); guard anyway so a future caller can't silently
-    # fall through to the wrong detector.
-    if detector is None:
-        _write_progress(
-            sid, 0, len(project_files), "", 0, done=True,
-            error_msg=f"Batch detection does not support method '{method}'.",
+    is_ml = method in ("bendr", "unet")
+    detector = params = None
+    bp_low, bp_high = 1.0, 50.0
+    if is_ml:
+        from eeg_seizure_analyzer.ml.predict import predict_seizures
+        ml_model = sz_params.get("ml_model")
+        ml_thr = float(sz_params.get("ml_threshold", 0.5))
+        ml_mindur = float(sz_params.get("ml_min_duration_sec", 3.0))
+        ml_merge = float(sz_params.get("ml_merge_gap_sec", 2.0))
+        detector_name = "BENDR" if method == "bendr" else "U-Net"
+    else:
+        detector, params, detector_name, (bp_low, bp_high) = (
+            _build_per_channel_detector(method, sz_params)
         )
-        return
+        # start_detect_all rejects methods batch can't run (ensemble); guard
+        # anyway so a future caller can't silently fall through.
+        if detector is None:
+            _write_progress(
+                sid, 0, len(project_files), "", 0, done=True,
+                error_msg=f"Batch detection does not support method '{method}'.",
+            )
+            return
 
     total_events = 0
     errors = []
@@ -3694,36 +3704,48 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
             seizures = []
             detection_info = {}
 
-            use_chunked = rec.duration_sec > 1800 and edf_path.lower().endswith(".edf")
-            if use_chunked:
-                from eeg_seizure_analyzer.detection.base import detect_chunked
-                seizures, detection_info = detect_chunked(
-                    detector, path=edf_path,
-                    channels=selected_channels,
-                    chunk_duration_sec=1800.0, overlap_sec=30.0,
-                    params=params,
+            if is_ml:
+                # ML detection: the trained model runs over the whole file and
+                # returns events tagged ml_unet / ml_bendr with their own
+                # confidence — same call the single-file Detect uses.
+                seizures = predict_seizures(
+                    edf_path=edf_path, model_name=ml_model,
+                    channels=selected_channels, threshold=ml_thr,
+                    min_duration_sec=ml_mindur, merge_gap_sec=ml_merge,
                 )
             else:
-                for ch in selected_channels:
-                    ch_events = detector.detect(rec, ch, params=params)
-                    seizures.extend(ch_events)
-                    if hasattr(detector, "_last_detection_info"):
-                        detection_info[ch] = detector._last_detection_info.copy()
+                use_chunked = rec.duration_sec > 1800 and edf_path.lower().endswith(".edf")
+                if use_chunked:
+                    from eeg_seizure_analyzer.detection.base import detect_chunked
+                    seizures, detection_info = detect_chunked(
+                        detector, path=edf_path,
+                        channels=selected_channels,
+                        chunk_duration_sec=1800.0, overlap_sec=30.0,
+                        params=params,
+                    )
+                else:
+                    for ch in selected_channels:
+                        ch_events = detector.detect(rec, ch, params=params)
+                        seizures.extend(ch_events)
+                        if hasattr(detector, "_last_detection_info"):
+                            detection_info[ch] = detector._last_detection_info.copy()
 
-            for event in seizures:
-                bl_rms_val = detection_info.get(event.channel, {}).get("baseline_mean")
-                try:
-                    qm = compute_event_quality(rec, event, baseline_rms=bl_rms_val,
-                                               bandpass_low=bp_low, bandpass_high=bp_high)
-                    lbr = compute_local_baseline_ratio(rec, event,
-                                                       bandpass_low=bp_low, bandpass_high=bp_high)
-                    qm["local_baseline_ratio"] = round(lbr, 2)
-                    qm["top_spike_amplitude_x"] = round(compute_top_spike_amplitude(event), 2)
-                    event.quality_metrics = qm
-                    event.confidence = compute_confidence_score(qm)
-                except Exception:
-                    event.quality_metrics = {}
-                    event.confidence = 0.0
+                # Classical detectors don't carry confidence — compute it.
+                # ML events already have model confidence/features; leave as-is.
+                for event in seizures:
+                    bl_rms_val = detection_info.get(event.channel, {}).get("baseline_mean")
+                    try:
+                        qm = compute_event_quality(rec, event, baseline_rms=bl_rms_val,
+                                                   bandpass_low=bp_low, bandpass_high=bp_high)
+                        lbr = compute_local_baseline_ratio(rec, event,
+                                                           bandpass_low=bp_low, bandpass_high=bp_high)
+                        qm["local_baseline_ratio"] = round(lbr, 2)
+                        qm["top_spike_amplitude_x"] = round(compute_top_spike_amplitude(event), 2)
+                        event.quality_metrics = qm
+                        event.confidence = compute_confidence_score(qm)
+                    except Exception:
+                        event.quality_metrics = {}
+                        event.confidence = 0.0
 
             seizures.sort(key=lambda e: (e.channel, e.onset_sec))
             for idx, ev in enumerate(seizures, start=1):
@@ -3812,10 +3834,22 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     Output("sz-detect-all-status", "children", allow_duplicate=True),
     Output("sz-detect-all-btn", "disabled"),
     Input("sz-detect-all-btn", "n_clicks"),
+    # ML model + params, read live so batch uses the current selection
+    # (same controls the single-file Detect reads).
+    State("sz-bendr-model", "value"),
+    State({"type": "param-slider", "key": "sz-bendr-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-bendr-min-dur"}, "value"),
+    State({"type": "param-slider", "key": "sz-bendr-merge-gap"}, "value"),
+    State("sz-unet-model", "value"),
+    State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def start_detect_all(n_clicks, sid):
+def start_detect_all(n_clicks, bendr_model, bendr_thr, bendr_mindur,
+                     bendr_merge, unet_model, unet_thr, unet_mindur,
+                     unet_merge, sid):
     """Launch the background detection thread and start polling."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -3833,14 +3867,36 @@ def start_detect_all(n_clicks, sid):
     method = state.extra.get(
         "sz_method", sz_params.get("sz-method", "spike_train"))
     sz_params["sz-method"] = method
-    if method in ("ensemble", "bendr", "unet"):
+    if method == "ensemble":
         return (
             False, True,
-            alert("Batch “Detect All Files” supports Spike-Train, "
-                  "Spectral Band, and Autocorrelation. For Ensemble, BENDR, or "
-                  "U-Net, run detection one file at a time.", "warning"),
+            alert("Batch “Detect All Files” supports Spike-Train, Spectral "
+                  "Band, Autocorrelation, U-Net and BENDR. For Ensemble, run "
+                  "detection one file at a time.", "warning"),
             False,
         )
+    # For ML methods, capture the selected model + inference params (read live
+    # from the same controls single-file Detect uses) so the batch worker can
+    # run predict_seizures per file.
+    if method in ("bendr", "unet"):
+        if method == "bendr":
+            ml_model, ml_thr, ml_mindur, ml_merge = (
+                bendr_model, bendr_thr, bendr_mindur, bendr_merge)
+        else:
+            ml_model, ml_thr, ml_mindur, ml_merge = (
+                unet_model, unet_thr, unet_mindur, unet_merge)
+        if not ml_model:
+            label = "BENDR" if method == "bendr" else "U-Net"
+            return (
+                False, True,
+                alert(f"No {label} model selected. Pick one in the {label} "
+                      "settings first.", "warning"),
+                False,
+            )
+        sz_params["ml_model"] = ml_model
+        sz_params["ml_threshold"] = float(ml_thr or 0.5)
+        sz_params["ml_min_duration_sec"] = float(ml_mindur or 3.0)
+        sz_params["ml_merge_gap_sec"] = float(ml_merge or 2.0)
 
     # Honour the channel selection from the Seizure tab (sz-channel-selector).
     # Without this, batch detection ran every channel even when the user had
