@@ -130,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
                         "as random background from the recordings (the old behaviour).")
     p.add_argument("--include-activity", action="store_true",
                    help="add the paired activity channel as a 2nd input channel")
+    p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
+                   help="animal IDs to drop from the dataset entirely (no "
+                        "train/val windows), e.g. noisy recordings: "
+                        "--exclude-animals 355676")
 
     # Training
     p.add_argument("--epochs", type=int, default=50)
@@ -178,7 +182,10 @@ def main(argv: list[str] | None = None) -> int:
         neg_pos_ratio=neg_pos_ratio,
         use_hard_negatives=use_hard,
         include_activity=args.include_activity,
+        exclude_animals=tuple(args.exclude_animals),
     )
+    if args.exclude_animals:
+        print(f"Excluding animals from dataset: {list(args.exclude_animals)}")
     train_config = TrainConfig(
         architecture="unet",
         epochs=args.epochs,

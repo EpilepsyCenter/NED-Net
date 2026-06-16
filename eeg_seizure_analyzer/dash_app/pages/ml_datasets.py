@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -274,6 +275,16 @@ def layout(sid: str | None) -> html.Div:
                                       value="2.0",
                                       className="form-control", size="sm"),
                         ], width=2),
+                    ], className="g-2 mb-3"),
+
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Exclude animal IDs (comma/space-separated)",
+                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            dbc.Input(id="ml-exclude-animals", type="text",
+                                      value="", placeholder="e.g. 355676",
+                                      className="form-control", size="sm"),
+                        ], width=6),
                     ], className="g-2 mb-3"),
 
                     # Train / Stop buttons
@@ -931,13 +942,14 @@ def toggle_bendr_train_params(architecture):
     State("ml-freeze-epochs", "value"),
     State("ml-pretrained-weights", "value"),
     State("ml-freeze-backbone", "value"),
+    State("ml-exclude-animals", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
                    ann_type, epochs, batch_size, lr, patience, pos_weight,
                    neg_ratio, architecture, encoder_lr, freeze_epochs,
-                   pretrained_weights, freeze_backbone, sid):
+                   pretrained_weights, freeze_backbone, exclude_animals, sid):
     """Start model training in a background thread."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -967,8 +979,11 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
     from eeg_seizure_analyzer.ml.dataset import DatasetConfig
     from eeg_seizure_analyzer.ml.train import TrainConfig
 
+    # Animal IDs to drop from the dataset (comma- or space-separated).
+    excl = tuple(s for s in re.split(r"[,\s]+", (exclude_animals or "").strip()) if s)
     dataset_config = DatasetConfig(
         neg_pos_ratio=_to_float(neg_ratio, 2.0),
+        exclude_animals=excl,
     )
     _arch = architecture or "unet"
     train_config = TrainConfig(

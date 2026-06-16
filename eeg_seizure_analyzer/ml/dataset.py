@@ -53,6 +53,8 @@ class DatasetConfig:
     min_seizure_overlap: float = 0.5  # fraction of window that must be seizure
     augment: bool = True
     seed: int = 42
+    exclude_animals: tuple = ()  # animal IDs to drop from the dataset entirely
+    #   (no train/val windows) — e.g. noisy recordings.
     cache_windows: bool = True  # keep each window's read+resampled signal in RAM
     #   after the first read, so epochs 2+ skip disk I/O (training is I/O-bound,
     #   not GPU-bound). Masks are rebuilt and augmentation re-applied per epoch.
@@ -248,6 +250,7 @@ def build_window_specs(
     list[WindowSpec]
     """
     rng = np.random.default_rng(config.seed)
+    exclude_set = set(config.exclude_animals or ())
     specs: list[WindowSpec] = []  # positive windows
     hard_neg_specs: list[WindowSpec] = []  # all rejected-event windows
     # Per-channel context for generating random background negatives on demand.
@@ -283,6 +286,10 @@ def build_window_specs(
         # Process each EEG channel independently (each = one animal)
         for eeg_ch in eeg_idx:
             animal_id = ch_ids.get(eeg_ch, f"ch{eeg_ch}")
+            # Skip animals the user excluded (e.g. noisy recordings) — they
+            # contribute no training/val windows at all.
+            if animal_id in exclude_set:
+                continue
             act_ch = eeg_to_act.get(eeg_ch) if config.include_activity else None
 
             # Filter annotations for this channel only
