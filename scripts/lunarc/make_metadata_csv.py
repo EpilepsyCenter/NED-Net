@@ -66,15 +66,32 @@ def _batch_of(path: str) -> str | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--edf-dir", required=True)
+    ap.add_argument("--edf-dir", help="scan this folder recursively for *.edf")
+    ap.add_argument("--file-list", help="text file with one EDF path per line "
+                    "(e.g. `find <edf_dir> -name '*.edf'` from LUNARC) — lets you "
+                    "build the full CSV from a path list, no EDFs needed")
     ap.add_argument("--out", default="batch_metadata.csv")
     args = ap.parse_args()
 
-    edfs = sorted(glob.glob(os.path.join(args.edf_dir, "**", "*.edf"),
-                            recursive=True))
+    if args.file_list:
+        with open(args.file_list) as f:
+            edfs = [ln.strip() for ln in f
+                    if ln.strip() and ln.strip().lower().endswith(".edf")]
+    elif args.edf_dir:
+        edfs = sorted(glob.glob(os.path.join(args.edf_dir, "**", "*.edf"),
+                                recursive=True))
+    else:
+        ap.error("give --edf-dir or --file-list")
     if not edfs:
-        print(f"No EDFs under {args.edf_dir}")
+        print("No EDF paths found.")
         return 1
+
+    # The CSV is keyed by basename (so is the app); warn on any collisions.
+    name_counts = collections.Counter(os.path.basename(e) for e in edfs)
+    dups = [n for n, c in name_counts.items() if c > 1]
+    if dups:
+        print(f"  [!] {len(dups)} duplicate basenames across batches — a "
+              f"basename-keyed CSV can't disambiguate these; e.g. {dups[:3]}")
 
     rows = []
     skipped = []
