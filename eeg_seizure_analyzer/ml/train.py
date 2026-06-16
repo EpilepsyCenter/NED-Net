@@ -353,6 +353,23 @@ def train_model(
     print(f"Train animals: {len(train_animals)} {sorted(train_animals)}")
     print(f"Val animals: {len(val_animals)} {sorted(val_animals)}")
 
+    # ── Pre-load window cache ────────────────────────────────────
+    # Read every window once, in parallel, into an in-RAM cache. Training is
+    # I/O-bound (reading 60 s windows off disk dominates; the GPU is mostly
+    # idle), and without this each of the 50 epochs re-reads every window. Done
+    # in the main process so the (forked) DataLoader workers inherit the cache
+    # copy-on-write — so epochs 2+ do no disk I/O and there's no per-worker
+    # duplication.
+    if dataset_config.cache_windows:
+        n_w = max(1, train_config.num_workers or 8)
+        print(f"Pre-loading {len(train_ds) + len(val_ds)} windows into cache "
+              f"({n_w} threads)...")
+        t_cache = time.time()
+        train_ds.preload(max_workers=n_w)
+        val_ds.preload(max_workers=n_w)
+        print(f"Cache ready in {time.time() - t_cache:.0f}s — epochs 2+ run "
+              f"from RAM.")
+
     # ── DataLoaders ──────────────────────────────────────────────
     # Custom collate to handle the meta dict
     def collate_fn(batch):
