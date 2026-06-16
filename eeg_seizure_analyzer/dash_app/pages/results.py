@@ -360,7 +360,8 @@ def layout(sid: str | None) -> html.Div:
                 ),
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="res-group-compare",
-                                      config={"responsive": True}), width=6),
+                                      config={"responsive": True},
+                                      style={"height": "380px"}), width=6),
                     dbc.Col(html.Div(id="res-group-table"), width=6),
                 ], className="mb-3"),
             ]),
@@ -580,7 +581,14 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
 
     daily_fig = _panel_legend(_build_daily_burden(daily))
     circ_fig = _panel_legend(_build_circadian(circadian))
-    table = _build_events_table(events)
+    filters_active = bool(
+        detector or cohort or group_id or animal_id
+        or (animals and len(animals) > 1)
+        or (types and len(types) < 2)
+        or min_confidence
+        or file_ids
+        or (modes and len(modes) < 3))
+    table = _build_events_table(events, filters_active=filters_active)
 
     # Cross-group / per-animal views — computed from the filtered event list
     # (drops per-event excludes) so they inherit every filter applied above.
@@ -1546,10 +1554,18 @@ def _build_longitudinal(events, starts) -> go.Figure:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _build_events_table(events: list[dict]):
+def _build_events_table(events: list[dict], filters_active: bool = False):
+    tag = []
+    if filters_active:
+        tag = [html.Span(
+            "● Filters applied — table shows the filtered subset",
+            style={"fontSize": "0.78rem", "color": "var(--ned-accent)",
+                   "fontWeight": "600", "marginBottom": "6px",
+                   "display": "inline-block"})]
     if not events:
-        return html.P("No events found.",
-                      style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})
+        return html.Div(tag + [html.P(
+            "No events found.",
+            style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})])
 
     rows = []
     for ev in events[:500]:
@@ -1609,7 +1625,7 @@ def _build_events_table(events: list[dict]):
         {"field": "_event_id", "hide": True},
     ]
 
-    return dag.AgGrid(
+    grid = dag.AgGrid(
         id="res-grid",
         rowData=rows,
         columnDefs=columns,
@@ -1621,6 +1637,7 @@ def _build_events_table(events: list[dict]):
         },
         className="ag-theme-alpine-dark",
     )
+    return html.Div(tag + [grid]) if tag else grid
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1659,25 +1676,51 @@ def _minmax_downsample(time_axis, data, max_points=6000):
 @callback(
     Output("res-export-status", "children"),
     Input("res-export-csv", "n_clicks"),
+    State("res-source-selector", "value"),
+    State("res-detector-filter", "value"),
     State("res-date-start", "value"),
     State("res-date-end", "value"),
+    State("res-mode-filter", "value"),
     State("res-animal-filter", "value"),
+    State("res-type-filter", "value"),
     State("res-min-conf", "value"),
+    State("res-file-filter", "value"),
+    State("res-cohort-filter", "value"),
+    State("res-group-filter", "value"),
     prevent_initial_call=True,
 )
-def export_csv(n, date_start, date_end, animals, min_conf):
+def export_csv(n, source, detector, date_start, date_end, modes, animals,
+               types, min_conf, file_ids, cohort, group_id):
     if not n:
         return no_update
 
+    # Mirror the displayed table's filters exactly so the CSV == what you see.
+    category = "spike" if source == "spike_cnn" else "seizure"
     animal_id = animals[0] if animals and len(animals) == 1 else None
+    event_type = types[0] if types and len(types) == 1 else None
     min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None
+    filter_kw = {
+        "date_start": date_start or None,
+        "date_end": date_end or None,
+        "animal_id": animal_id,
+        "min_confidence": min_confidence,
+        "event_type": event_type,
+        "category": category,
+        "source": detector or None,
+        "cohort": cohort or None,
+        "group_id": group_id or None,
+    }
+    if modes and len(modes) < 3:
+        filter_kw["mode"] = modes[0] if len(modes) == 1 else None
 
-    events = db.get_events(
-        date_start=date_start or None,
-        date_end=date_end or None,
-        animal_id=animal_id,
-        min_confidence=min_confidence,
-    )
+    events = db.get_events(**filter_kw)
+    if file_ids:
+        chunk_ids = {int(fid) for fid in file_ids}
+        events = [e for e in events if e.get("chunk_id") in chunk_ids]
+    if animals and len(animals) > 1:
+        events = [e for e in events if e.get("animal_id") in animals]
+    if types and len(types) < 2:
+        events = [e for e in events if e.get("type") in types]
     # Excluded events are dropped from exports too.
     events = [e for e in events if not e.get("excluded")]
     if not events:
@@ -1692,7 +1735,8 @@ def export_csv(n, date_start, date_end, animals, min_conf):
     fields = [
         "animal_id", "date", "start_sec", "end_sec", "duration_sec",
         "type", "subtype", "cnn_confidence", "convulsive_confidence",
-        "movement_flag", "hour_of_day", "cohort", "group_id", "path", "mode",
+        "movement_flag", "hour_of_day", "channel", "cohort", "group_id",
+        "path", "mode",
     ]
     try:
         with open(path, "w", newline="") as fh:
