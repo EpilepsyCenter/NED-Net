@@ -815,7 +815,17 @@ def load_trained_model(
     architecture = metadata.get("architecture", "unet")
     tc = metadata.get("train_config", {})
 
-    if architecture == "bendr":
+    if architecture == "convulsive_classifier":
+        from eeg_seizure_analyzer.ml.convulsive_model import (
+            build_convulsive_classifier,
+        )
+        model = build_convulsive_classifier(
+            n_eeg_channels=metadata.get("n_eeg_channels", 1),
+            base_filters=tc.get("base_filters", 32),
+            depth=tc.get("depth", 4),
+            dropout=0.0,  # no dropout at inference
+        )
+    elif architecture == "bendr":
         n_in = metadata.get("n_eeg_channels", 1)
         if metadata.get("include_activity", False):
             n_in += metadata.get("n_activity_channels", 0)

@@ -21,6 +21,7 @@ from eeg_seizure_analyzer.ml.dataset import (
     _downsample,
     _normalize_channels,
     _pad_or_trim,
+    _read_window_signal,
 )
 from eeg_seizure_analyzer.ml.train import load_trained_model
 
@@ -35,6 +36,7 @@ def predict_seizures(
     merge_gap_sec: float = 2.0,
     overlap_sec: float = 15.0,
     progress_callback=None,
+    convulsive_model_name: str | None = None,
 ) -> list[DetectedEvent]:
     """Run seizure detection on an EDF file using a trained model.
 
@@ -62,6 +64,11 @@ def predict_seizures(
         Overlap between sliding windows (seconds).
     progress_callback : callable, optional
         Called with (current_step, total_steps) for progress reporting.
+    convulsive_model_name : str, optional
+        Name of a Stage-2 convulsive classifier. When set, each detected seizure
+        crop is run through this classifier and its output *overrides* the
+        detector's ch1 convulsive flag. When None, the ch1 fallback is used
+        unchanged.
 
     Returns
     -------
@@ -205,10 +212,70 @@ def predict_seizures(
         event_id += len(ch_events)
         all_events.extend(ch_events)
 
+    # ── Stage 2: convulsive classifier (cascade) ────────────────
+    # If a dedicated convulsive classifier is selected, run it on each detected
+    # seizure crop and override the detector's ch1 flag. Convulsive ⊂ seizure,
+    # so the classifier only ever sees seizure crops — a balanced, well-posed
+    # task compared with ch1 firing against the whole recording.
+    if convulsive_model_name and all_events:
+        _apply_convulsive_classifier(
+            all_events, edf_path, convulsive_model_name,
+            convulsive_threshold, device,
+        )
+
     # Sort by onset
     all_events.sort(key=lambda e: (e.channel, e.onset_sec))
 
     return all_events
+
+
+def _apply_convulsive_classifier(
+    events: list[DetectedEvent],
+    edf_path: str,
+    convulsive_model_name: str,
+    convulsive_threshold: float,
+    device,
+) -> None:
+    """Override each event's convulsive flag using a Stage-2 classifier.
+
+    Mutates ``events`` in place: sets ``features["convulsive_probability"]`` and
+    ``features["convulsive"]``. The crop is the event's centred ``window_sec``
+    window on its own channel (EEG only — the classifier ignores activity).
+    """
+    conv_model, conv_meta = load_trained_model(convulsive_model_name)
+    conv_model = conv_model.to(device)
+    c_fs = conv_meta.get("target_fs", 250)
+    c_win = conv_meta.get("window_sec", 60)
+    c_samples = int(c_fs * c_win)
+    # Default the threshold to the model's trained optimum unless the caller
+    # explicitly overrode it (i.e. passed something other than the 0.5 default).
+    thr = convulsive_threshold
+    if abs(convulsive_threshold - 0.5) < 1e-9:
+        thr = float(conv_meta.get("best_threshold", 0.5))
+
+    # Crop each event's centred window (EEG only).
+    crops = []
+    for ev in events:
+        centre = (ev.onset_sec + ev.offset_sec) / 2.0
+        start_sec = max(0.0, centre - c_win / 2.0)
+        try:
+            sig = _read_window_signal(
+                edf_path, ev.channel, None, start_sec, c_win, c_fs, c_samples)
+        except Exception:
+            sig = np.zeros((1, c_samples), dtype=np.float32)
+        crops.append(sig)
+
+    if not crops:
+        return
+
+    batch = torch.from_numpy(np.stack(crops)).to(device)
+    with torch.no_grad():
+        logits = conv_model(batch)
+        probs = torch.sigmoid(logits.float()).cpu().numpy().reshape(-1)
+
+    for ev, prob in zip(events, probs):
+        ev.features["convulsive_probability"] = round(float(prob), 3)
+        ev.features["convulsive"] = bool(prob > thr)
 
 
 def _extract_events(

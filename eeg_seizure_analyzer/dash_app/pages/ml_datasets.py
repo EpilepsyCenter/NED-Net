@@ -169,6 +169,8 @@ def layout(sid: str | None) -> html.Div:
                                 options=[
                                     {"label": "U-Net", "value": "unet"},
                                     {"label": "BENDR", "value": "bendr"},
+                                    {"label": "Convulsive Classifier",
+                                     "value": "convulsive"},
                                 ],
                                 value="unet",
                                 inline=True,
@@ -844,7 +846,14 @@ def _render_epochs(history: list, best_epoch: int = 0):
 
 def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
     """Background thread: run training and write progress after each epoch."""
-    from eeg_seizure_analyzer.ml.train import train_model
+    # Stage-2 convulsive classifier uses its own loop; both share the same
+    # progress-dict contract, so the rest of this worker is identical.
+    if train_config.architecture == "convulsive_classifier":
+        from eeg_seizure_analyzer.ml.train_convulsive import (
+            train_convulsive_model as train_fn,
+        )
+    else:
+        from eeg_seizure_analyzer.ml.train import train_model as train_fn
 
     history: list = []  # accumulate so the UI can show every epoch live
 
@@ -870,7 +879,7 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
             "total_epochs": train_config.epochs,
         })
 
-        result = train_model(
+        result = train_fn(
             dataset_def=dataset_def,
             dataset_config=dataset_config,
             train_config=train_config,
@@ -986,6 +995,10 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
         exclude_animals=excl,
     )
     _arch = architecture or "unet"
+    # The radio uses the short value "convulsive"; the saved/loaded architecture
+    # tag is "convulsive_classifier" (matches metadata + load_trained_model).
+    if _arch == "convulsive":
+        _arch = "convulsive_classifier"
     train_config = TrainConfig(
         epochs=_to_int(epochs, 50),
         batch_size=_to_int(batch_size, 8),

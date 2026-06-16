@@ -1572,6 +1572,10 @@ def _bendr_params(state) -> html.Div:
                                 style={"fontSize": "0.82rem"},
                             ),
                         ], style={"marginBottom": "12px"}),
+                        _convulsive_dropdown(
+                            "sz-bendr-convmodel",
+                            state.extra.get("sz_bendr_convmodel", ""),
+                        ),
                         param_control(
                             "Threshold", "sz-bendr-threshold",
                             0.1, 0.9, 0.05,
@@ -1616,6 +1620,43 @@ def _bendr_params(state) -> html.Div:
             ], width=6),
         ], className="g-3 mb-3"),
     ])
+
+
+def _convulsive_model_options() -> list[dict]:
+    """Dropdown options for Stage-2 convulsive classifiers (cascade)."""
+    try:
+        from eeg_seizure_analyzer.ml.train import list_models
+        models = [m for m in list_models()
+                  if m.get("architecture") == "convulsive_classifier"]
+    except Exception:
+        models = []
+    opts = [{"label": "(use detector ch1)", "value": ""}]
+    for m in models:
+        label = (f"{m['name']} — F1: {m['best_event_f1']:.2f}"
+                 if m.get("best_event_f1") else m["name"])
+        opts.append({"label": label, "value": m["name"]})
+    return opts
+
+
+def _convulsive_dropdown(dropdown_id: str, default: str) -> html.Div:
+    """A 'Convulsive classifier' selector shared by the U-Net and BENDR panels.
+
+    When set, the chosen classifier overrides the detector's ch1 convulsive
+    flag (the seizure→convulsive cascade). Empty value = ch1 fallback.
+    """
+    return html.Div([
+        html.Label("Convulsive classifier (optional)",
+                   style={"fontSize": "0.78rem",
+                          "color": "var(--ned-text-muted)",
+                          "marginBottom": "4px"}),
+        dcc.Dropdown(
+            id=dropdown_id,
+            options=_convulsive_model_options(),
+            value=default or "",
+            clearable=False,
+            style={"fontSize": "0.82rem"},
+        ),
+    ], style={"marginBottom": "12px"})
 
 
 def _unet_params(state) -> html.Div:
@@ -1666,6 +1707,10 @@ def _unet_params(state) -> html.Div:
                                 style={"fontSize": "0.82rem"},
                             ),
                         ], style={"marginBottom": "12px"}),
+                        _convulsive_dropdown(
+                            "sz-unet-convmodel",
+                            state.extra.get("sz_unet_convmodel", ""),
+                        ),
                         param_control(
                             "Threshold", "sz-unet-threshold",
                             0.1, 0.9, 0.05,
@@ -2059,11 +2104,13 @@ def auto_save_sz_extras(*args):
     State("sz-ens-conf-merge", "value"),
     # ── BENDR params ──
     State("sz-bendr-model", "value"),
+    State("sz-bendr-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-bendr-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-bendr-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-bendr-merge-gap"}, "value"),
     # ── U-Net params ──
     State("sz-unet-model", "value"),
+    State("sz-unet-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
@@ -2112,9 +2159,9 @@ def run_detection(
     ens_vote_thr,
     ens_methods, ens_merge, ens_conf_merge,
     # BENDR
-    bendr_model, bendr_threshold, bendr_min_dur, bendr_merge_gap,
+    bendr_model, bendr_convmodel, bendr_threshold, bendr_min_dur, bendr_merge_gap,
     # U-Net
-    unet_model, unet_threshold, unet_min_dur, unet_merge_gap,
+    unet_model, unet_convmodel, unet_threshold, unet_min_dur, unet_merge_gap,
     sid,
 ):
     """Run seizure detection (multi-method), clear results, or apply filters."""
@@ -2339,14 +2386,18 @@ def run_detection(
             _ml_label = "BENDR" if method == "bendr" else "U-Net"
             if method == "bendr":
                 _ml_model = bendr_model
+                _ml_convmodel = bendr_convmodel
                 _ml_thr, _ml_mindur, _ml_merge = (
                     bendr_threshold, bendr_min_dur, bendr_merge_gap)
                 _model_key, _params_key = "sz_bendr_model", "sz_bendr_params"
+                _convmodel_key = "sz_bendr_convmodel"
             else:
                 _ml_model = unet_model
+                _ml_convmodel = unet_convmodel
                 _ml_thr, _ml_mindur, _ml_merge = (
                     unet_threshold, unet_min_dur, unet_merge_gap)
                 _model_key, _params_key = "sz_unet_model", "sz_unet_params"
+                _convmodel_key = "sz_unet_convmodel"
 
             if not _ml_model:
                 return (
@@ -2370,6 +2421,7 @@ def run_detection(
 
             # Persist params for this method
             state.extra[_model_key] = _ml_model
+            state.extra[_convmodel_key] = _ml_convmodel or ""
             state.extra[_params_key] = {
                 "threshold": _thr,
                 "min_duration_sec": _mindur,
@@ -2383,6 +2435,7 @@ def run_detection(
                 threshold=_thr,
                 min_duration_sec=_mindur,
                 merge_gap_sec=_merge,
+                convulsive_model_name=(_ml_convmodel or None),
             )
 
         elif method == "ensemble":
@@ -3639,6 +3692,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     if is_ml:
         from eeg_seizure_analyzer.ml.predict import predict_seizures
         ml_model = sz_params.get("ml_model")
+        ml_convmodel = sz_params.get("ml_convmodel") or None
         ml_thr = float(sz_params.get("ml_threshold", 0.5))
         ml_mindur = float(sz_params.get("ml_min_duration_sec", 3.0))
         ml_merge = float(sz_params.get("ml_merge_gap_sec", 2.0))
@@ -3713,6 +3767,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
                     edf_path=edf_path, model_name=ml_model,
                     channels=selected_channels, threshold=ml_thr,
                     min_duration_sec=ml_mindur, merge_gap_sec=ml_merge,
+                    convulsive_model_name=ml_convmodel,
                 )
             else:
                 use_chunked = rec.duration_sec > 1800 and edf_path.lower().endswith(".edf")
@@ -3838,19 +3893,21 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     # ML model + params, read live so batch uses the current selection
     # (same controls the single-file Detect reads).
     State("sz-bendr-model", "value"),
+    State("sz-bendr-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-bendr-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-bendr-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-bendr-merge-gap"}, "value"),
     State("sz-unet-model", "value"),
+    State("sz-unet-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def start_detect_all(n_clicks, bendr_model, bendr_thr, bendr_mindur,
-                     bendr_merge, unet_model, unet_thr, unet_mindur,
-                     unet_merge, sid):
+def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
+                     bendr_mindur, bendr_merge, unet_model, unet_convmodel,
+                     unet_thr, unet_mindur, unet_merge, sid):
     """Launch the background detection thread and start polling."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -3883,9 +3940,11 @@ def start_detect_all(n_clicks, bendr_model, bendr_thr, bendr_mindur,
         if method == "bendr":
             ml_model, ml_thr, ml_mindur, ml_merge = (
                 bendr_model, bendr_thr, bendr_mindur, bendr_merge)
+            ml_convmodel = bendr_convmodel
         else:
             ml_model, ml_thr, ml_mindur, ml_merge = (
                 unet_model, unet_thr, unet_mindur, unet_merge)
+            ml_convmodel = unet_convmodel
         if not ml_model:
             label = "BENDR" if method == "bendr" else "U-Net"
             return (
@@ -3895,6 +3954,7 @@ def start_detect_all(n_clicks, bendr_model, bendr_thr, bendr_mindur,
                 False,
             )
         sz_params["ml_model"] = ml_model
+        sz_params["ml_convmodel"] = ml_convmodel or ""
         sz_params["ml_threshold"] = float(ml_thr or 0.5)
         sz_params["ml_min_duration_sec"] = float(ml_mindur or 3.0)
         sz_params["ml_merge_gap_sec"] = float(ml_merge or 2.0)
