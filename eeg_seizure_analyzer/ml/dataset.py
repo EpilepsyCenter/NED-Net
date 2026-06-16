@@ -53,6 +53,9 @@ class DatasetConfig:
     min_seizure_overlap: float = 0.5  # fraction of window that must be seizure
     augment: bool = True
     seed: int = 42
+    cache_windows: bool = True  # keep each window's read+resampled signal in RAM
+    #   after the first read, so epochs 2+ skip disk I/O (training is I/O-bound,
+    #   not GPU-bound). Masks are rebuilt and augmentation re-applied per epoch.
 
 
 # ---------------------------------------------------------------------------
@@ -478,32 +481,75 @@ class SeizureDataset(Dataset):
         self.augment = augment
         self.target_samples = config.target_fs * config.window_sec
         self.rng = np.random.default_rng(config.seed)
+        # idx -> read+resampled signal (pre-augmentation). Populated lazily, or
+        # up front via preload(). Masks/augmentation are NOT cached (cheap /
+        # must vary per epoch).
+        self._cache: dict[int, np.ndarray] = {}
 
     def __len__(self):
         return len(self.specs)
 
-    def __getitem__(self, idx: int):
-        spec = self.specs[idx]
-
-        # Load single EEG channel window from disk
+    def _load_signal(self, spec: "WindowSpec") -> np.ndarray:
+        """Read + downsample + normalize the window's signal from disk — the
+        expensive, deterministic part that the cache stores."""
         rec = read_edf_window(
             spec.edf_path,
             channels=[spec.eeg_channel],
             start_sec=spec.start_sec,
             duration_sec=spec.duration_sec,
         )
-
-        # Downsample
         eeg = _downsample(rec.data, rec.fs, self.config.target_fs)
-
-        # Normalize
         eeg = _normalize_channels(eeg)
-
-        # Pad or trim to exact size — shape: (1, target_samples)
         eeg = _pad_or_trim(eeg, self.target_samples)
 
-        # Build multi-channel mask: (n_classes, target_samples)
-        # Channel 0 = seizure, channel 1 = convulsive
+        if spec.act_channel is not None:
+            try:
+                act_rec = read_edf_window(
+                    spec.edf_path,
+                    channels=[spec.act_channel],
+                    start_sec=spec.start_sec,
+                    duration_sec=spec.duration_sec,
+                )
+                act = _downsample(act_rec.data, act_rec.fs, self.config.target_fs)
+                act = _normalize_channels(act)
+                act = _pad_or_trim(act, self.target_samples)
+                eeg = np.concatenate([eeg, act], axis=0)
+            except Exception:
+                zeros = np.zeros((1, self.target_samples), dtype=np.float32)
+                eeg = np.concatenate([eeg, zeros], axis=0)
+        return eeg
+
+    def preload(self, max_workers: int = 8) -> None:
+        """Fill the window cache up front, in parallel (I/O-bound → threads).
+
+        Call this in the MAIN process before creating the DataLoader: on Linux
+        the worker processes fork and inherit the populated cache copy-on-write,
+        so every epoch reads from RAM with no disk I/O and no per-worker
+        duplication. No-op if caching is disabled."""
+        if not self.config.cache_windows:
+            return
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(i):
+            if i not in self._cache:
+                self._cache[i] = self._load_signal(self.specs[i])
+
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
+            list(ex.map(_one, range(len(self.specs))))
+
+    def __getitem__(self, idx: int):
+        spec = self.specs[idx]
+
+        # Signal: from cache if present, else read from disk (and cache it).
+        if self.config.cache_windows and idx in self._cache:
+            eeg = self._cache[idx]
+        else:
+            eeg = self._load_signal(spec)
+            if self.config.cache_windows:
+                self._cache[idx] = eeg
+
+        # Build multi-channel mask: (n_classes, target_samples) — rebuilt each
+        # call (cheap; channel 0 = seizure, channel 1 = convulsive).
         n_classes = 2
         mask = np.zeros((n_classes, self.target_samples), dtype=np.float32)
         for onset, offset in spec.seizure_intervals:
@@ -519,30 +565,11 @@ class SeizureDataset(Dataset):
             end_idx = max(0, min(end_idx, self.target_samples))
             mask[1, start_idx:end_idx] = 1.0
 
-        # Load paired activity channel if requested
-        if spec.act_channel is not None:
-            try:
-                act_rec = read_edf_window(
-                    spec.edf_path,
-                    channels=[spec.act_channel],
-                    start_sec=spec.start_sec,
-                    duration_sec=spec.duration_sec,
-                )
-                act = _downsample(act_rec.data, act_rec.fs, self.config.target_fs)
-                act = _normalize_channels(act)
-                act = _pad_or_trim(act, self.target_samples)
-                # Stack: (2, target_samples) — EEG + activity
-                eeg = np.concatenate([eeg, act], axis=0)
-            except Exception:
-                # Activity load failed — pad with zeros
-                zeros = np.zeros((1, self.target_samples), dtype=np.float32)
-                eeg = np.concatenate([eeg, zeros], axis=0)
-
-        # Augmentation (no channel dropout for single-channel)
+        # Augmentation — on a COPY so the cached signal is never mutated.
         if self.augment:
-            eeg, mask = _augment(eeg, mask, self.rng)
+            eeg, mask = _augment(eeg.copy(), mask, self.rng)
 
-        eeg_tensor = torch.from_numpy(eeg)
+        eeg_tensor = torch.from_numpy(np.ascontiguousarray(eeg))
         mask_tensor = torch.from_numpy(mask)
 
         meta = {
