@@ -43,6 +43,7 @@
 : "${LR:=3e-4}"
 : "${PATIENCE:=10}"
 : "${NEG_POS_RATIO:=8}"
+: "${EXCLUDE_ANIMALS:=}"   # space-separated animal IDs to drop, e.g. "355676"
 # POS_WEIGHT left unset/blank => auto (train_unet sets it to NEG_POS_RATIO).
 
 # ============================================================
@@ -62,12 +63,16 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask PATIENCE      "Patience"
     ask NEG_POS_RATIO "Neg/pos ratio"
     read -r -p "Pos weight (blank = auto = neg/pos ratio): " POS_WEIGHT
+    read -r -p "Exclude animal IDs (space-separated, blank = none): " EXCLUDE_ANIMALS
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
-    sbatch --export=ALL,MODEL_NAME="$MODEL_NAME",EPOCHS="$EPOCHS",\
-BATCH_SIZE="$BATCH_SIZE",LR="$LR",PATIENCE="$PATIENCE",\
-NEG_POS_RATIO="$NEG_POS_RATIO",POS_WEIGHT="$POS_WEIGHT" "$0"
+    echo "            exclude=${EXCLUDE_ANIMALS:-none}"
+    # Pass settings via the (exported) environment + --export=ALL — robust for
+    # values that contain spaces (e.g. multiple excluded IDs).
+    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
+           EXCLUDE_ANIMALS
+    sbatch --export=ALL "$0"
     exit $?
 fi
 
@@ -80,6 +85,7 @@ echo "Node:        $(hostname)"
 echo "Start time:  $(date)"
 echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
+echo "             exclude=${EXCLUDE_ANIMALS:-none}"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -101,6 +107,10 @@ EDF_DIR="/lunarc/nobackup/projects/lu2026-2-60/edf_data"
 POS_WEIGHT_ARG=()
 [ -n "$POS_WEIGHT" ] && POS_WEIGHT_ARG=(--pos-weight "$POS_WEIGHT")
 
+# Space-separated IDs -> multiple --exclude-animals values (intentionally unquoted).
+EXCLUDE_ARG=()
+[ -n "$EXCLUDE_ANIMALS" ] && EXCLUDE_ARG=(--exclude-animals $EXCLUDE_ANIMALS)
+
 python -m eeg_seizure_analyzer.ml.train_unet \
     --data-dir "$EDF_DIR" \
     --model-name "$MODEL_NAME" \
@@ -111,6 +121,7 @@ python -m eeg_seizure_analyzer.ml.train_unet \
     --lr "$LR" \
     --patience "$PATIENCE" \
     "${POS_WEIGHT_ARG[@]}" \
+    "${EXCLUDE_ARG[@]}" \
     --weight-decay 1e-4 \
     --base-filters 32 \
     --depth 4 \
