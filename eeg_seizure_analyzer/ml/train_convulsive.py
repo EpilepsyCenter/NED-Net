@@ -409,7 +409,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="animal IDs to drop entirely, e.g. --exclude-animals 355676")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=16)
-    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--lr", type=float, default=3e-4,
+                   help="1e-3 overfit the small data (val peaked at epoch 1 and "
+                        "destabilised); 3e-4 is the calmer default")
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--base-filters", type=int, default=32)
     p.add_argument("--depth", type=int, default=4)
