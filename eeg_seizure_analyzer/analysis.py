@@ -329,6 +329,7 @@ def process_chunk(
     progress_callback=None,
     file_metadata: dict | None = None,
     overwrite: bool = False,
+    convulsive_model_name: str | None = None,
 ) -> dict:
     """Master detection function shared by all three analysis modes.
 
@@ -439,6 +440,7 @@ def process_chunk(
             min_duration_sec=min_duration_sec,
             merge_gap_sec=merge_gap_sec,
             progress_callback=progress_callback,
+            convulsive_model_name=convulsive_model_name,
         )
 
         # Classify event types (convulsive, HVSW, HPD)
@@ -738,6 +740,7 @@ def run_batch(
     classification_params: ClassificationParams | None = None,
     metadata_path: str | None = None,
     detection_type: str = "seizure",
+    convulsive_model_name: str | None = None,
 ):
     """Run batch analysis in the current thread.
 
@@ -841,6 +844,7 @@ def run_batch(
                     progress_callback=_batch_progress,
                     file_metadata=file_meta,
                     overwrite=overwrite,
+                    convulsive_model_name=convulsive_model_name,
                 )
         except Exception as e:
             _update_status(last_error=f"{Path(edf_path).name}: {e}")
@@ -879,6 +883,7 @@ def start_live_monitoring(
     group_id: str = "",
     classification_params: ClassificationParams | None = None,
     live_template: dict | None = None,
+    convulsive_model_name: str | None = None,
 ):
     """Start live monitoring in a background thread.
 
@@ -900,7 +905,7 @@ def start_live_monitoring(
             convulsive_threshold,
             min_duration_sec, merge_gap_sec, wait_sec,
             process_backlog, cohort, group_id, classification_params,
-            live_template,
+            live_template, convulsive_model_name,
         ),
         daemon=True,
     )
@@ -922,7 +927,7 @@ def _live_monitor_worker(
     convulsive_threshold,
     min_duration_sec, merge_gap_sec, wait_sec,
     process_backlog, cohort, group_id, classification_params,
-    live_template=None,
+    live_template=None, convulsive_model_name=None,
 ):
     """Background thread for live monitoring."""
     _update_status(
@@ -960,6 +965,7 @@ def _live_monitor_worker(
                     group_id=group_id,
                     classification_params=classification_params,
                     file_metadata=live_template,
+                    convulsive_model_name=convulsive_model_name,
                 )
                 with _status_lock:
                     _analysis_status["processed_files"] += 1
@@ -1009,6 +1015,7 @@ def _live_monitor_worker(
                     group_id=group_id,
                     classification_params=classification_params,
                     file_metadata=live_template,
+                    convulsive_model_name=convulsive_model_name,
                 )
                 with _status_lock:
                     _analysis_status["processed_files"] += 1

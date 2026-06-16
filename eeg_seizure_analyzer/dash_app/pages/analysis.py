@@ -146,6 +146,10 @@ def _model_options(model_type: str = "seizure") -> list[dict]:
         models = list_models()
     options = []
     for m in models:
+        # Convulsive classifiers are Stage-2 cascade models, not seizure
+        # detectors — exclude them from the detector list.
+        if m.get("architecture") == "convulsive_classifier":
+            continue
         f1 = m.get("best_event_f1", 0)
         ds = m.get("dataset", "")
         arch = m.get("architecture", "unet").upper()
@@ -154,6 +158,17 @@ def _model_options(model_type: str = "seizure") -> list[dict]:
                  if ds else f"{m['name']}{arch_tag}  —  F1: {f1:.3f}")
         options.append({"label": label, "value": m["name"]})
     return options
+
+
+def _convulsive_model_options() -> list[dict]:
+    """Dropdown options for Stage-2 convulsive classifiers (cascade)."""
+    opts = [{"label": "(use detector ch1)", "value": ""}]
+    for m in list_models():
+        if m.get("architecture") != "convulsive_classifier":
+            continue
+        f1 = m.get("best_event_f1", 0)
+        opts.append({"label": f"{m['name']}  —  F1: {f1:.3f}", "value": m["name"]})
+    return opts
 
 
 def _get_analysis_store(state) -> dict:
@@ -176,6 +191,8 @@ def layout(sid: str | None) -> html.Div:
 
     prev_det_type = store.get("detection_type", "seizure")
     models = _model_options(prev_det_type)
+    conv_models = _convulsive_model_options()
+    prev_conv_model = store.get("convulsive_model_name", "")
     prev_model = store.get("model_path")
     prev_threshold = store.get("confidence_threshold", 0.5)
     prev_conv_threshold = store.get("convulsive_threshold", 0.5)
@@ -297,6 +314,27 @@ def layout(sid: str | None) -> html.Div:
                                "border": "1px solid var(--ned-border)"},
                     ),
                 ], width=3),
+            ], className="g-3 mb-3"),
+
+            # ── Convulsive classifier (Stage-2 cascade, optional) ──
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Convulsive classifier (optional)",
+                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
+                    dcc.Dropdown(
+                        id="an-conv-model",
+                        options=conv_models,
+                        value=prev_conv_model if any(
+                            o["value"] == prev_conv_model for o in conv_models) else "",
+                        clearable=False,
+                    ),
+                    html.Div(
+                        "When set, overrides the detector's ch1 flag for the "
+                        "convulsive decision.",
+                        style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                               "marginTop": "2px"},
+                    ),
+                ], width=6),
             ], className="g-3 mb-3"),
 
             # ── Detection parameters ──────────────────────────────
@@ -803,6 +841,18 @@ def update_model_list(det_type):
     return models, None, placeholder
 
 
+@callback(
+    Output("an-conv-model", "options"),
+    Output("an-conv-model", "disabled"),
+    Input("an-detection-type", "value"),
+)
+def update_conv_model_list(det_type):
+    """Populate the Stage-2 classifier dropdown (seizure detection only)."""
+    if det_type == "spike":
+        return [{"label": "(use detector ch1)", "value": ""}], True
+    return _convulsive_model_options(), False
+
+
 # ── Model info card ────────────────────────────────────────────────────
 
 
@@ -1011,6 +1061,7 @@ def check_single_processed(path):
     Input("an-single-run", "n_clicks"),
     State("an-single-path", "value"),
     State("an-model", "value"),
+    State("an-conv-model", "value"),
     State("an-threshold", "value"),
     State("an-conv-threshold", "value"),
     State("an-min-duration", "value"),
@@ -1024,9 +1075,9 @@ def check_single_processed(path):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
-               min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
-               det_type, overwrite_val, sid):
+def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
+               conv_threshold, min_dur, merge_gap, hvsw_freq, hvsw_swi,
+               hpd_freq, hpd_hfi, det_type, overwrite_val, sid):
     if not n_clicks:
         return no_update, no_update, no_update
 
@@ -1037,6 +1088,7 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
 
     threshold = float(threshold or 0.5)
     conv_threshold = float(conv_threshold or 0.5)
+    conv_model_name = conv_model_name or None
     overwrite = bool(overwrite_val and "overwrite" in overwrite_val)
     is_spike = det_type == "spike"
 
@@ -1054,6 +1106,7 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
         "mode": "single",
         "detection_type": det_type,
         "model_path": model_name,
+        "convulsive_model_name": conv_model_name or "",
         "confidence_threshold": threshold,
         "convulsive_threshold": conv_threshold,
         "single_file_path": edf_path,
@@ -1105,6 +1158,7 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
                     classification_params=cls_params,
                     progress_callback=_prog,
                     overwrite=overwrite,
+                    convulsive_model_name=conv_model_name,
                 )
             if res and res.get("skipped"):
                 analysis._update_status(
@@ -1174,6 +1228,7 @@ def scan_batch_folder(n, folder, include_sub):
     State("an-batch-folder", "value"),
     State("an-batch-sub", "value"),
     State("an-model", "value"),
+    State("an-conv-model", "value"),
     State("an-threshold", "value"),
     State("an-conv-threshold", "value"),
     State("an-min-duration", "value"),
@@ -1188,9 +1243,9 @@ def scan_batch_folder(n, folder, include_sub):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
-              min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
-              det_type, meta_path, overwrite_val, sid):
+def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
+              conv_threshold, min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq,
+              hpd_hfi, det_type, meta_path, overwrite_val, sid):
     if not n:
         return no_update, no_update, no_update, no_update, no_update
     if not model_name:
@@ -1200,6 +1255,7 @@ def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
 
     threshold = float(threshold or 0.5)
     conv_threshold = float(conv_threshold or 0.5)
+    conv_model_name = conv_model_name or None
     is_spike = det_type == "spike"
 
     cls_params = ClassificationParams(
@@ -1216,6 +1272,7 @@ def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
         "mode": "batch",
         "detection_type": det_type,
         "model_path": model_name,
+        "convulsive_model_name": conv_model_name or "",
         "confidence_threshold": threshold,
         "convulsive_threshold": conv_threshold,
         "min_duration_sec": min_dur,
@@ -1242,6 +1299,7 @@ def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
     }
     if not is_spike:
         batch_kwargs["classification_params"] = cls_params
+        batch_kwargs["convulsive_model_name"] = conv_model_name
     if meta_path and os.path.isfile(meta_path):
         batch_kwargs["metadata_path"] = meta_path
 
@@ -1302,6 +1360,7 @@ def cancel_batch(n):
     State("an-live-backlog", "value"),
     State("an-live-wait", "value"),
     State("an-model", "value"),
+    State("an-conv-model", "value"),
     State("an-threshold", "value"),
     State("an-conv-threshold", "value"),
     State("an-min-duration", "value"),
@@ -1315,9 +1374,9 @@ def cancel_batch(n):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def start_live(n, folder, backlog, wait_sec, model_name, threshold, conv_threshold,
-               min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
-               det_type, template_path, sid):
+def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
+               threshold, conv_threshold, min_dur, merge_gap, hvsw_freq,
+               hvsw_swi, hpd_freq, hpd_hfi, det_type, template_path, sid):
     if not n:
         return no_update, no_update, no_update
     if not model_name or not folder:
@@ -1325,6 +1384,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold, conv_thresho
 
     threshold = float(threshold or 0.5)
     conv_threshold = float(conv_threshold or 0.5)
+    conv_model_name = conv_model_name or None
     cls_params = ClassificationParams(
         hvsw_max_freq_hz=float(hvsw_freq or 4.0),
         hvsw_min_slow_wave_index=float(hvsw_swi or 0.5),
@@ -1338,6 +1398,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold, conv_thresho
     store.update({
         "mode": "live",
         "model_path": model_name,
+        "convulsive_model_name": conv_model_name or "",
         "confidence_threshold": threshold,
         "convulsive_threshold": conv_threshold,
         "min_duration_sec": min_dur,
@@ -1376,6 +1437,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, threshold, conv_thresho
         process_backlog=bool(backlog),
         classification_params=cls_params,
         live_template=live_template,
+        convulsive_model_name=conv_model_name,
     )
 
     hide = {"display": "none"}
