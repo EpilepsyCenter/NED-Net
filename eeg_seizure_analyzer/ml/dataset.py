@@ -227,6 +227,11 @@ class WindowSpec:
     # Subset of seizure_intervals that are convulsive
     convulsive_intervals: list[tuple[float, float]] = field(default_factory=list)
     animal_id: str = ""
+    # For the convulsive classifier (Stage 2): whether the seizure this window
+    # is centred on is itself convulsive. Distinct from convulsive_intervals,
+    # which also fires when a *neighbouring* convulsive seizure clips into the
+    # window — here we want the label of the centred event only.
+    center_convulsive: bool = False
 
 
 def build_window_specs(
@@ -783,5 +788,188 @@ def build_datasets(
 
     train_ds = SeizureDataset(train_specs, config, augment=config.augment)
     val_ds = SeizureDataset(val_specs, config, augment=False)
+
+    return train_ds, val_ds, config
+
+
+# ---------------------------------------------------------------------------
+# Convulsive classifier (Stage 2 of the cascade)
+# ---------------------------------------------------------------------------
+
+
+def build_convulsive_specs(
+    dataset_def: dict,
+    config: DatasetConfig,
+) -> list[WindowSpec]:
+    """Plan windows for the convulsive classifier — one per confirmed seizure.
+
+    Unlike :func:`build_window_specs`, this produces *no* negatives: every
+    convulsive event is a seizure (convulsive ⊂ seizure), so the classifier only
+    ever sees seizure crops and decides convulsive-vs-not.  Each window is
+    centred on a confirmed seizure with ``center_convulsive`` set from that
+    event's ``features.convulsive`` flag.  ``convulsive_intervals`` is also
+    populated so the convulsive-aware strata in :func:`split_by_animal` work.
+
+    Rejected events are ignored here — rejection is the detector's job.
+
+    Parameters
+    ----------
+    dataset_def : dict (has 'files' list)
+    config : DatasetConfig (honours ``exclude_animals``, ``window_sec``)
+
+    Returns
+    -------
+    list[WindowSpec] — one positive window per confirmed seizure
+    """
+    exclude_set = set(config.exclude_animals or ())
+    specs: list[WindowSpec] = []
+
+    for file_entry in dataset_def.get("files", []):
+        edf_path = file_entry["edf_path"]
+        if not os.path.exists(edf_path):
+            continue
+
+        annotations = _load_annotations(edf_path)
+        if not annotations:
+            continue
+
+        ch_info = scan_edf_channels(edf_path)
+        eeg_idx, act_idx, pairings = auto_pair_channels(ch_info)
+        if not eeg_idx:
+            continue
+
+        ch_ids = load_channel_ids(edf_path) or {}
+        rec_duration = ch_info[eeg_idx[0]]["n_samples"] / ch_info[eeg_idx[0]]["fs"]
+
+        for eeg_ch in eeg_idx:
+            animal_id = ch_ids.get(eeg_ch, f"ch{eeg_ch}")
+            if animal_id in exclude_set:
+                continue
+            # The classifier uses EEG only — no activity channel.
+            act_ch = None
+
+            ch_confirmed = [
+                a for a in annotations
+                if a.get("label") == "confirmed"
+                and a.get("event_type") == "seizure"
+                and a.get("channel") == eeg_ch
+            ]
+            if not ch_confirmed:
+                continue
+
+            ch_convulsive_intervals = [
+                (a["onset_sec"], a["offset_sec"]) for a in ch_confirmed
+                if (a.get("features") or {}).get("convulsive", False)
+            ]
+
+            for ann in ch_confirmed:
+                onset = ann["onset_sec"]
+                offset = ann["offset_sec"]
+                is_conv = bool((ann.get("features") or {}).get("convulsive", False))
+
+                centre = (onset + offset) / 2
+                half_win = config.window_sec / 2
+                win_start = max(0, centre - half_win)
+                win_end = min(rec_duration, win_start + config.window_sec)
+                win_start = max(0, win_end - config.window_sec)
+
+                # Convulsive seizures (relative to window) — for split strata.
+                win_convulsive = [
+                    (max(s[0], win_start) - win_start,
+                     min(s[1], win_end) - win_start)
+                    for s in ch_convulsive_intervals
+                    if s[1] > win_start and s[0] < win_end
+                ]
+
+                specs.append(WindowSpec(
+                    edf_path=edf_path,
+                    start_sec=win_start,
+                    duration_sec=config.window_sec,
+                    eeg_channel=eeg_ch,
+                    act_channel=act_ch,
+                    is_positive=True,
+                    seizure_intervals=[],
+                    convulsive_intervals=win_convulsive,
+                    animal_id=animal_id,
+                    center_convulsive=is_conv,
+                ))
+
+    return specs
+
+
+def _augment_signal(eeg: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Light augmentation for whole-window classification.
+
+    Amplitude scaling + Gaussian noise only — no time shift or masking, since
+    the label describes the whole window (a time shift can't change it and
+    masking risks removing the very event being classified).
+    """
+    scales = rng.uniform(0.8, 1.2, size=(eeg.shape[0], 1)).astype(np.float32)
+    eeg = eeg * scales
+    noise_std = rng.uniform(0.0, 0.05)
+    eeg = eeg + rng.normal(0, noise_std, size=eeg.shape).astype(np.float32)
+    return eeg
+
+
+class ConvulsiveDataset(SeizureDataset):
+    """Dataset for the convulsive classifier — scalar label per seizure crop.
+
+    Reuses ``SeizureDataset``'s caching/preload/signal loading; only the target
+    differs: a single float (1.0 = convulsive, 0.0 = not) instead of a
+    per-sample mask.
+    """
+
+    def __getitem__(self, idx: int):
+        spec = self.specs[idx]
+
+        if self.config.cache_windows and idx in self._cache:
+            eeg = self._cache[idx]
+        else:
+            eeg = self._load_signal(spec)
+            if self.config.cache_windows:
+                self._cache[idx] = eeg
+
+        if self.augment:
+            eeg = _augment_signal(eeg.copy(), self.rng)
+
+        eeg_tensor = torch.from_numpy(np.ascontiguousarray(eeg))
+        label_tensor = torch.tensor([float(spec.center_convulsive)],
+                                    dtype=torch.float32)
+
+        meta = {
+            "edf_path": spec.edf_path,
+            "start_sec": spec.start_sec,
+            "animal_id": spec.animal_id,
+            "eeg_channel": spec.eeg_channel,
+            "center_convulsive": spec.center_convulsive,
+        }
+
+        return eeg_tensor, label_tensor, meta
+
+
+def build_convulsive_datasets(
+    dataset_def: dict,
+    config: DatasetConfig | None = None,
+) -> tuple[ConvulsiveDataset, ConvulsiveDataset, DatasetConfig]:
+    """Build train/val ConvulsiveDatasets from a dataset definition.
+
+    Returns
+    -------
+    (train_dataset, val_dataset, config)
+    """
+    if config is None:
+        config = DatasetConfig()
+
+    specs = build_convulsive_specs(dataset_def, config)
+
+    if not specs:
+        raise ValueError("No seizure windows could be extracted. "
+                         "Check that the dataset has confirmed seizure "
+                         "annotations.")
+
+    train_specs, val_specs = split_by_animal(specs, seed=config.seed)
+
+    train_ds = ConvulsiveDataset(train_specs, config, augment=config.augment)
+    val_ds = ConvulsiveDataset(val_specs, config, augment=False)
 
     return train_ds, val_ds, config
