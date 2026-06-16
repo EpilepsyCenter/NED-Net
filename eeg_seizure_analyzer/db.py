@@ -698,10 +698,38 @@ def get_summary(
         params + ev_params,
     ).fetchone()[0]
 
+    # Animals that were ANALYSED (recorded), independent of having events — so
+    # full-suppression animals (0 seizures) still count. Falls back to
+    # event-animals for legacy projects with no observation rows.
+    fa_cond = ["c.status = 'ok'"]
+    fa_params: list = []
+    if date_start:
+        fa_cond.append("c.date >= ?"); fa_params.append(date_start)
+    if date_end:
+        fa_cond.append("c.date <= ?"); fa_params.append(date_end)
+    if mode:
+        fa_cond.append("c.mode = ?"); fa_params.append(mode)
+    if animal_id:
+        fa_cond.append("fa.animal_id = ?"); fa_params.append(animal_id)
+    if cohort:
+        fa_cond.append("fa.cohort = ?"); fa_params.append(cohort)
+    if group_id:
+        fa_cond.append("fa.group_id = ?"); fa_params.append(group_id)
+    try:
+        n_analyzed = conn.execute(
+            f"""SELECT COUNT(DISTINCT fa.animal_id) FROM file_animals fa
+                JOIN chunks c ON fa.chunk_id = c.id
+                WHERE {" AND ".join(fa_cond)} AND fa.animal_id != ''""",
+            fa_params,
+        ).fetchone()[0]
+    except Exception:
+        n_analyzed = 0
+
     return {
         "n_files": n_files,
         "animals": animal_list,
         "n_animals": len(animal_list),
+        "n_animals_analyzed": n_analyzed or len(animal_list),
         "total_events": total,
         "n_convulsive": n_conv,
         "n_nonconvulsive": n_nonconv,
@@ -792,33 +820,37 @@ def get_chunk_status() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_all_animals() -> list[str]:
-    """Return sorted list of all unique animal IDs."""
+def _distinct_union(column: str) -> list[str]:
+    """Distinct non-empty values of ``column`` across BOTH events and
+    file_animals, so analysed-but-event-free animals/groups/cohorts (e.g. a
+    treatment that blocked all seizures) still appear in the filter dropdowns."""
     conn = _get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT animal_id FROM events WHERE animal_id != '' ORDER BY animal_id"
-    ).fetchall()
-    return [r[0] for r in rows]
+    vals = set()
+    for tbl in ("events", "file_animals"):
+        try:
+            rows = conn.execute(
+                f"SELECT DISTINCT {column} FROM {tbl} "
+                f"WHERE {column} IS NOT NULL AND {column} != ''"
+            ).fetchall()
+            vals.update(r[0] for r in rows)
+        except sqlite3.OperationalError:
+            pass  # table/column may not exist on legacy DBs
+    return sorted(vals)
+
+
+def get_all_animals() -> list[str]:
+    """Return sorted unique animal IDs (events + analysed-only animals)."""
+    return _distinct_union("animal_id")
 
 
 def get_all_cohorts() -> list[str]:
-    """Return sorted list of distinct non-empty per-event cohorts."""
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT cohort FROM events "
-        "WHERE cohort IS NOT NULL AND cohort != '' ORDER BY cohort"
-    ).fetchall()
-    return [r[0] for r in rows]
+    """Return sorted distinct non-empty cohorts (events + file_animals)."""
+    return _distinct_union("cohort")
 
 
 def get_all_groups() -> list[str]:
-    """Return sorted list of distinct non-empty per-event groups."""
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT group_id FROM events "
-        "WHERE group_id IS NOT NULL AND group_id != '' ORDER BY group_id"
-    ).fetchall()
-    return [r[0] for r in rows]
+    """Return sorted distinct non-empty groups (events + file_animals)."""
+    return _distinct_union("group_id")
 
 
 def get_all_files() -> list[dict]:
