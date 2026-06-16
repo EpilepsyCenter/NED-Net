@@ -314,15 +314,11 @@ def layout(sid: str | None) -> html.Div:
                 ],
             ),
 
-            # ── Plots ──────────────────────────────────────────────
-            dbc.Row([
-                dbc.Col(dcc.Graph(id="res-daily-burden",
-                                  config={"responsive": True}),
-                        id="res-col-daily", width=6),
-                dbc.Col(dcc.Graph(id="res-circadian",
-                                  config={"responsive": True}),
-                        id="res-col-circadian", width=6),
-            ], className="mb-3"),
+            # ── Longitudinal (cohort progression — post-hoc) ───────
+            html.Div(id="res-panel-long", children=[
+                dcc.Graph(id="res-longitudinal", className="mb-3",
+                          config={"responsive": True}),
+            ]),
 
             # ── Cross-group / per-animal analysis ──────────────────
             html.Div(id="res-panel-groups", children=[
@@ -385,10 +381,15 @@ def layout(sid: str | None) -> html.Div:
                 ], className="mb-3"),
             ]),
 
-            html.Div(id="res-panel-long", children=[
-                dcc.Graph(id="res-longitudinal", className="mb-3",
-                          config={"responsive": True}),
-            ]),
+            # ── Daily burden + circadian (timeline — live monitoring) ──
+            dbc.Row([
+                dbc.Col(dcc.Graph(id="res-daily-burden",
+                                  config={"responsive": True}),
+                        id="res-col-daily", width=6),
+                dbc.Col(dcc.Graph(id="res-circadian",
+                                  config={"responsive": True}),
+                        id="res-col-circadian", width=6),
+            ], className="mb-3"),
 
             # ── Events table ───────────────────────────────────────
             html.H6("Events", style={"color": "var(--ned-accent)", "marginTop": "16px"}),
@@ -530,9 +531,8 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     try:
         summary = db.get_summary(**filter_kw)
         events = db.get_events(**filter_kw)
-        daily = db.get_daily_burden(
-            animal_id=animal_id, min_confidence=min_confidence,
-            source=detector, category=category, cohort=cohort, group_id=group_id)
+        # Daily burden is computed in Python from the filtered events (so it can
+        # split by group and honour exclude/censor); circadian stays DB-side.
         circadian = db.get_circadian(
             animal_id=animal_id, min_confidence=min_confidence,
             source=detector, category=category, cohort=cohort, group_id=group_id)
@@ -579,7 +579,6 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
             dbc.Col(metric_card("Flagged", str(summary["n_flagged"])), width=2),
         ], className="g-2 mb-3")
 
-    daily_fig = _panel_legend(_build_daily_burden(daily))
     circ_fig = _panel_legend(_build_circadian(circadian))
     filters_active = bool(
         detector or cohort or group_id or animal_id
@@ -623,6 +622,8 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     # longitudinal view aligns cohorts with different calendar starts.
     animal_starts = {r["animal"]: r["rec_start"]
                      for r in animal_rollup if r["rec_start"]}
+    # Daily burden: per-group when >1 group, else convulsive/non-convulsive.
+    daily_fig = _panel_legend(_build_daily_burden(vis_events))
     group_fig = _panel_legend(
         _build_group_comparison(group_rollup, normalize, is_seizure))
     group_table = _build_group_table(group_rollup, is_seizure)
@@ -1042,35 +1043,53 @@ def _panel_legend(fig):
     return fig
 
 
-def _build_daily_burden(daily: list[dict]) -> go.Figure:
+def _build_daily_burden(events) -> go.Figure:
+    """Events per calendar date. Split by GROUP when more than one group is
+    present (stacked bars per group); otherwise split convulsive vs
+    non-convulsive (the severity view)."""
     fig = go.Figure()
-    if not daily:
+    dated = [e for e in events if _ev_date(e)]
+    if not dated:
         apply_fig_theme(fig)
-        fig.update_layout(title="Daily Seizure Burden")
+        fig.update_layout(title="Daily Seizure Burden", xaxis_title="Date",
+                          yaxis_title="Events")
         return fig
 
-    conv_dates, conv_counts = [], []
-    nonconv_dates, nonconv_counts = [], []
-    for row in daily:
-        if row["type"] == "convulsive":
-            conv_dates.append(row["date"])
-            conv_counts.append(row["n_events"])
-        else:
-            nonconv_dates.append(row["date"])
-            nonconv_counts.append(row["n_events"])
-
-    if conv_dates:
-        fig.add_trace(go.Bar(x=conv_dates, y=conv_counts,
-                             name="Convulsive", marker_color="#f85149"))
-    if nonconv_dates:
-        fig.add_trace(go.Bar(x=nonconv_dates, y=nonconv_counts,
-                             name="Non-convulsive", marker_color="#58a6ff"))
+    groups = sorted({(e.get("group_id") or "(unlabeled)") for e in dated})
+    if len(groups) > 1:
+        # Per-group stacked bars by date.
+        for i, g in enumerate(groups):
+            by_date: dict = {}
+            for e in dated:
+                if (e.get("group_id") or "(unlabeled)") != g:
+                    continue
+                d = _ev_date(e)
+                by_date[d] = by_date.get(d, 0) + 1
+            dts = sorted(by_date)
+            fig.add_trace(go.Bar(
+                x=dts, y=[by_date[d] for d in dts], name=g,
+                marker_color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)]))
+    else:
+        # Single group → convulsive / non-convulsive.
+        conv: dict = {}
+        nonconv: dict = {}
+        for e in dated:
+            d = _ev_date(e)
+            tgt = conv if e.get("type") == "convulsive" else nonconv
+            tgt[d] = tgt.get(d, 0) + 1
+        if conv:
+            dts = sorted(conv)
+            fig.add_trace(go.Bar(x=dts, y=[conv[d] for d in dts],
+                                 name="Convulsive", marker_color=_CONV_COLOR))
+        if nonconv:
+            dts = sorted(nonconv)
+            fig.add_trace(go.Bar(x=dts, y=[nonconv[d] for d in dts],
+                                 name="Non-convulsive", marker_color=_NONCONV_COLOR))
 
     fig.update_layout(
         barmode="stack", title="Daily Seizure Burden",
         xaxis_title="Date", yaxis_title="Events",
-        legend=dict(orientation="h", y=1.1),
-    )
+        legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
     return fig
 
