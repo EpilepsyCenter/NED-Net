@@ -648,6 +648,7 @@ def split_by_animal(
     specs: list[WindowSpec],
     val_fraction: float = 0.2,
     seed: int = 42,
+    stable_convulsive_val: bool = False,
 ) -> tuple[list[WindowSpec], list[WindowSpec]]:
     """Split window specs into train/val sets by animal ID.
 
@@ -670,6 +671,15 @@ def split_by_animal(
     specs : all window specs
     val_fraction : approximate fraction for validation (applied per stratum)
     seed : random seed
+    stable_convulsive_val : if True, fill the convulsive validation stratum with
+        the *smallest* convulsive animals first (instead of a random shuffle), so
+        the largest, most influential convulsive animals always stay in train.
+        This kills the huge seed-to-seed variance (F1 swung 0.67↔0.93 depending
+        purely on whether one dominant animal — e.g. 355675 with ~⅓ of all
+        convulsive events — happened to land in val) while keeping the split
+        leakage-free (val still tests genuinely unseen animals). Used by the
+        convulsive classifier; the seizure detector keeps the default (random)
+        behaviour, so its split is unchanged.
 
     Returns
     -------
@@ -706,16 +716,23 @@ def split_by_animal(
 
     val_animals: set[str] = set()
 
-    def _allocate(group: list[str], weight, ensure_both_sides: bool) -> None:
+    def _allocate(group: list[str], weight, ensure_both_sides: bool,
+                  smallest_first: bool = False) -> None:
         """Move whole animals into validation until ~val_fraction of this
         stratum's ``weight`` is reached. ``weight(aid)`` is the quantity being
         balanced — total windows for the background stratum, convulsive windows
         for the convulsive stratum (so validation gets a representative share of
         convulsive events, not just any animal that happens to have some). When
         ``ensure_both_sides`` and the stratum has ≥2 animals, guarantee at least
-        one animal on each side."""
+        one animal on each side. With ``smallest_first`` the group is taken in
+        ascending ``weight`` order (smallest animals fill val first) instead of a
+        random shuffle, so the largest animals stay in train — deterministic and
+        low-variance."""
         group = list(group)
-        rng.shuffle(group)
+        if smallest_first:
+            group.sort(key=weight)  # ascending: small animals → val, big → train
+        else:
+            rng.shuffle(group)
         grp_w = sum(weight(a) for a in group)
         taken = 0
         for aid in group:
@@ -734,7 +751,8 @@ def split_by_animal(
     # across train/val when ≥2 such animals exist; a lone convulsive animal
     # stays in train so the model can learn it.
     if len(conv_ids) >= 2:
-        _allocate(conv_ids, _n_conv, ensure_both_sides=True)
+        _allocate(conv_ids, _n_conv, ensure_both_sides=True,
+                  smallest_first=stable_convulsive_val)
     _allocate(other_ids, lambda a: len(animals[a]), ensure_both_sides=True)
 
     # Overall safety: at least one animal on each side.
@@ -967,7 +985,9 @@ def build_convulsive_datasets(
                          "Check that the dataset has confirmed seizure "
                          "annotations.")
 
-    train_specs, val_specs = split_by_animal(specs, seed=config.seed)
+    train_specs, val_specs = split_by_animal(
+        specs, seed=config.seed, stable_convulsive_val=True
+    )
 
     train_ds = ConvulsiveDataset(train_specs, config, augment=config.augment)
     val_ds = ConvulsiveDataset(val_specs, config, augment=False)
