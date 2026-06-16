@@ -65,7 +65,7 @@ python -m eeg_seizure_analyzer.ml.train_unet \
     --neg-pos-ratio 8 \
     --epochs 50 \
     --batch-size 16 \
-    --lr 1e-3 \
+    --lr 3e-4 \
     --weight-decay 1e-4 \
     --base-filters 32 \
     --depth 4 \
