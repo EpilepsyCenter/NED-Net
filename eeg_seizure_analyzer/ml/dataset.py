@@ -453,6 +453,52 @@ def _balance_negatives(
 
 
 # ---------------------------------------------------------------------------
+# Window signal loading (module-level so it's picklable for process pools)
+# ---------------------------------------------------------------------------
+
+
+def _read_window_signal(edf_path, eeg_channel, act_channel,
+                        start_sec, duration_sec, target_fs, target_samples):
+    """Read + downsample + normalize one window's signal (EEG, optionally with
+    a paired activity channel). Shared by SeizureDataset and the preload pool."""
+    rec = read_edf_window(
+        edf_path, channels=[eeg_channel],
+        start_sec=start_sec, duration_sec=duration_sec,
+    )
+    eeg = _downsample(rec.data, rec.fs, target_fs)
+    eeg = _normalize_channels(eeg)
+    eeg = _pad_or_trim(eeg, target_samples)
+    if act_channel is not None:
+        try:
+            act_rec = read_edf_window(
+                edf_path, channels=[act_channel],
+                start_sec=start_sec, duration_sec=duration_sec,
+            )
+            act = _downsample(act_rec.data, act_rec.fs, target_fs)
+            act = _normalize_channels(act)
+            act = _pad_or_trim(act, target_samples)
+            eeg = np.concatenate([eeg, act], axis=0)
+        except Exception:
+            eeg = np.concatenate(
+                [eeg, np.zeros((1, target_samples), dtype=np.float32)], axis=0)
+    return eeg
+
+
+def _preload_one(args):
+    """Process-pool worker: load one window, returning (index, signal) — or
+    (index, None) if it can't be read, so a single bad window doesn't abort the
+    whole preload (it falls back to a lazy read later)."""
+    idx, edf_path, eeg_channel, act_channel, start_sec, duration_sec, \
+        target_fs, target_samples = args
+    try:
+        return idx, _read_window_signal(
+            edf_path, eeg_channel, act_channel,
+            start_sec, duration_sec, target_fs, target_samples)
+    except Exception:
+        return idx, None
+
+
+# ---------------------------------------------------------------------------
 # PyTorch Dataset
 # ---------------------------------------------------------------------------
 
@@ -492,50 +538,47 @@ class SeizureDataset(Dataset):
     def _load_signal(self, spec: "WindowSpec") -> np.ndarray:
         """Read + downsample + normalize the window's signal from disk — the
         expensive, deterministic part that the cache stores."""
-        rec = read_edf_window(
-            spec.edf_path,
-            channels=[spec.eeg_channel],
-            start_sec=spec.start_sec,
-            duration_sec=spec.duration_sec,
-        )
-        eeg = _downsample(rec.data, rec.fs, self.config.target_fs)
-        eeg = _normalize_channels(eeg)
-        eeg = _pad_or_trim(eeg, self.target_samples)
-
-        if spec.act_channel is not None:
-            try:
-                act_rec = read_edf_window(
-                    spec.edf_path,
-                    channels=[spec.act_channel],
-                    start_sec=spec.start_sec,
-                    duration_sec=spec.duration_sec,
-                )
-                act = _downsample(act_rec.data, act_rec.fs, self.config.target_fs)
-                act = _normalize_channels(act)
-                act = _pad_or_trim(act, self.target_samples)
-                eeg = np.concatenate([eeg, act], axis=0)
-            except Exception:
-                zeros = np.zeros((1, self.target_samples), dtype=np.float32)
-                eeg = np.concatenate([eeg, zeros], axis=0)
-        return eeg
+        return _read_window_signal(
+            spec.edf_path, spec.eeg_channel, spec.act_channel,
+            spec.start_sec, spec.duration_sec,
+            self.config.target_fs, self.target_samples)
 
     def preload(self, max_workers: int = 8) -> None:
-        """Fill the window cache up front, in parallel (I/O-bound → threads).
+        """Fill the window cache up front, before creating the DataLoader.
 
-        Call this in the MAIN process before creating the DataLoader: on Linux
-        the worker processes fork and inherit the populated cache copy-on-write,
-        so every epoch reads from RAM with no disk I/O and no per-worker
-        duplication. No-op if caching is disabled."""
+        Uses a PROCESS pool (pyedflib's reader is not thread-safe — concurrent
+        threads corrupt each other's reads), each process loads its windows and
+        ships the arrays back to this main process. On Linux the DataLoader
+        workers then fork and inherit the cache copy-on-write, so epochs 2+ do
+        no disk I/O and there's no per-worker duplication. Falls back to a
+        serial read if the pool can't start. No-op if caching is disabled."""
         if not self.config.cache_windows:
             return
-        from concurrent.futures import ThreadPoolExecutor
-
-        def _one(i):
-            if i not in self._cache:
+        todo = [i for i in range(len(self.specs)) if i not in self._cache]
+        if not todo:
+            return
+        args = [
+            (i, s.edf_path, s.eeg_channel, s.act_channel, s.start_sec,
+             s.duration_sec, self.config.target_fs, self.target_samples)
+            for i, s in ((i, self.specs[i]) for i in todo)
+        ]
+        n = max(1, max_workers)
+        if n > 1:
+            try:
+                from concurrent.futures import ProcessPoolExecutor
+                with ProcessPoolExecutor(max_workers=n) as ex:
+                    for idx, sig in ex.map(_preload_one, args, chunksize=8):
+                        if sig is not None:
+                            self._cache[idx] = sig
+                return
+            except Exception:
+                pass  # fall through to serial
+        # Serial fallback (also used when max_workers <= 1).
+        for i in todo:
+            try:
                 self._cache[i] = self._load_signal(self.specs[i])
-
-        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
-            list(ex.map(_one, range(len(self.specs))))
+            except Exception:
+                pass
 
     def __getitem__(self, idx: int):
         spec = self.specs[idx]
