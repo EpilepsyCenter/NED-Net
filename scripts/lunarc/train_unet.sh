@@ -39,7 +39,8 @@
 # ---- Defaults (used if the var isn't already set / left blank) ----
 : "${MODEL_NAME:=unet_kaha_v1}"
 : "${EPOCHS:=50}"
-: "${BATCH_SIZE:=16}"
+: "${BATCH_SIZE:=32}"   # A100 + fp16 has plenty of headroom; bigger batch keeps
+#                         the tensor cores fed. Bump to 64 if memory allows.
 : "${LR:=3e-4}"
 : "${PATIENCE:=10}"
 : "${NEG_POS_RATIO:=8}"

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -354,12 +355,12 @@ def train_model(
     print(f"Val animals: {len(val_animals)} {sorted(val_animals)}")
 
     # ── Pre-load window cache ────────────────────────────────────
-    # Read every window once, in parallel, into an in-RAM cache. Training is
-    # I/O-bound (reading 60 s windows off disk dominates; the GPU is mostly
-    # idle), and without this each of the 50 epochs re-reads every window. Done
-    # in the main process so the (forked) DataLoader workers inherit the cache
-    # copy-on-write — so epochs 2+ do no disk I/O and there's no per-worker
-    # duplication.
+    # Read every window once, in parallel, into an in-RAM cache, so no epoch
+    # re-reads from disk. (Disk turned out NOT to be the main bottleneck — that
+    # was fp32 compute, now fixed with mixed precision below — but the cache is
+    # cheap insurance against slow project storage.) Done in the main process so
+    # the (forked) DataLoader workers inherit the cache copy-on-write — no
+    # per-worker duplication.
     if dataset_config.cache_windows:
         n_w = max(1, train_config.num_workers or 8)
         print(f"Pre-loading {len(train_ds) + len(val_ds)} windows into cache "
@@ -403,6 +404,30 @@ def train_model(
     else:
         device = torch.device("cpu")
     print(f"Using device: {device}")
+
+    # ── Mixed precision (CUDA only) ──────────────────────────────
+    # The real reason an A100 was no faster than an M4: this loop ran pure fp32,
+    # so the A100's tensor cores sat idle. autocast runs the conv-heavy forward
+    # in fp16 (bf16 where available — no GradScaler needed), typically a 2–4×
+    # speed-up on the A100 with no accuracy loss. MPS/CPU keep fp32 (use_amp
+    # False → autocast is a no-op), so the Mac path is unchanged.
+    use_amp = device.type == "cuda"
+    amp_dtype = (
+        torch.bfloat16
+        if use_amp and torch.cuda.is_bf16_supported()
+        else torch.float16
+    )
+    # GradScaler is only needed for fp16 (bf16 has fp32's exponent range).
+    scaler = torch.cuda.amp.GradScaler(
+        enabled=use_amp and amp_dtype == torch.float16
+    )
+
+    def autocast_ctx():
+        return (torch.autocast(device_type="cuda", dtype=amp_dtype)
+                if use_amp else nullcontext())
+
+    if use_amp:
+        print(f"Mixed precision: ON ({amp_dtype}".replace("torch.", "") + ")")
 
     # ── Model ────────────────────────────────────────────────────
     is_bendr = train_config.architecture == "bendr"
@@ -544,14 +569,16 @@ def train_model(
             if stop_check_fn is not None and stop_check_fn():
                 stopped = True
                 break
-            eeg = eeg.to(device)
-            mask = mask.to(device)
+            eeg = eeg.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
 
             optimizer.zero_grad()
-            logits = model(eeg)
-            loss = criterion(logits, mask)
-            loss.backward()
-            optimizer.step()
+            with autocast_ctx():
+                logits = model(eeg)
+                loss = criterion(logits, mask)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             train_losses.append(loss.item())
 
@@ -572,14 +599,15 @@ def train_model(
 
         with torch.no_grad():
             for eeg, mask, meta in val_loader:
-                eeg = eeg.to(device)
-                mask = mask.to(device)
+                eeg = eeg.to(device, non_blocking=True)
+                mask = mask.to(device, non_blocking=True)
 
-                logits = model(eeg)
-                loss = criterion(logits, mask)
+                with autocast_ctx():
+                    logits = model(eeg)
+                    loss = criterion(logits, mask)
                 val_losses.append(loss.item())
 
-                probs = torch.sigmoid(logits).cpu().numpy()
+                probs = torch.sigmoid(logits.float()).cpu().numpy()
                 targets = mask.cpu().numpy()
 
                 # ch 0 = all seizures, ch 1 = convulsive — score both.

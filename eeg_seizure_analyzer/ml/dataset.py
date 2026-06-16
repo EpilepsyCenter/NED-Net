@@ -56,8 +56,9 @@ class DatasetConfig:
     exclude_animals: tuple = ()  # animal IDs to drop from the dataset entirely
     #   (no train/val windows) — e.g. noisy recordings.
     cache_windows: bool = True  # keep each window's read+resampled signal in RAM
-    #   after the first read, so epochs 2+ skip disk I/O (training is I/O-bound,
-    #   not GPU-bound). Masks are rebuilt and augmentation re-applied per epoch.
+    #   after the first read, so no epoch re-reads from disk. (Compute, not I/O,
+    #   was the real bottleneck — see mixed precision in train.py — but the cache
+    #   is cheap insurance.) Masks are rebuilt and augmentation re-applied per epoch.
 
 
 # ---------------------------------------------------------------------------
