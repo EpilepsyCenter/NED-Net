@@ -561,7 +561,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     if category == "spike":
         summary_cards = dbc.Row([
             dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
-            dbc.Col(metric_card("Animals", str(summary["n_animals"])), width=2),
+            dbc.Col(metric_card("Animals", str(summary.get("n_animals_analyzed", summary["n_animals"]))), width=2),
             dbc.Col(metric_card("Total spikes", str(n_total), accent=True), width=2),
             dbc.Col(metric_card("Flagged", str(summary["n_flagged"])), width=2),
         ], className="g-2 mb-3")
@@ -572,7 +572,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         pct_nc = f"({round(100*n_nonconv/n_total)}%)" if n_total else ""
         summary_cards = dbc.Row([
             dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
-            dbc.Col(metric_card("Animals", str(summary["n_animals"])), width=2),
+            dbc.Col(metric_card("Animals", str(summary.get("n_animals_analyzed", summary["n_animals"]))), width=2),
             dbc.Col(metric_card("Total events", str(n_total), accent=True), width=2),
             dbc.Col(metric_card("Convulsive", f"{n_conv} {pct_c}"), width=2),
             dbc.Col(metric_card("Non-conv", f"{n_nonconv} {pct_nc}"), width=2),
