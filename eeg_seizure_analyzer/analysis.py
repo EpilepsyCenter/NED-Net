@@ -328,6 +328,7 @@ def process_chunk(
     classification_params: ClassificationParams | None = None,
     progress_callback=None,
     file_metadata: dict | None = None,
+    overwrite: bool = False,
 ) -> dict:
     """Master detection function shared by all three analysis modes.
 
@@ -373,8 +374,9 @@ def process_chunk(
         cohort = file_metadata.get("cohort", "") or cohort
         group_id = file_metadata.get("group_id", "") or group_id
 
-    # Skip if already processed
-    if str(edf_path) in db.get_processed_paths():
+    # Skip if already processed (unless overwriting — write_chunk then deletes
+    # and replaces the existing chunk + its events).
+    if not overwrite and str(edf_path) in db.get_processed_paths():
         return {"skipped": True, "reason": "already_processed"}
 
     # Get channel info
@@ -545,6 +547,7 @@ def process_spike_chunk(
     group_id: str = "",
     progress_callback=None,
     file_metadata: dict | None = None,
+    overwrite: bool = False,
 ) -> dict:
     """Run IS CNN detection on an EDF file and write results to SQLite.
 
@@ -729,6 +732,7 @@ def run_batch(
     min_duration_sec: float = 5.0,
     merge_gap_sec: float = 2.0,
     include_subfolders: bool = True,
+    overwrite: bool = False,
     cohort: str = "",
     group_id: str = "",
     classification_params: ClassificationParams | None = None,
@@ -758,7 +762,9 @@ def run_batch(
     scan = scan_folder(folder, include_subfolders)
     files = scan["files"]
     processed_paths = db.get_processed_paths()
-    to_process = [f for f in files if str(f) not in processed_paths]
+    # When overwriting, re-run every file; otherwise skip already-processed ones.
+    to_process = files if overwrite else [
+        f for f in files if str(f) not in processed_paths]
 
     _update_status(
         running=True,
@@ -818,6 +824,7 @@ def run_batch(
                     group_id=group_id,
                     progress_callback=_batch_progress,
                     file_metadata=file_meta,
+                    overwrite=overwrite,
                 )
             else:
                 process_chunk(
@@ -833,6 +840,7 @@ def run_batch(
                     classification_params=classification_params,
                     progress_callback=_batch_progress,
                     file_metadata=file_meta,
+                    overwrite=overwrite,
                 )
         except Exception as e:
             _update_status(last_error=f"{Path(edf_path).name}: {e}")

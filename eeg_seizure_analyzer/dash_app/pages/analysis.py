@@ -325,6 +325,18 @@ def layout(sid: str | None) -> html.Div:
                 ], width=5),
             ], className="g-3 mb-3"),
 
+            dbc.Checklist(
+                id="an-overwrite",
+                options=[{
+                    "label": " Re-analyze files already in the database "
+                             "(overwrite previous results for this detector)",
+                    "value": "overwrite",
+                }],
+                value=[],
+                switch=True,
+                style={"fontSize": "0.82rem", "marginBottom": "12px"},
+            ),
+
             # ── HVSW / HPD classification thresholds ──────────────
             collapsible_section(
                 "HVSW / HPD classification", "an-cls",
@@ -1008,12 +1020,13 @@ def check_single_processed(path):
     State("an-hpd-freq", "value"),
     State("an-hpd-hfi", "value"),
     State("an-detection-type", "value"),
+    State("an-overwrite", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
                min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
-               det_type, sid):
+               det_type, overwrite_val, sid):
     if not n_clicks:
         return no_update, no_update, no_update
 
@@ -1024,6 +1037,7 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
 
     threshold = float(threshold or 0.5)
     conv_threshold = float(conv_threshold or 0.5)
+    overwrite = bool(overwrite_val and "overwrite" in overwrite_val)
     is_spike = det_type == "spike"
 
     cls_params = ClassificationParams(
@@ -1069,7 +1083,7 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
                 )
 
             if is_spike:
-                analysis.process_spike_chunk(
+                res = analysis.process_spike_chunk(
                     edf_path=edf_path,
                     model_name=model_name,
                     confidence_threshold=threshold,
@@ -1077,9 +1091,10 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
                     merge_gap_sec=float(merge_gap or 0.05),
                     mode="single",
                     progress_callback=_prog,
+                    overwrite=overwrite,
                 )
             else:
-                analysis.process_chunk(
+                res = analysis.process_chunk(
                     edf_path=edf_path,
                     model_name=model_name,
                     confidence_threshold=threshold,
@@ -1089,10 +1104,17 @@ def run_single(n_clicks, edf_path, model_name, threshold, conv_threshold,
                     mode="single",
                     classification_params=cls_params,
                     progress_callback=_prog,
+                    overwrite=overwrite,
                 )
-            analysis._update_status(
-                running=False, processed_files=1,
-            )
+            if res and res.get("skipped"):
+                analysis._update_status(
+                    running=False, processed_files=0,
+                    last_error="This file is already in the database. "
+                               "Tick 'Re-analyze files already in the database' "
+                               "to overwrite.",
+                )
+            else:
+                analysis._update_status(running=False, processed_files=1)
         except Exception as e:
             analysis._update_status(
                 running=False,
@@ -1162,12 +1184,13 @@ def scan_batch_folder(n, folder, include_sub):
     State("an-hpd-hfi", "value"),
     State("an-detection-type", "value"),
     State("an-batch-meta-path", "value"),
+    State("an-overwrite", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
               min_dur, merge_gap, hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi,
-              det_type, meta_path, sid):
+              det_type, meta_path, overwrite_val, sid):
     if not n:
         return no_update, no_update, no_update, no_update, no_update
     if not model_name:
@@ -1211,6 +1234,7 @@ def run_batch(n, folder, include_sub, model_name, threshold, conv_threshold,
     batch_kwargs = {
         "confidence_threshold": threshold,
         "convulsive_threshold": float(conv_threshold or 0.5),
+        "overwrite": bool(overwrite_val and "overwrite" in overwrite_val),
         "min_duration_sec": float(min_dur or (0.002 if is_spike else 5.0)),
         "merge_gap_sec": float(merge_gap or (0.05 if is_spike else 2.0)),
         "include_subfolders": include_sub,
