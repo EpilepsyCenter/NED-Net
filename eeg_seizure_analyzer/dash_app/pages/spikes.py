@@ -40,6 +40,24 @@ _SP_DEFAULTS = {
 
 _SP_SLIDER_KEYS = list(_SP_DEFAULTS.keys())
 
+# ── ML (U-Net / BENDR) detection methods ────────────────────────────
+# Detection methods offered in the IS Detection tab. "classical" is the
+# existing rule-based detector; "unet"/"bendr" run trained spike models via
+# ml.spike_predict.predict_spikes. The isolation filter (sp-iso-win /
+# sp-iso-max) is reused for the ML methods too, so spikes inside a
+# burst/seizure are rejected and only isolated spikes survive as IS.
+_SP_METHOD_OPTIONS = [
+    {"label": "Classical", "value": "classical"},
+    {"label": "U-Net", "value": "unet"},
+    # {"label": "BENDR", "value": "bendr"},  # added once U-Net path is proven
+]
+# ML inference param defaults (per-architecture slider ids: sp-<arch>-*).
+_SP_ML_DEFAULTS = {
+    "threshold": 0.5,        # probability threshold
+    "min_duration_ms": 2.0,  # discard spikes shorter than this (ms)
+    "merge_gap_ms": 50.0,    # merge detections closer than this (ms)
+}
+
 # ── Filter defaults ─────────────────────────────────────────────────
 
 # Default inspector options
@@ -102,6 +120,7 @@ def layout(sid: str | None) -> html.Div:
     # Params restores the baseline-method dropdown, not just the sliders).
     persisted_bl_method = overrides.get(
         "sp-bl-method", state.extra.get("sp_bl_method", "percentile"))
+    persisted_method = state.extra.get("sp_method", "classical")
 
     # Channel selection
     selected_channels = state.extra.get("sp_selected_channels",
@@ -159,18 +178,51 @@ def layout(sid: str | None) -> html.Div:
                 ],
             ),
 
-            # Parameters
-            dbc.Row([
-                dbc.Col([
-                    _spike_params(_val),
-                ], width=4),
-                dbc.Col([
-                    _morphology_params(_val),
-                ], width=4),
-                dbc.Col([
-                    _baseline_params(_val, persisted_bl_method),
-                ], width=4),
-            ], className="g-3 mb-3"),
+            # Detection method selector (Classical / U-Net)
+            html.Div(
+                style={"marginBottom": "16px", "maxWidth": "260px"},
+                children=[
+                    html.Label(
+                        "Detection method",
+                        style={"fontSize": "0.82rem", "fontWeight": "500",
+                               "marginBottom": "6px", "display": "block",
+                               "color": "var(--ned-text-muted)"}),
+                    dcc.Dropdown(
+                        id="sp-method-selector",
+                        options=_SP_METHOD_OPTIONS,
+                        value=persisted_method,
+                        clearable=False,
+                        style={"fontSize": "0.82rem"},
+                    ),
+                ],
+            ),
+
+            # Classical params (shown/hidden by method). Isolation lives here and
+            # is reused by the ML methods, so the panel stays mounted.
+            html.Div(
+                id="sp-classical-params",
+                style={"display": "block" if persisted_method == "classical" else "none"},
+                children=[
+                    dbc.Row([
+                        dbc.Col([
+                            _spike_params(_val),
+                        ], width=4),
+                        dbc.Col([
+                            _morphology_params(_val),
+                        ], width=4),
+                        dbc.Col([
+                            _baseline_params(_val, persisted_bl_method),
+                        ], width=4),
+                    ], className="g-3 mb-3"),
+                ],
+            ),
+
+            # U-Net (ML) params (shown/hidden by method)
+            html.Div(
+                id="sp-unet-params",
+                style={"display": "block" if persisted_method == "unet" else "none"},
+                children=[_sp_unet_params(state)],
+            ),
 
             # Action buttons + settings buttons
             html.Div(
@@ -401,6 +453,142 @@ def _baseline_params(_val, bl_method="percentile") -> html.Div:
                           "Spikes with more neighbours are rejected (burst/seizure)."),
         ],
     )
+
+
+def _sp_unet_params(state) -> html.Div:
+    """U-Net (ML) spike-detection controls: trained-model selector + threshold,
+    min-duration, merge-gap. The shared isolation filter (sp-iso-win /
+    sp-iso-max, in the Baseline & Isolation panel) is applied to ML results
+    too, so only isolated spikes survive as IS."""
+    try:
+        from eeg_seizure_analyzer.ml.spike_train import list_spike_models
+        models = list_spike_models()
+        unet_models = [m for m in models
+                       if m.get("architecture", "unet") == "unet"]
+    except Exception:
+        unet_models = []
+
+    opts = [
+        {"label": (f"{m['name']} — F1: {m['best_event_f1']:.2f}"
+                   if m.get("best_event_f1") else m["name"]),
+         "value": m["name"]}
+        for m in unet_models
+    ]
+    default_model = state.extra.get(
+        "sp_unet_model", opts[0]["value"] if opts else None)
+    mp = state.extra.get("sp_unet_params", {})
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col([
+                collapsible_section(
+                    "U-Net Model", "sp-unet-cfg", default_open=True,
+                    children=[
+                        html.Div([
+                            html.Label("Trained spike model",
+                                       style={"fontSize": "0.78rem",
+                                              "color": "var(--ned-text-muted)",
+                                              "marginBottom": "4px"}),
+                            dcc.Dropdown(
+                                id="sp-unet-model",
+                                options=opts,
+                                value=default_model,
+                                clearable=False,
+                                placeholder="No U-Net spike models — train one in "
+                                            "Training → Interictal Spikes first",
+                                style={"fontSize": "0.82rem"},
+                            ),
+                        ], style={"marginBottom": "12px"}),
+                        param_control(
+                            "Threshold", "sp-unet-threshold", 0.1, 0.9, 0.05,
+                            mp.get("threshold", _SP_ML_DEFAULTS["threshold"]),
+                            "Probability threshold. Lower = more sensitive."),
+                        param_control(
+                            "Min duration (ms)", "sp-unet-min-dur", 1.0, 50.0, 1.0,
+                            mp.get("min_duration_ms", _SP_ML_DEFAULTS["min_duration_ms"]),
+                            "Discard detections shorter than this."),
+                        param_control(
+                            "Merge gap (ms)", "sp-unet-merge-gap", 10.0, 200.0, 5.0,
+                            mp.get("merge_gap_ms", _SP_ML_DEFAULTS["merge_gap_ms"]),
+                            "Merge detections closer than this."),
+                    ],
+                ),
+            ], width=6),
+            dbc.Col([
+                html.Div([
+                    html.Div(
+                        "\U0001f9e0 U-Net is a learned model — no rule-based "
+                        "front-end to tune.",
+                        style={"fontSize": "0.82rem", "fontWeight": "500",
+                               "marginBottom": "8px"}),
+                    html.Div(
+                        "Isolation filtering (window + max neighbours, set in "
+                        "Baseline & Isolation) is applied to the predictions, so "
+                        "spikes inside bursts/seizures are rejected — only "
+                        "isolated spikes are kept as IS. To improve detection, "
+                        "annotate more spikes and re-train the model.",
+                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                ], style={"padding": "12px", "border": "1px solid var(--ned-border)",
+                          "borderRadius": "6px", "marginTop": "8px"}),
+            ], width=6),
+        ], className="g-3 mb-3"),
+    ])
+
+
+def _isolate_events(events, win_sec: float, max_neighbours: int):
+    """Reject events inside dense bursts/seizures — keep only isolated spikes.
+
+    Same rule as the classical SpikeDetector._apply_isolation_filter: per
+    channel, an event is dropped if it has MORE than ``max_neighbours`` other
+    events within ±``win_sec`` (by event centre time).
+    """
+    if not events:
+        return events
+    from collections import defaultdict
+    by_ch = defaultdict(list)
+    for e in events:
+        by_ch[e.channel].append(e)
+    kept = []
+    for evs in by_ch.values():
+        times = np.array([e.center for e in evs])
+        for e in evs:
+            t = e.center
+            neighbours = int(np.sum((np.abs(times - t) <= win_sec) & (times != t)))
+            if neighbours <= max_neighbours:
+                kept.append(e)
+    kept.sort(key=lambda e: e.onset_sec)
+    return kept
+
+
+def _detect_spikes_unet(rec, channels, model_name, threshold,
+                        min_dur_ms, merge_gap_ms, iso_win, iso_max):
+    """Run trained U-Net spike detection on the loaded EDF, then apply the
+    isolation filter. Returns ``(events, detection_info)`` matching the shape
+    the classical path produces."""
+    from eeg_seizure_analyzer.ml.spike_predict import predict_spikes
+
+    src = getattr(rec, "source_path", "") or ""
+    if not src or not src.lower().endswith(".edf"):
+        raise ValueError("U-Net spike detection requires a loaded EDF file.")
+    if not model_name:
+        raise ValueError("Select a trained U-Net spike model first.")
+
+    events = predict_spikes(
+        src, model_name, channels=channels,
+        threshold=float(threshold),
+        min_duration_sec=float(min_dur_ms) / 1000.0,
+        merge_gap_sec=float(merge_gap_ms) / 1000.0,
+    )
+    n_raw = len(events)
+    events = _isolate_events(events, float(iso_win), int(iso_max))
+    detection_info = {ch: {} for ch in channels}
+    detection_info["_ml"] = {
+        "model": model_name, "threshold": float(threshold),
+        "n_raw": n_raw, "n_isolated": len(events),
+        "isolation_window_sec": float(iso_win),
+        "isolation_max_neighbours": int(iso_max),
+    }
+    return events, detection_info
 
 
 # ── Filter controls ─────────────────────────────────────────────────
@@ -685,6 +873,24 @@ def auto_save_sp_extras(*args):
 
 
 @callback(
+    Output("sp-classical-params", "style"),
+    Output("sp-unet-params", "style"),
+    Input("sp-method-selector", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def toggle_sp_method(method, sid):
+    """Show the param panel for the selected detection method and persist it."""
+    method = method or "classical"
+    state = server_state.get_session(sid)
+    state.extra["sp_method"] = method
+    blk = {"display": "block"}
+    hid = {"display": "none"}
+    return (blk if method == "classical" else hid,
+            blk if method == "unet" else hid)
+
+
+@callback(
     Output("sp-status", "children"),
     Output("sp-results", "children"),
     Output("sp-clear-btn", "style"),
@@ -713,6 +919,12 @@ def auto_save_sp_extras(*args):
     State({"type": "param-slider", "key": "sp-bl-rms"}, "value"),
     State({"type": "param-slider", "key": "sp-iso-win"}, "value"),
     State({"type": "param-slider", "key": "sp-iso-max"}, "value"),
+    # ML (U-Net) method controls
+    State("sp-method-selector", "value"),
+    State("sp-unet-model", "value"),
+    State({"type": "param-slider", "key": "sp-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sp-unet-min-dur"}, "value"),
+    State({"type": "param-slider", "key": "sp-unet-merge-gap"}, "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
@@ -728,6 +940,7 @@ def run_spike_detection(
     prom, maxw, minw, refr,
     bl_method, bl_pct, bl_rms,
     iso_win, iso_max,
+    sp_method, unet_model, unet_thr, unet_min_dur, unet_merge_gap,
     sid,
 ):
     """Run interictal spike detection, clear results, or apply filters."""
@@ -811,35 +1024,55 @@ def run_spike_detection(
             isolation_max_neighbours=int(iso_max),
         )
 
-        detector = SpikeDetector()
         all_spikes = []
         detection_info = {}
-
         channels = selected_channels or list(range(rec.n_channels))
 
-        # Use chunked detection for large files (>30 min per channel)
-        _src = getattr(rec, "source_path", "") or ""
-        _use_chunked = (
-            _src.lower().endswith(".edf")
-            and rec.duration_sec > 1800
-        )
-
-        if _use_chunked:
-            from eeg_seizure_analyzer.detection.base import detect_chunked
-            all_spikes, detection_info = detect_chunked(
-                detector,
-                path=_src,
-                channels=channels,
-                chunk_duration_sec=1800.0,
-                overlap_sec=10.0,  # shorter overlap for spikes (short events)
-                params=params,
+        if sp_method == "unet":
+            # ── U-Net (ML) path ──────────────────────────────────────
+            # Persist selections so the UI remembers them.
+            state.extra["sp_method"] = "unet"
+            state.extra["sp_unet_model"] = unet_model
+            ml_params = {
+                "threshold": (float(unet_thr) if unet_thr is not None
+                              else _SP_ML_DEFAULTS["threshold"]),
+                "min_duration_ms": (float(unet_min_dur) if unet_min_dur is not None
+                                    else _SP_ML_DEFAULTS["min_duration_ms"]),
+                "merge_gap_ms": (float(unet_merge_gap) if unet_merge_gap is not None
+                                 else _SP_ML_DEFAULTS["merge_gap_ms"]),
+            }
+            state.extra["sp_unet_params"] = ml_params
+            all_spikes, detection_info = _detect_spikes_unet(
+                rec, channels, unet_model,
+                ml_params["threshold"], ml_params["min_duration_ms"],
+                ml_params["merge_gap_ms"], iso_win, iso_max,
             )
         else:
-            for ch in channels:
-                ch_spikes = detector.detect(rec, ch, params=params)
-                all_spikes.extend(ch_spikes)
-                if hasattr(detector, "_last_detection_info"):
-                    detection_info[ch] = dict(detector._last_detection_info)
+            # ── Classical path ───────────────────────────────────────
+            detector = SpikeDetector()
+            # Use chunked detection for large files (>30 min per channel)
+            _src = getattr(rec, "source_path", "") or ""
+            _use_chunked = (
+                _src.lower().endswith(".edf")
+                and rec.duration_sec > 1800
+            )
+
+            if _use_chunked:
+                from eeg_seizure_analyzer.detection.base import detect_chunked
+                all_spikes, detection_info = detect_chunked(
+                    detector,
+                    path=_src,
+                    channels=channels,
+                    chunk_duration_sec=1800.0,
+                    overlap_sec=10.0,  # shorter overlap for spikes (short events)
+                    params=params,
+                )
+            else:
+                for ch in channels:
+                    ch_spikes = detector.detect(rec, ch, params=params)
+                    all_spikes.extend(ch_spikes)
+                    if hasattr(detector, "_last_detection_info"):
+                        detection_info[ch] = dict(detector._last_detection_info)
 
         # Assign animal IDs from channel mapping
         ch_ids = state.extra.get("channel_animal_ids", {})
