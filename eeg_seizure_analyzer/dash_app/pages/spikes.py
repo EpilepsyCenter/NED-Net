@@ -224,6 +224,11 @@ def layout(sid: str | None) -> html.Div:
                 children=[_sp_unet_params(state)],
             ),
 
+            # Isolation — shared across methods, always visible
+            dbc.Row([
+                dbc.Col([_isolation_params(_val)], width=4),
+            ], className="g-3 mb-3"),
+
             # Action buttons + settings buttons
             html.Div(
                 style={"display": "flex", "gap": "12px", "marginBottom": "20px",
@@ -238,6 +243,12 @@ def layout(sid: str | None) -> html.Div:
                         "Clear Results",
                         id="sp-clear-btn",
                         className="btn-ned-danger",
+                        style={"display": "inline-block" if has_results else "none"},
+                    ),
+                    dbc.Button(
+                        "Add to project database",
+                        id="sp-add-to-db-btn",
+                        className="btn-ned-secondary",
                         style={"display": "inline-block" if has_results else "none"},
                     ),
                     html.Div(style={"flex": "1"}),
@@ -258,6 +269,7 @@ def layout(sid: str | None) -> html.Div:
             ),
 
             html.Div(id="sp-settings-status", style={"marginBottom": "8px"}),
+            html.Div(id="sp-add-to-db-status", style={"marginBottom": "8px"}),
 
             dcc.Loading(
                 html.Div(id="sp-status"),
@@ -428,7 +440,7 @@ def _morphology_params(_val) -> html.Div:
 
 def _baseline_params(_val, bl_method="percentile") -> html.Div:
     return collapsible_section(
-        "Baseline & Isolation", "sp-baseline",
+        "Baseline", "sp-baseline",
         default_open=True,
         children=[
             html.Div([
@@ -447,9 +459,22 @@ def _baseline_params(_val, bl_method="percentile") -> html.Div:
             ], style={"marginBottom": "12px"}),
             param_control("Percentile", "sp-bl-pct", 1, 50, 1, _val("sp-bl-pct")),
             param_control("RMS window (s)", "sp-bl-rms", 1.0, 60.0, 1.0, _val("sp-bl-rms")),
-            param_control("Isolation window (s)", "sp-iso-win", 0.5, 10.0, 0.5, _val("sp-iso-win"),
+        ],
+    )
+
+
+def _isolation_params(_val) -> html.Div:
+    """Isolation filter — shared by ALL detection methods (classical + ML).
+    Rejects spikes inside bursts/seizures so only isolated spikes are kept."""
+    return collapsible_section(
+        "Isolation (all methods)", "sp-isolation",
+        default_open=True,
+        children=[
+            param_control("Isolation window (s)", "sp-iso-win", 0.5, 10.0, 0.5,
+                          _val("sp-iso-win"),
                           "Window around spike to count neighbours."),
-            param_control("Max neighbours", "sp-iso-max", 1, 30, 1, _val("sp-iso-max"),
+            param_control("Max neighbours", "sp-iso-max", 1, 30, 1,
+                          _val("sp-iso-max"),
                           "Spikes with more neighbours are rejected (burst/seizure)."),
         ],
     )
@@ -808,7 +833,7 @@ def _apply_spike_filters(spikes, *, min_amp=0, max_amp=None,
 
 # ── Collapse toggles ─────────────────────────────────────────────────
 
-for section_id in ["sp-det", "sp-morph", "sp-baseline"]:
+for section_id in ["sp-det", "sp-morph", "sp-baseline", "sp-isolation", "sp-unet-cfg"]:
     @callback(
         Output(f"{section_id}-collapse", "is_open"),
         Output(f"{section_id}-chevron", "children"),
@@ -1155,6 +1180,116 @@ def run_spike_detection(
         traceback.print_exc()
         return (alert(f"Detection failed: {e}", "danger"),
                 html.Div(), hide_style, hide_style, hide_style, html.Div(), html.Div())
+
+
+@callback(
+    Output("sp-add-to-db-status", "children"),
+    Input("sp-add-to-db-btn", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def add_spikes_to_project_db(n_clicks, sid):
+    """Write the current post-filter spike detections to the active project DB.
+
+    Stored with category='spike' so they show under the Interictal Spikes view
+    in Results. ``source`` records the detector (spike_unet / spike_classical);
+    re-adding replaces only that source's spike events for the file, leaving
+    other detectors' events intact.
+    """
+    if not n_clicks:
+        return no_update
+    from eeg_seizure_analyzer import db
+    from eeg_seizure_analyzer.io.channel_ids import (
+        load_channel_tags, load_channel_ids,
+    )
+
+    state = server_state.get_session(sid)
+    rec = state.recording
+    src_path = getattr(rec, "source_path", "") if rec else ""
+    if not rec or not src_path or not src_path.lower().endswith(".edf"):
+        return alert("Load an EDF file and run detection first.", "warning")
+    if not state.spike_events:
+        return alert("No detections to add. Run detection first.", "warning")
+
+    # Post-filter set (mirror the results view).
+    fv = {**_SP_FILTER_DEFAULTS, **state.extra.get("sp_filter_values", {})}
+    if state.extra.get("sp_filter_enabled", True):
+        events = _apply_spike_filters(state.spike_events, **fv)
+    else:
+        events = list(state.spike_events)
+    if not events:
+        return alert("No spikes pass the current filters.", "warning")
+
+    method = state.extra.get("sp_method", "classical")
+    source = "spike_unet" if method == "unet" else "spike_classical"
+    tags = load_channel_tags(src_path)
+    ch_ids = state.extra.get("channel_animal_ids") or load_channel_ids(src_path) or {}
+    try:
+        from eeg_seizure_analyzer.analysis import (
+            parse_date_from_path, _get_file_start_hour,
+        )
+        date = parse_date_from_path(src_path) or ""
+        start_hour = _get_file_start_hour(src_path)
+    except Exception:
+        date, start_hour = "", None
+
+    dicts = []
+    n_no_id = 0
+    for ev in events:
+        ch = ev.channel
+        hour = ((start_hour + int(ev.onset_sec // 3600)) % 24
+                if start_hour is not None else None)
+        aid = ev.animal_id or ch_ids.get(ch, "")
+        if not aid:
+            n_no_id += 1
+        dicts.append({
+            "animal_id": aid,
+            "date": date,
+            "start_sec": ev.onset_sec,
+            "end_sec": ev.offset_sec,
+            "duration_sec": ev.duration_sec,
+            "type": "spike",
+            "cnn_confidence": ev.confidence,
+            "movement_flag": ev.movement_flag,
+            "hour_of_day": hour,
+            "cohort": tags["cohort"].get(ch, ""),
+            "group_id": tags["group"].get(ch, ""),
+            "channel": ch,
+        })
+
+    # Full recording length (header-only read) for per-hour rate normalisation.
+    try:
+        from eeg_seizure_analyzer.io.edf_reader import scan_edf_channels
+        _ci = scan_edf_channels(src_path)
+        rec_sec = max((c["n_samples"] / c["fs"]
+                       for c in _ci if c.get("fs")), default=0.0)
+    except Exception:
+        rec_sec = 0.0
+
+    # Per-animal observation for every assigned channel (so quiet animals still
+    # get recording time / coverage in Results).
+    fa_map = {}
+    for ch, aid in (ch_ids or {}).items():
+        if not aid or aid in fa_map:
+            continue
+        fa_map[aid] = {
+            "valid_sec": rec_sec,
+            "cohort": tags["cohort"].get(ch, ""),
+            "group_id": tags["group"].get(ch, ""),
+        }
+
+    try:
+        total = db.add_manual_events(
+            src_path, dicts, source=source, category="spike",
+            recording_sec=rec_sec, file_animals=fa_map)
+    except Exception as e:
+        return alert(f"Failed to add events: {e}", "danger")
+
+    proj = db.get_active_project()
+    note = f" ({n_no_id} without an Animal ID)" if n_no_id else ""
+    return alert(
+        f"Added {total} spike(s) to project '{proj}'{note}. "
+        f"View them in Results → Interictal Spikes.", "success")
 
 
 def _build_results(rec, all_spikes, spikes, total_count=None):
