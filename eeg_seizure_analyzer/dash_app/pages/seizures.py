@@ -152,6 +152,14 @@ _ENS_DEFAULTS = {
 }
 _ENS_SLIDER_KEYS = list(_ENS_DEFAULTS.keys())
 
+# Every method's slider keys, in one list — so "Save User Params" can read the
+# LIVE value of every method's sliders (all use the {"type":"param-slider"}
+# pattern), not just Spike-Train. Without this, Spectral-Band / Autocorrelation
+# / Ensemble params were only saved if a Detect had been run first.
+_ALL_SZ_SLIDER_KEYS = (
+    _SZ_SLIDER_KEYS + _SB_SLIDER_KEYS + _AC_SLIDER_KEYS + _ENS_SLIDER_KEYS
+)
+
 # Default filter values
 _FILTER_DEFAULTS = {
     "min_conf": 0, "max_conf": None,
@@ -583,7 +591,9 @@ def layout(sid: str | None) -> html.Div:
                 style={"display": "block" if persisted_method == "spectral_band" else "none"},
                 children=[_spectral_band_params(
                     _sb_val,
-                    sb_bnd_method=state.extra.get("sz_sb_bnd_method", "none"),
+                    sb_bnd_method=overrides.get(
+                        "sz-sb-bnd-method",
+                        state.extra.get("sz_sb_bnd_method", "none")),
                 )],
             ),
 
@@ -593,8 +603,12 @@ def layout(sid: str | None) -> html.Div:
                 style={"display": "block" if persisted_method == "autocorrelation" else "none"},
                 children=[_autocorrelation_params(
                     _ac_val,
-                    ac_bl_method=state.extra.get("sz_ac_bl_method", "percentile"),
-                    ac_bnd_method=state.extra.get("sz_ac_bnd_method", "signal"),
+                    ac_bl_method=overrides.get(
+                        "sz-ac-bl-method",
+                        state.extra.get("sz_ac_bl_method", "percentile")),
+                    ac_bnd_method=overrides.get(
+                        "sz-ac-bnd-method",
+                        state.extra.get("sz_ac_bnd_method", "signal")),
                 )],
             ),
 
@@ -4652,9 +4666,12 @@ def _render_inspector(rec, event, det_info, state, *,
     Input("sz-save-settings-btn", "n_clicks"),
     Input("sz-recall-settings-btn", "n_clicks"),
     Input("sz-recall-det-btn", "n_clicks"),
-    *[State({"type": "param-slider", "key": k}, "value") for k in _SZ_SLIDER_KEYS],
+    *[State({"type": "param-slider", "key": k}, "value") for k in _ALL_SZ_SLIDER_KEYS],
     State("sz-bl-method", "value"),
     State("sz-bnd-method", "value"),
+    State("sz-sb-bnd-method", "value"),
+    State("sz-ac-bl-method", "value"),
+    State("sz-ac-bnd-method", "value"),
     State("sz-classify-subtypes", "value"),
     State("sz-channel-selector", "value"),
     # Filter values
@@ -4680,15 +4697,18 @@ def handle_settings(*args):
                   "sz-recall-det-btn": args[3]}
     if not btn_clicks.get(trigger):
         return no_update, no_update
-    n_keys = len(_SZ_SLIDER_KEYS)
+    n_keys = len(_ALL_SZ_SLIDER_KEYS)
     n_filter_ids = len(_ALL_FILTER_IDS)
     current_values = args[4:4 + n_keys]
     bl_method = args[4 + n_keys]
     bnd_method = args[4 + n_keys + 1]
-    classify = args[4 + n_keys + 2]
-    channels = args[4 + n_keys + 3]
+    sb_bnd_method = args[4 + n_keys + 2]
+    ac_bl_method = args[4 + n_keys + 3]
+    ac_bnd_method = args[4 + n_keys + 4]
+    classify = args[4 + n_keys + 5]
+    channels = args[4 + n_keys + 6]
     # Filter states
-    filter_offset = 4 + n_keys + 4
+    filter_offset = 4 + n_keys + 7
     filter_slider_vals = args[filter_offset:filter_offset + n_filter_ids]
     filt_channel = args[filter_offset + n_filter_ids]
     filt_severity = args[filter_offset + n_filter_ids + 1]
@@ -4744,14 +4764,17 @@ def handle_settings(*args):
 
     if trigger == "sz-save-settings-btn":
         from eeg_seizure_analyzer.dash_app.components import save_user_defaults
-        params = {k: v for k, v in zip(_SZ_SLIDER_KEYS, current_values)}
+        # Read the LIVE slider value of every method (all sliders are in the
+        # DOM even when their method panel is hidden), so Spectral-Band /
+        # Autocorrelation / Ensemble params are saved even without a prior Detect.
+        params = {k: v for k, v in zip(_ALL_SZ_SLIDER_KEYS, current_values)
+                  if v is not None}
+        # All method dropdowns, read live.
         params["sz-bl-method"] = bl_method
         params["sz-bnd-method"] = bnd_method
-        # Include all method params from server state
-        all_method_params = state.extra.get("sz_params", {})
-        for k in list(_SB_DEFAULTS) + list(_AC_DEFAULTS) + list(_ENS_DEFAULTS):
-            if k in all_method_params:
-                params[k] = all_method_params[k]
+        params["sz-sb-bnd-method"] = sb_bnd_method or "none"
+        params["sz-ac-bl-method"] = ac_bl_method or "percentile"
+        params["sz-ac-bnd-method"] = ac_bnd_method or "signal"
         # Save selected method
         params["sz-method"] = state.extra.get("sz_method", "spike_train")
         # Include filter settings (min + max)
