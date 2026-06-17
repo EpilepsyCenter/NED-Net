@@ -20,7 +20,7 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, adicht_converter, ml_datasets, ml_results, analysis as analysis_page, results as results_page
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, adicht_converter, ml_datasets, analysis as analysis_page, results as results_page
 
 # ── Initialise SQLite database ────────────────────────────────────────
 from eeg_seizure_analyzer import db as _db
@@ -564,8 +564,6 @@ def render_tab(active_tab, _refresh, sid):
         return ml_datasets.layout(sid)
     elif active_tab == "analysis":
         return analysis_page.layout(sid)
-    elif active_tab == "ml_results":
-        return ml_results.layout(sid)
     elif active_tab == "results":
         return results_page.layout(sid)
     return html.Div("Unknown tab")
