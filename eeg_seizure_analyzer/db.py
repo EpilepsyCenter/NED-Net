@@ -575,6 +575,18 @@ def mark_chunk_error(chunk_id: int, error_msg: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 
+def _in_list(col: str, val) -> tuple[str, list]:
+    """Build a SQL equality/IN clause for a filter that may be a single value
+    or a list (multi-select). Returns ``(sql, params)``. An empty list yields a
+    clause that matches nothing."""
+    if isinstance(val, (list, tuple, set)):
+        vals = [v for v in val if v not in (None, "")]
+        if not vals:
+            return f"{col} = ?", [None]
+        return f"{col} IN ({','.join(['?'] * len(vals))})", list(vals)
+    return f"{col} = ?", [val]
+
+
 def get_summary(
     cohort: str | None = None,
     date_start: str | None = None,
@@ -628,11 +640,11 @@ def get_summary(
         ev_conditions.append("e.category = ?")
         ev_params.append(category)
     if cohort:
-        ev_conditions.append("e.cohort = ?")
-        ev_params.append(cohort)
+        _sql, _p = _in_list("e.cohort", cohort)
+        ev_conditions.append(_sql); ev_params.extend(_p)
     if group_id:
-        ev_conditions.append("e.group_id = ?")
-        ev_params.append(group_id)
+        _sql, _p = _in_list("e.group_id", group_id)
+        ev_conditions.append(_sql); ev_params.extend(_p)
     # Excluded events never count toward summaries / plots.
     ev_conditions.append("e.excluded = 0")
 
@@ -712,9 +724,11 @@ def get_summary(
     if animal_id:
         fa_cond.append("fa.animal_id = ?"); fa_params.append(animal_id)
     if cohort:
-        fa_cond.append("fa.cohort = ?"); fa_params.append(cohort)
+        _sql, _p = _in_list("fa.cohort", cohort)
+        fa_cond.append(_sql); fa_params.extend(_p)
     if group_id:
-        fa_cond.append("fa.group_id = ?"); fa_params.append(group_id)
+        _sql, _p = _in_list("fa.group_id", group_id)
+        fa_cond.append(_sql); fa_params.extend(_p)
     try:
         n_analyzed = conn.execute(
             f"""SELECT COUNT(DISTINCT fa.animal_id) FROM file_animals fa
@@ -762,8 +776,8 @@ def get_events(
     params: list = []
 
     if cohort:
-        conditions.append("e.cohort = ?")
-        params.append(cohort)
+        _sql, _p = _in_list("e.cohort", cohort)
+        conditions.append(_sql); params.extend(_p)
     if date_start:
         conditions.append("c.date >= ?")
         params.append(date_start)
@@ -789,8 +803,8 @@ def get_events(
         conditions.append("e.category = ?")
         params.append(category)
     if group_id:
-        conditions.append("e.group_id = ?")
-        params.append(group_id)
+        _sql, _p = _in_list("e.group_id", group_id)
+        conditions.append(_sql); params.extend(_p)
 
     where = " AND ".join(conditions)
 
@@ -898,11 +912,11 @@ def get_daily_burden(
         conditions.append("e.category = ?")
         params.append(category)
     if cohort:
-        conditions.append("e.cohort = ?")
-        params.append(cohort)
+        _sql, _p = _in_list("e.cohort", cohort)
+        conditions.append(_sql); params.extend(_p)
     if group_id:
-        conditions.append("e.group_id = ?")
-        params.append(group_id)
+        _sql, _p = _in_list("e.group_id", group_id)
+        conditions.append(_sql); params.extend(_p)
     conditions.append("e.excluded = 0")
 
     where = " AND ".join(conditions)
@@ -944,11 +958,11 @@ def get_circadian(
         conditions.append("e.category = ?")
         params.append(category)
     if cohort:
-        conditions.append("e.cohort = ?")
-        params.append(cohort)
+        _sql, _p = _in_list("e.cohort", cohort)
+        conditions.append(_sql); params.extend(_p)
     if group_id:
-        conditions.append("e.group_id = ?")
-        params.append(group_id)
+        _sql, _p = _in_list("e.group_id", group_id)
+        conditions.append(_sql); params.extend(_p)
     conditions.append("e.excluded = 0")
 
     where = " AND ".join(conditions)
@@ -995,11 +1009,11 @@ def get_file_animals(
         conditions.append("fa.animal_id = ?")
         params.append(animal_id)
     if cohort:
-        conditions.append("fa.cohort = ?")
-        params.append(cohort)
+        _sql, _p = _in_list("fa.cohort", cohort)
+        conditions.append(_sql); params.extend(_p)
     if group_id:
-        conditions.append("fa.group_id = ?")
-        params.append(group_id)
+        _sql, _p = _in_list("fa.group_id", group_id)
+        conditions.append(_sql); params.extend(_p)
     where = " AND ".join(conditions)
     rows = conn.execute(
         f"""SELECT fa.chunk_id, fa.animal_id, fa.valid_sec,

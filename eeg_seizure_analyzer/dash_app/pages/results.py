@@ -232,7 +232,7 @@ def layout(sid: str | None) -> html.Div:
                                 id="res-cohort-filter",
                                 options=[{"label": c, "value": c}
                                          for c in db.get_all_cohorts()],
-                                placeholder="All", clearable=True,
+                                placeholder="All", clearable=True, multi=True,
                             ),
                         ], width=2),
                         dbc.Col([
@@ -243,7 +243,7 @@ def layout(sid: str | None) -> html.Div:
                                 id="res-group-filter",
                                 options=[{"label": g, "value": g}
                                          for g in db.get_all_groups()],
-                                placeholder="All", clearable=True,
+                                placeholder="All", clearable=True, multi=True,
                             ),
                         ], width=2),
                         dbc.Col([
