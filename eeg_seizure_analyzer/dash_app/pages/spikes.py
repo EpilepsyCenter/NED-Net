@@ -98,8 +98,10 @@ def layout(sid: str | None) -> html.Div:
     # Clear overrides after applying
     state.extra.pop("sp_param_overrides", None)
 
-    # Persisted dropdown value
-    persisted_bl_method = state.extra.get("sp_bl_method", "percentile")
+    # Persisted dropdown value (honour a recalled override so Recall User
+    # Params restores the baseline-method dropdown, not just the sliders).
+    persisted_bl_method = overrides.get(
+        "sp-bl-method", state.extra.get("sp_bl_method", "percentile"))
 
     # Channel selection
     selected_channels = state.extra.get("sp_selected_channels",
