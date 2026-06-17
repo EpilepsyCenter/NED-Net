@@ -450,6 +450,9 @@ def layout(sid: str | None) -> html.Div:
             dbc.Button("Export all events CSV", id="res-export-all",
                        outline=True, color="secondary", size="sm",
                        className="mt-3 ms-2"),
+            dbc.Button("Export graph data (XLSX)", id="res-export-graphdata",
+                       outline=True, color="secondary", size="sm",
+                       className="mt-3 ms-2"),
             html.Span(id="res-export-status",
                       style={"fontSize": "0.78rem", "marginLeft": "10px"}),
         ],
@@ -1999,3 +2002,165 @@ def export_all_events(n, project):
     if not path:
         return no_update
     return _write_events_csv(events, path)
+
+
+@callback(
+    Output("res-export-status", "children", allow_duplicate=True),
+    Input("res-export-graphdata", "n_clicks"),
+    State("res-source-selector", "value"),
+    State("res-detector-filter", "value"),
+    State("res-date-start", "value"),
+    State("res-date-end", "value"),
+    State("res-mode-filter", "value"),
+    State("res-animal-filter", "value"),
+    State("res-type-filter", "value"),
+    State("res-min-conf", "value"),
+    State("res-file-filter", "value"),
+    State("res-cohort-filter", "value"),
+    State("res-group-filter", "value"),
+    prevent_initial_call=True,
+)
+def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
+                      types, min_conf, file_ids, cohort, group_id):
+    """Export the computed values BEHIND the Results graphs as a multi-sheet
+    XLSX (PerAnimal / PerGroup / Longitudinal / Circadian / Durations), under
+    the current filters — so each plot can be reproduced and statistics run in
+    Prism (e.g. per-animal rate by group)."""
+    if not n:
+        return no_update
+    from datetime import date as _date
+
+    # Reproduce the same filtered + censored views the graphs use.
+    category = "spike" if source == "spike_cnn" else "seizure"
+    animal_id = animals[0] if animals and len(animals) == 1 else None
+    event_type = types[0] if types and len(types) == 1 else None
+    min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None
+    mode = (modes[0] if modes and len(modes) == 1 else None)
+    filter_kw = dict(date_start=date_start or None, date_end=date_end or None,
+                     animal_id=animal_id, min_confidence=min_confidence,
+                     event_type=event_type, category=category,
+                     source=detector or None, cohort=cohort or None,
+                     group_id=group_id or None)
+    if modes and len(modes) < 3:
+        filter_kw["mode"] = mode
+    events = db.get_events(**filter_kw)
+    fa = db.get_file_animals(
+        date_start=date_start or None, date_end=date_end or None,
+        animal_id=animal_id, mode=(mode if modes and len(modes) < 3 else None),
+        cohort=cohort or None, group_id=group_id or None)
+    if file_ids:
+        chunk_ids = {int(fid) for fid in file_ids}
+        events = [e for e in events if e.get("chunk_id") in chunk_ids]
+        fa = [r for r in fa if r.get("chunk_id") in chunk_ids]
+    if animals and len(animals) > 1:
+        events = [e for e in events if e.get("animal_id") in animals]
+        fa = [r for r in fa if r.get("animal_id") in animals]
+    if types and len(types) < 2:
+        events = [e for e in events if e.get("type") in types]
+
+    status = db.get_animal_status()
+    agg = _active_events(events)
+    agg, fa = _apply_censor(agg, fa, status)
+    excluded = {a for a, s in status.items() if s.get("excluded")}
+    vis_events = [e for e in agg if (e.get("animal_id") or "") not in excluded]
+    vis_fa = [r for r in fa if (r.get("animal_id") or "") not in excluded]
+    if not vis_events:
+        return html.Span("No events to export.", style={"color": "#d29922"})
+
+    animal_rollup = _animal_rollup(agg, fa, status)
+    group_rollup = _group_rollup(vis_events, vis_fa)
+    starts = {r["animal"]: r["rec_start"]
+              for r in animal_rollup if r.get("rec_start")}
+
+    def _pf(d):
+        try:
+            return _date.fromisoformat(d)
+        except (ValueError, TypeError):
+            return None
+
+    # PerAnimal — one row per animal (the Prism stats table: group as factor).
+    per_animal = []
+    for r in animal_rollup:
+        h = r.get("rec_hours") or 0
+        per_animal.append({
+            "animal": r["animal"], "group": r.get("primary_group", ""),
+            "cohort": r.get("cohorts", ""), "rec_hours": round(h, 2),
+            "rec_days": r.get("rec_days", 0), "events": r["n"],
+            "convulsive": r["conv"], "non_convulsive": r["nonconv"],
+            "rate_per_h": round(r["n"] / h, 4) if h else None,
+            "conv_rate_per_h": round(r["conv"] / h, 4) if h else None,
+            "nonconv_rate_per_h": round(r["nonconv"] / h, 4) if h else None,
+            "mean_duration_s": round(r.get("mean_dur", 0), 3),
+            "excluded": r.get("excluded", False),
+        })
+    # PerGroup — group-level aggregate (the group-comparison bars).
+    per_group = [{
+        "group": r["group"], "animals": r["n_animals"],
+        "rec_hours": round(r.get("rec_hours") or 0, 2), "events": r["n"],
+        "convulsive": r["conv"], "non_convulsive": r["nonconv"],
+        "rate_per_h": round(r["rate"], 4) if r["rate"] is not None else None,
+        "conv_rate_per_h": round(r["conv_rate"], 4) if r["conv_rate"] is not None else None,
+        "nonconv_rate_per_h": round(r["nonconv_rate"], 4) if r["nonconv_rate"] is not None else None,
+    } for r in group_rollup]
+    # Longitudinal — events + rec-hours per (group, recording day).
+    lc, lh = {}, {}
+    for e in vis_events:
+        dt, s = _pf(_ev_date(e)), _pf(starts.get(e.get("animal_id") or ""))
+        if dt and s:
+            k = (e.get("group_id") or "(unlabeled)", (dt - s).days + 1)
+            lc[k] = lc.get(k, 0) + 1
+    for r in vis_fa:
+        dt, s = _pf(r.get("date")), _pf(starts.get(r.get("animal_id") or ""))
+        if dt and s:
+            k = (r.get("group_id") or "(unlabeled)", (dt - s).days + 1)
+            lh[k] = lh.get(k, 0.0) + (r.get("valid_sec") or 0) / 3600.0
+    longitudinal = []
+    for (g, di) in sorted(set(lc) | set(lh)):
+        h = lh.get((g, di), 0.0)
+        n = lc.get((g, di), 0)
+        longitudinal.append({"group": g, "recording_day": di, "events": n,
+                             "rec_hours": round(h, 2),
+                             "rate_per_h": round(n / h, 4) if h else None})
+    # Circadian — events per (group, hour of day).
+    circ = {}
+    for e in vis_events:
+        hr = e.get("hour_of_day")
+        if hr is not None:
+            k = (e.get("group_id") or "(unlabeled)", int(hr))
+            circ[k] = circ.get(k, 0) + 1
+    circadian = [{"group": g, "hour_of_day": hr, "events": n}
+                 for (g, hr), n in sorted(circ.items())]
+    # Durations — one row per event (duration box plot + duration stats).
+    durations = [{
+        "animal": e.get("animal_id", ""),
+        "group": e.get("group_id") or "(unlabeled)",
+        "type": "convulsive" if e.get("type") == "convulsive" else "non_convulsive",
+        "duration_s": round(float(e.get("duration_sec") or 0), 3),
+    } for e in vis_events if e.get("duration_sec")]
+
+    path = _save_file("results_graph_data.xlsx", "Export graph data (XLSX)")
+    if not path:
+        return no_update
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        first = True
+        for title, rows in (("PerAnimal", per_animal), ("PerGroup", per_group),
+                            ("Longitudinal", longitudinal),
+                            ("Circadian", circadian), ("Durations", durations)):
+            ws = wb.active if first else wb.create_sheet()
+            ws.title = title
+            first = False
+            if rows:
+                cols = list(rows[0].keys())
+                ws.append(cols)
+                for row in rows:
+                    ws.append([row.get(c) for c in cols])
+            else:
+                ws.append(["(no data)"])
+        wb.save(path)
+    except Exception as e:
+        return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
+    return html.Span(
+        f"Exported graph data ({len(per_animal)} animals, "
+        f"{len(longitudinal)} day-rows) to {path}", style={"color": "#2ea043"})
