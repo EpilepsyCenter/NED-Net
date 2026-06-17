@@ -443,10 +443,13 @@ def layout(sid: str | None) -> html.Div:
             # Bumped when a per-animal Include / Valid-until edit is persisted.
             dcc.Store(id="res-animal-signal", data=0),
 
-            # ── Export ─────────────────────────────────────────────
-            dbc.Button("Export CSV", id="res-export-csv",
+            # ── Export (raw per-event CSV for Prism etc.) ──────────
+            dbc.Button("Export filtered CSV", id="res-export-csv",
                        outline=True, color="secondary", size="sm",
                        className="mt-3"),
+            dbc.Button("Export all events CSV", id="res-export-all",
+                       outline=True, color="secondary", size="sm",
+                       className="mt-3 ms-2"),
             html.Span(id="res-export-status",
                       style={"fontSize": "0.78rem", "marginLeft": "10px"}),
         ],
@@ -1716,10 +1719,6 @@ def _build_longitudinal(events, starts, fa_rows=None, normalize=None) -> go.Figu
             g = r.get("group_id") or "(unlabeled)"
             hours.setdefault(g, {})
             hours[g][di] = hours[g].get(di, 0.0) + (r.get("valid_sec") or 0) / 3600.0
-    # No usable denominator → fall back to raw counts.
-    if per_hour and not any(hours.values()):
-        per_hour = False
-
     if not by_group:
         apply_fig_theme(fig)
         fig.update_layout(
@@ -1727,20 +1726,33 @@ def _build_longitudinal(events, starts, fa_rows=None, normalize=None) -> go.Figu
             xaxis_title="Recording day", yaxis_title="Events")
         return fig
 
-    for i, g in enumerate(sorted(by_group)):
-        days = sorted(by_group[g])
-        if per_hour:
-            # Skip days with no recorded hours (rate undefined) so the line
-            # doesn't spike to ∞ / 0 artefacts.
-            xs, ys = [], []
-            for d in days:
-                h = hours.get(g, {}).get(d, 0.0)
-                if h > 0:
-                    xs.append(d)
-                    ys.append(by_group[g][d] / h)
-        else:
-            xs = days
-            ys = [by_group[g][d] for d in days]
+    def _make_traces(use_hour):
+        """Return [(group, idx, xs, ys)] and the total plotted point count."""
+        out, total = [], 0
+        for i, g in enumerate(sorted(by_group)):
+            days = sorted(by_group[g])
+            if use_hour:
+                # Skip days with no recorded hours (rate undefined).
+                xs, ys = [], []
+                for d in days:
+                    h = hours.get(g, {}).get(d, 0.0)
+                    if h > 0:
+                        xs.append(d)
+                        ys.append(by_group[g][d] / h)
+            else:
+                xs, ys = days, [by_group[g][d] for d in days]
+            total += len(xs)
+            out.append((g, i, xs, ys))
+        return out, total
+
+    traces, total = _make_traces(per_hour)
+    # If per-animal-hour produced nothing plottable (no/ mismatched hour data),
+    # fall back to raw counts so the graph never goes blank when data exists.
+    if per_hour and total == 0:
+        per_hour = False
+        traces, _ = _make_traces(False)
+
+    for g, i, xs, ys in traces:
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="lines+markers",
             name=g, line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)])))
@@ -1934,20 +1946,29 @@ def export_csv(n, source, detector, date_start, date_end, modes, animals,
         return html.Span("No events to export.", style={"color": "#d29922"})
 
     # The in-window webview can't do browser downloads — write to a chosen path.
-    path = _save_file("analysis_results.csv", "Export results CSV")
+    path = _save_file("events_filtered.csv", "Export filtered events CSV")
     if not path:
         return no_update
+    return _write_events_csv(events, path)
 
+
+# Raw per-event columns for CSV export (Prism-friendly: one row per event).
+_EVENT_EXPORT_FIELDS = [
+    "id", "animal_id", "category", "type", "subtype",
+    "date", "recording_day", "hour_of_day",
+    "start_sec", "end_sec", "duration_sec",
+    "cnn_confidence", "convulsive_confidence", "movement_flag",
+    "channel", "cohort", "group_id", "source", "mode", "excluded", "path",
+]
+
+
+def _write_events_csv(events, path):
+    """Write a list of event dicts to ``path`` as one row per event."""
     import csv
-    fields = [
-        "animal_id", "date", "start_sec", "end_sec", "duration_sec",
-        "type", "subtype", "cnn_confidence", "convulsive_confidence",
-        "movement_flag", "hour_of_day", "channel", "cohort", "group_id",
-        "path", "mode",
-    ]
     try:
         with open(path, "w", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+            writer = csv.DictWriter(fh, fieldnames=_EVENT_EXPORT_FIELDS,
+                                    extrasaction="ignore")
             writer.writeheader()
             for ev in events:
                 writer.writerow(ev)
@@ -1955,3 +1976,26 @@ def export_csv(n, source, detector, date_start, date_end, modes, animals,
         return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
     return html.Span(f"Exported {len(events)} event(s) to {path}",
                      style={"color": "#2ea043"})
+
+
+@callback(
+    Output("res-export-status", "children", allow_duplicate=True),
+    Input("res-export-all", "n_clicks"),
+    State("res-project-select", "value"),
+    prevent_initial_call=True,
+)
+def export_all_events(n, project):
+    """Export every event in the active project DB (all categories, ignoring
+    the current filters; includes excluded + category columns) so the complete
+    raw dataset can be analysed externally."""
+    if not n:
+        return no_update
+    if project and project != db.get_active_project():
+        db.set_active_project(project)
+    events = db.get_events()  # no filters → all events, both categories
+    if not events:
+        return html.Span("No events in this database.", style={"color": "#d29922"})
+    path = _save_file("events_all.csv", "Export ALL events CSV")
+    if not path:
+        return no_update
+    return _write_events_csv(events, path)
