@@ -33,6 +33,39 @@ from eeg_seizure_analyzer.dash_app.components import (
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 from eeg_seizure_analyzer import db
 
+import json as _json
+
+# ── Per-project Results filter persistence ──────────────────────────────
+# Remember each database's Results-tab filter selections (cohort/group/animal/
+# file/date/type/mode/min-conf/category/detector/normalise/panels) so reopening
+# the same project restores them. Keyed by project name. (Per-animal exclusions
+# already persist in the DB's animal_status table.)
+_RESULTS_STATE_PATH = Path.home() / ".eeg_seizure_analyzer" / "results_state.json"
+
+
+def _load_results_state(project: str) -> dict:
+    if not project:
+        return {}
+    try:
+        return _json.loads(_RESULTS_STATE_PATH.read_text()).get(project, {})
+    except Exception:
+        return {}
+
+
+def _save_results_state(project: str, state: dict) -> None:
+    if not project:
+        return
+    try:
+        _RESULTS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            all_state = _json.loads(_RESULTS_STATE_PATH.read_text())
+        except Exception:
+            all_state = {}
+        all_state[project] = state
+        _RESULTS_STATE_PATH.write_text(_json.dumps(all_state, indent=2))
+    except Exception:
+        pass
+
 
 def _save_file(default_name: str, title: str = "Save file") -> str | None:
     """Native 'Save as' dialog (the in-window webview can't do browser
@@ -406,6 +439,7 @@ def layout(sid: str | None) -> html.Div:
             dcc.Store(id="res-selected-event"),
             # Bumped when an event's Exclude checkbox is toggled, to re-render.
             dcc.Store(id="res-exclude-signal", data=0),
+            dcc.Store(id="res-state-saved"),
             # Bumped when a per-animal Include / Valid-until edit is persisted.
             dcc.Store(id="res-animal-signal", data=0),
 
@@ -438,14 +472,22 @@ def layout(sid: str | None) -> html.Div:
     Output("res-cohort-filter", "value"),
     Output("res-group-filter", "options"),
     Output("res-group-filter", "value"),
+    Output("res-source-selector", "value"),
+    Output("res-detector-filter", "value"),
+    Output("res-normalize", "value"),
+    Output("res-mode-filter", "value"),
+    Output("res-type-filter", "value"),
+    Output("res-min-conf", "value"),
+    Output("res-panels-toggle", "value"),
     Input("res-project-select", "value"),
-    prevent_initial_call=True,
 )
 def res_on_project_switch(project):
-    """Refresh the DB-derived filter controls (animals, files, date range) the
-    instant the active project changes, so the user doesn't have to leave and
-    re-enter the tab. Carried-over selections are cleared (they belonged to the
-    previous project)."""
+    """Refresh DB-derived filter options and RESTORE the project's saved
+    Results-tab filter selections (or defaults if none).
+
+    Fires on tab load and whenever the active project changes, so opening a
+    database brings back the filters last used on it. Per-animal exclusions are
+    already persisted in the DB and apply independently."""
     if project:
         db.set_active_project(project)
     try:
@@ -462,8 +504,57 @@ def res_on_project_switch(project):
         group_opts = [{"label": g, "value": g} for g in db.get_all_groups()]
     except Exception:
         cohort_opts, group_opts = [], []
-    return (animal_opts, [], file_opts, [], date_min or "", date_max or "",
-            cohort_opts, None, group_opts, None)
+
+    # Restore saved selections for this project (defaults if none / unknown).
+    s = _load_results_state(project)
+    return (
+        animal_opts, s.get("animals", []),
+        file_opts, s.get("files", []),
+        s.get("date_start", date_min or ""), s.get("date_end", date_max or ""),
+        cohort_opts, s.get("cohort", None),
+        group_opts, s.get("group", None),
+        s.get("source", "seizure_cnn"),
+        s.get("detector", None),
+        s.get("normalize", "raw"),
+        s.get("modes", ["single", "batch", "live"]),
+        s.get("types", ["convulsive", "non_convulsive"]),
+        s.get("min_conf", 0),
+        s.get("panels",
+              ["daily", "circadian", "groups", "animals", "dist", "long"]),
+    )
+
+
+@callback(
+    Output("res-state-saved", "data"),
+    Input("res-source-selector", "value"),
+    Input("res-detector-filter", "value"),
+    Input("res-normalize", "value"),
+    Input("res-date-start", "value"),
+    Input("res-date-end", "value"),
+    Input("res-mode-filter", "value"),
+    Input("res-animal-filter", "value"),
+    Input("res-type-filter", "value"),
+    Input("res-min-conf", "value"),
+    Input("res-file-filter", "value"),
+    Input("res-cohort-filter", "value"),
+    Input("res-group-filter", "value"),
+    Input("res-panels-toggle", "value"),
+    State("res-project-select", "value"),
+    prevent_initial_call=True,
+)
+def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
+                          types, min_conf, files, cohort, group, panels, project):
+    """Persist the current Results-tab filter selections for the active project
+    so they're restored next time it's opened."""
+    if not project:
+        return no_update
+    _save_results_state(project, {
+        "source": source, "detector": detector, "normalize": normalize,
+        "date_start": ds, "date_end": de, "modes": modes, "animals": animals,
+        "types": types, "min_conf": min_conf, "files": files,
+        "cohort": cohort, "group": group, "panels": panels,
+    })
+    return no_update
 
 
 @callback(
@@ -502,13 +593,23 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     # Honour the active project DB (app-wide; shared with the Analysis tab).
     if project and project != db.get_active_project():
         db.set_active_project(project)
-    # On a project switch, filters carried over from the previous project are
-    # meaningless (different animals/files/date range). Ignore them for this
-    # render; res_on_project_switch resets the controls to match the new DB.
+    # On a project switch, the carried-over control values belong to the
+    # previous project. Apply THIS project's saved filters for this render;
+    # res_on_project_switch restores the visible controls to match in parallel.
     if ctx.triggered_id == "res-project-select":
-        date_start = date_end = None
-        animals = file_ids = None
-        cohort = group_id = None
+        s = _load_results_state(project)
+        source = s.get("source", "seizure_cnn")
+        detector = s.get("detector", None)
+        normalize = s.get("normalize", "raw")
+        date_start = s.get("date_start") or None
+        date_end = s.get("date_end") or None
+        modes = s.get("modes", ["single", "batch", "live"])
+        animals = s.get("animals") or None
+        types = s.get("types", ["convulsive", "non_convulsive"])
+        min_conf = s.get("min_conf", 0)
+        file_ids = s.get("files") or None
+        cohort = s.get("cohort") or None
+        group_id = s.get("group") or None
     # The Seizures/Spikes radio picks the high-level category; the Detector
     # dropdown narrows to a specific source within it (ML or classical).
     category = "spike" if source == "spike_cnn" else "seizure"
