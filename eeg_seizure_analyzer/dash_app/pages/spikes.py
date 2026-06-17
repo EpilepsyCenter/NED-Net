@@ -161,6 +161,27 @@ def layout(sid: str | None) -> html.Div:
                 ],
             ),
 
+            # Detection method selector (Classical / U-Net) — above channels,
+            # matching the seizure tab.
+            html.Div(
+                style={"marginBottom": "16px"},
+                children=[
+                    html.Label(
+                        "Detection method",
+                        style={"fontSize": "0.82rem", "fontWeight": "500",
+                               "marginBottom": "6px", "display": "block",
+                               "color": "var(--ned-text-muted)"}),
+                    dbc.RadioItems(
+                        id="sp-method-selector",
+                        options=_SP_METHOD_OPTIONS,
+                        value=persisted_method,
+                        inline=True,
+                        className="mb-2",
+                        style={"fontSize": "0.82rem"},
+                    ),
+                ],
+            ),
+
             # Channel selector
             html.Div(
                 style={"marginBottom": "16px"},
@@ -177,26 +198,6 @@ def layout(sid: str | None) -> html.Div:
                         value=selected_channels,
                         multi=True,
                         placeholder="Select channels...",
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ],
-            ),
-
-            # Detection method selector (Classical / U-Net)
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Label(
-                        "Detection method",
-                        style={"fontSize": "0.82rem", "fontWeight": "500",
-                               "marginBottom": "6px", "display": "block",
-                               "color": "var(--ned-text-muted)"}),
-                    dbc.RadioItems(
-                        id="sp-method-selector",
-                        options=_SP_METHOD_OPTIONS,
-                        value=persisted_method,
-                        inline=True,
-                        className="mb-2",
                         style={"fontSize": "0.82rem"},
                     ),
                 ],
