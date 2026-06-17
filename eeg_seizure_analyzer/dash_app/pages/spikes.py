@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json as _json
+import threading
+from pathlib import Path as _Path
+
 import numpy as np
 import plotly.graph_objects as go
 from dash import html, dcc, callback, Input, Output, State, no_update, ctx
@@ -246,6 +250,11 @@ def layout(sid: str | None) -> html.Div:
                         style={"display": "inline-block" if has_results else "none"},
                     ),
                     dbc.Button(
+                        "\U0001F4C1 Detect All Files",
+                        id="sp-detect-all-btn",
+                        className="btn-ned-secondary",
+                    ),
+                    dbc.Button(
                         "Add to project database",
                         id="sp-add-to-db-btn",
                         className="btn-ned-secondary",
@@ -270,6 +279,10 @@ def layout(sid: str | None) -> html.Div:
 
             html.Div(id="sp-settings-status", style={"marginBottom": "8px"}),
             html.Div(id="sp-add-to-db-status", style={"marginBottom": "8px"}),
+            # Batch "Detect All Files" progress + polling
+            html.Div(id="sp-detect-all-status", style={"marginBottom": "8px"}),
+            dcc.Interval(id="sp-detect-all-poll", interval=800, disabled=True),
+            dcc.Store(id="sp-detect-all-running", data=False),
 
             dcc.Loading(
                 html.Div(id="sp-status"),
@@ -1290,6 +1303,316 @@ def add_spikes_to_project_db(n_clicks, sid):
     return alert(
         f"Added {total} spike(s) to project '{proj}'{note}. "
         f"View them in Results → Interictal Spikes.", "success")
+
+
+# ── Batch "Detect All Files" (background worker + progress polling) ──────
+
+_SP_PROGRESS_DIR = _Path.home() / ".eeg_seizure_analyzer" / "cache"
+
+
+def _sp_progress_path(sid: str) -> _Path:
+    _SP_PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    return _SP_PROGRESS_DIR / f"detect_all_spikes_{sid}.json"
+
+
+def _sp_write_progress(sid, current, total, current_file, events_so_far,
+                       done=False, error_msg="", skipped_msg=""):
+    _json.dump(
+        {"current": current, "total": total, "file": current_file,
+         "events": events_so_far, "done": done, "error": error_msg,
+         "skipped": skipped_msg},
+        open(_sp_progress_path(sid), "w"),
+    )
+
+
+def _sp_params_from_dict(d: dict) -> "SpikeDetectionParams":
+    """Build classical SpikeDetectionParams from a persisted slider-key dict."""
+    g = lambda k, dv: d.get(k, dv)
+    return SpikeDetectionParams(
+        bandpass_low=float(g("sp-bp-low", 3.0)),
+        bandpass_high=float(g("sp-bp-high", 50.0)),
+        amplitude_threshold_zscore=float(g("sp-amp-thr", 7.0)),
+        spike_min_amplitude_uv=float(g("sp-min-amp", 0.0)),
+        spike_prominence_x_baseline=float(g("sp-prom", 6.0)),
+        max_duration_ms=float(g("sp-maxw", 300.0)),
+        min_duration_ms=float(g("sp-minw", 10.0)),
+        refractory_ms=float(g("sp-refr", 750.0)),
+        baseline_method=d.get("sp-bl-method", "percentile"),
+        baseline_percentile=int(g("sp-bl-pct", 25)),
+        baseline_rms_window_sec=float(g("sp-bl-rms", 30.0)),
+        isolation_window_sec=float(g("sp-iso-win", 2.0)),
+        isolation_max_neighbours=int(g("sp-iso-max", 1)),
+    )
+
+
+def _sp_detect_all_worker(sid, project_files, sp_params, sel_channels=None):
+    """Run spike detection on all project files in a background thread, saving
+    per-file sidecars (and refreshing annotations). Mirrors the seizure batch
+    worker; honours the selected method (classical / U-Net) and channels, and
+    skips files whose channels have no Animal IDs."""
+    from eeg_seizure_analyzer.detection.spike import SpikeDetector
+    from eeg_seizure_analyzer.io.edf_reader import (
+        scan_edf_channels, read_edf, read_edf_paired, auto_pair_channels,
+    )
+    from eeg_seizure_analyzer.io.persistence import save_spike_detections
+    from eeg_seizure_analyzer.io.channel_ids import load_channel_ids
+    from eeg_seizure_analyzer.io.annotation_store import (
+        detections_to_annotations, merge_annotations,
+        load_spike_annotations, save_spike_annotations,
+    )
+
+    method = sp_params.get("sp-method", "classical")
+    is_ml = method == "unet"
+    iso_win = float(sp_params.get("sp-iso-win", 2.0))
+    iso_max = int(sp_params.get("sp-iso-max", 1))
+    if is_ml:
+        ml_model = sp_params.get("sp_unet_model")
+        ml_thr = float(sp_params.get("sp_unet_threshold", 0.5))
+        ml_mindur_ms = float(sp_params.get("sp_unet_min_dur_ms", 2.0))
+        ml_merge_ms = float(sp_params.get("sp_unet_merge_gap_ms", 50.0))
+    else:
+        params = _sp_params_from_dict(sp_params)
+
+    total_events = 0
+    errors = []
+    skipped_no_ids = []
+    n_total = len(project_files)
+
+    for i, pf in enumerate(project_files):
+        edf_path = pf["edf_path"]
+        fname = pf["filename"]
+        _sp_write_progress(sid, i, n_total, fname, total_events)
+        try:
+            channel_info = scan_edf_channels(edf_path)
+            eeg_indices, act_indices, pairings = auto_pair_channels(channel_info)
+            has_pairs = any(p.activity_index is not None for p in pairings)
+            if has_pairs:
+                rec, _act = read_edf_paired(edf_path, list(eeg_indices), act_indices)
+            else:
+                rates = sorted(set(ch["fs"] for ch in channel_info))
+                default_ch = [ch["index"] for ch in channel_info
+                              if "biopot" in ch.get("label", "").lower()
+                              or ch["fs"] == max(rates)]
+                if not default_ch:
+                    default_ch = [ch["index"] for ch in channel_info]
+                rec = read_edf(edf_path, channels=default_ch)
+            rec.source_path = edf_path
+
+            ch_ids = load_channel_ids(edf_path) or {}
+            if sel_channels:
+                selected_channels = [c for c in sel_channels
+                                     if 0 <= c < rec.n_channels]
+            else:
+                selected_channels = list(range(rec.n_channels))
+            if [ch for ch in selected_channels if not ch_ids.get(ch)]:
+                skipped_no_ids.append(fname)
+                continue
+
+            if is_ml:
+                spikes, detection_info = _detect_spikes_unet(
+                    rec, selected_channels, ml_model, ml_thr,
+                    ml_mindur_ms, ml_merge_ms, iso_win, iso_max)
+            else:
+                spikes = []
+                detection_info = {}
+                use_chunked = (rec.duration_sec > 1800
+                               and edf_path.lower().endswith(".edf"))
+                if use_chunked:
+                    from eeg_seizure_analyzer.detection.base import detect_chunked
+                    spikes, detection_info = detect_chunked(
+                        SpikeDetector(), path=edf_path, channels=selected_channels,
+                        chunk_duration_sec=1800.0, overlap_sec=10.0, params=params)
+                else:
+                    det = SpikeDetector()
+                    for ch in selected_channels:
+                        ch_sp = det.detect(rec, ch, params=params)
+                        spikes.extend(ch_sp)
+                        if hasattr(det, "_last_detection_info"):
+                            detection_info[ch] = dict(det._last_detection_info)
+
+            for ev in spikes:
+                ev.animal_id = ch_ids.get(ev.channel, "")
+
+            if edf_path.lower().endswith(".edf"):
+                save_spike_detections(
+                    edf_path, events=spikes, detection_info=detection_info,
+                    params_dict=dict(sp_params), channels=selected_channels)
+            try:
+                new_anns = detections_to_annotations(spikes, edf_path)
+                existing = load_spike_annotations(edf_path)
+                merged = (merge_annotations(existing, new_anns, tolerance_sec=0.05)
+                          if existing else new_anns)
+                save_spike_annotations(edf_path, merged)
+            except Exception:
+                pass
+
+            total_events += len(spikes)
+            pf["has_detections"] = True
+        except Exception as e:
+            errors.append(f"{fname}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    err_msg = "; ".join(errors[:3]) if errors else ""
+    skipped_msg = ""
+    if skipped_no_ids:
+        shown = ", ".join(skipped_no_ids[:5])
+        more = (f" (+{len(skipped_no_ids) - 5} more)"
+                if len(skipped_no_ids) > 5 else "")
+        skipped_msg = (f"{len(skipped_no_ids)} file(s) skipped — no Animal IDs "
+                       f"assigned: {shown}{more}")
+    _sp_write_progress(sid, n_total, n_total, "", total_events,
+                       done=True, error_msg=err_msg, skipped_msg=skipped_msg)
+
+    # Reload the active file into session state.
+    try:
+        state = server_state.get_session(sid)
+        idx = state.extra.get("project_active_idx", 0)
+        state.recording = None
+        state.spike_events = []
+        state.seizure_events = []
+        state.detected_events = []
+        state.sp_detection_info = {}
+        from eeg_seizure_analyzer.dash_app.pages.upload import _load_edf_into_state
+        _load_edf_into_state(state, project_files[idx]["edf_path"])
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+
+@callback(
+    Output("sp-detect-all-running", "data"),
+    Output("sp-detect-all-poll", "disabled"),
+    Output("sp-detect-all-status", "children", allow_duplicate=True),
+    Output("sp-detect-all-btn", "disabled"),
+    Input("sp-detect-all-btn", "n_clicks"),
+    State("sp-method-selector", "value"),
+    State("sp-channel-selector", "value"),
+    State("sp-unet-model", "value"),
+    State({"type": "param-slider", "key": "sp-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sp-unet-min-dur"}, "value"),
+    State({"type": "param-slider", "key": "sp-unet-merge-gap"}, "value"),
+    State({"type": "param-slider", "key": "sp-iso-win"}, "value"),
+    State({"type": "param-slider", "key": "sp-iso-max"}, "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def sp_start_detect_all(n_clicks, method, sel_channels, unet_model, unet_thr,
+                        unet_min, unet_merge, iso_win, iso_max, sid):
+    """Launch the background spike-detection thread and start polling."""
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update
+    state = server_state.get_session(sid)
+    project_files = state.extra.get("project_files", [])
+    if not project_files:
+        return (False, True,
+                alert("No project loaded. Use Load → Load Multiple first.",
+                      "warning"), False)
+
+    method = method or state.extra.get("sp_method", "classical")
+    sp_params = dict(state.extra.get("sp_params", {}))
+    sp_params["sp-method"] = method
+    sp_params["sp-bl-method"] = state.extra.get("sp_bl_method", "percentile")
+    if iso_win is not None:
+        sp_params["sp-iso-win"] = float(iso_win)
+    if iso_max is not None:
+        sp_params["sp-iso-max"] = int(iso_max)
+
+    if method == "unet":
+        if not unet_model:
+            return (False, True,
+                    alert("No U-Net model selected. Pick one in the U-Net "
+                          "settings first.", "warning"), False)
+        sp_params["sp_unet_model"] = unet_model
+        sp_params["sp_unet_threshold"] = float(unet_thr or 0.5)
+        sp_params["sp_unet_min_dur_ms"] = float(unet_min or 2.0)
+        sp_params["sp_unet_merge_gap_ms"] = float(unet_merge or 50.0)
+
+    _sp_write_progress(sid, 0, len(project_files),
+                       project_files[0]["filename"], 0)
+    t = threading.Thread(
+        target=_sp_detect_all_worker,
+        args=(sid, project_files, sp_params, sel_channels),
+        daemon=True,
+    )
+    t.start()
+
+    n = len(project_files)
+    progress_bar = html.Div(
+        style={"display": "flex", "alignItems": "center", "gap": "12px"},
+        children=[
+            dbc.Progress(value=0, max=n, style={"flex": "1", "height": "22px"},
+                         color="success", striped=True, animated=True),
+            html.Span(f"0/{n} files — starting...",
+                      style={"color": "var(--ned-text-muted)",
+                             "fontSize": "0.82rem", "whiteSpace": "nowrap"}),
+        ],
+    )
+    return True, False, progress_bar, True
+
+
+@callback(
+    Output("sp-detect-all-status", "children", allow_duplicate=True),
+    Output("sp-detect-all-poll", "disabled", allow_duplicate=True),
+    Output("sp-detect-all-running", "data", allow_duplicate=True),
+    Output("sp-detect-all-btn", "disabled", allow_duplicate=True),
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("sp-detect-all-poll", "n_intervals"),
+    State("session-id", "data"),
+    State("sp-detect-all-running", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def sp_poll_detect_all(n_intervals, sid, is_running, refresh):
+    """Poll the spike progress file and update the progress bar."""
+    if not is_running:
+        return no_update, no_update, no_update, no_update, no_update
+    p = _sp_progress_path(sid)
+    if not p.exists():
+        return no_update, no_update, no_update, no_update, no_update
+    try:
+        data = _json.loads(p.read_text())
+    except Exception:
+        return no_update, no_update, no_update, no_update, no_update
+
+    current = data.get("current", 0)
+    total = data.get("total", 1)
+    fname = data.get("file", "")
+    events = data.get("events", 0)
+    done = data.get("done", False)
+    error_msg = data.get("error", "")
+
+    if done:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        skipped = data.get("skipped", "")
+        msg = f"Detected {events} spike(s) across {total} files."
+        if skipped:
+            msg += f" {skipped}."
+        if error_msg:
+            msg += f" Errors: {error_msg}"
+            result = alert(msg, "warning")
+        elif skipped:
+            result = alert(msg, "warning")
+        else:
+            result = alert(msg, "success")
+        return result, True, False, False, (refresh or 0) + 1
+
+    short_name = fname if len(fname) <= 40 else fname[:37] + "..."
+    progress_bar = html.Div(
+        style={"display": "flex", "alignItems": "center", "gap": "12px"},
+        children=[
+            dbc.Progress(value=current, max=total, label=f"{current}/{total}",
+                         style={"flex": "1", "height": "22px"},
+                         color="success", striped=True, animated=True),
+            html.Span(f"{current}/{total} files — {short_name}  ({events} spikes)",
+                      style={"color": "var(--ned-text-muted)",
+                             "fontSize": "0.82rem", "whiteSpace": "nowrap"}),
+        ],
+    )
+    return progress_bar, no_update, no_update, no_update, no_update
 
 
 def _build_results(rec, all_spikes, spikes, total_count=None):
