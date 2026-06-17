@@ -630,7 +630,8 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     animal_table = _build_animal_table(animal_rollup, is_seizure)
     dur_fig = _panel_legend(_build_duration_hist(vis_events, is_seizure))
     conf_fig = _panel_legend(_build_confidence_hist(vis_events, is_seizure))
-    long_fig = _panel_legend(_build_longitudinal(vis_events, animal_starts))
+    long_fig = _panel_legend(
+        _build_longitudinal(vis_events, animal_starts, vis_fa, normalize))
 
     return (summary_cards, daily_fig, circ_fig, table,
             group_fig, group_table, animal_table,
@@ -1515,7 +1516,7 @@ def _build_confidence_hist(events, is_seizure) -> go.Figure:
     return fig
 
 
-def _build_longitudinal(events, starts) -> go.Figure:
+def _build_longitudinal(events, starts, fa_rows=None, normalize=None) -> go.Figure:
     """Events per recording day, one trace per group.
 
     Each event's day index is computed against its animal's recording start —
@@ -1524,7 +1525,13 @@ def _build_longitudinal(events, starts) -> go.Figure:
     that began on different calendar dates align on a common day-1. Events
     without a parseable date, or whose animal has no known start, are skipped.
     The day-1 reference is per animal, so the timeline is *not* anchored to a
-    single calendar date (no global day-1 label)."""
+    single calendar date (no global day-1 label).
+
+    When ``normalize == "per_hour"`` and ``fa_rows`` (per-file observation rows)
+    are given, each day's count is divided by the animal-hours recorded on that
+    day index for the group, giving events per animal-hour per day — so the
+    longitudinal view matches the group-comparison normalisation and isn't
+    biased by group size or uneven recording coverage."""
     from datetime import date as _date
 
     fig = go.Figure()
@@ -1547,6 +1554,23 @@ def _build_longitudinal(events, starts) -> go.Figure:
         by_group.setdefault(g, {})
         by_group[g][di] = by_group[g].get(di, 0) + 1
 
+    # Per-(group, day) recording hours — denominator for per-animal-hour rates.
+    per_hour = normalize == "per_hour"
+    hours: dict = {}
+    if per_hour and fa_rows:
+        for r in fa_rows:
+            dt = _parse(r.get("date"))
+            s = start_dt.get(r.get("animal_id") or "")
+            if dt is None or s is None:
+                continue
+            di = (dt - s).days + 1
+            g = r.get("group_id") or "(unlabeled)"
+            hours.setdefault(g, {})
+            hours[g][di] = hours[g].get(di, 0.0) + (r.get("valid_sec") or 0) / 3600.0
+    # No usable denominator → fall back to raw counts.
+    if per_hour and not any(hours.values()):
+        per_hour = False
+
     if not by_group:
         apply_fig_theme(fig)
         fig.update_layout(
@@ -1556,13 +1580,28 @@ def _build_longitudinal(events, starts) -> go.Figure:
 
     for i, g in enumerate(sorted(by_group)):
         days = sorted(by_group[g])
+        if per_hour:
+            # Skip days with no recorded hours (rate undefined) so the line
+            # doesn't spike to ∞ / 0 artefacts.
+            xs, ys = [], []
+            for d in days:
+                h = hours.get(g, {}).get(d, 0.0)
+                if h > 0:
+                    xs.append(d)
+                    ys.append(by_group[g][d] / h)
+        else:
+            xs = days
+            ys = [by_group[g][d] for d in days]
         fig.add_trace(go.Scatter(
-            x=days, y=[by_group[g][d] for d in days], mode="lines+markers",
+            x=xs, y=ys, mode="lines+markers",
             name=g, line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)])))
     fig.update_layout(
-        title="Longitudinal — events per recording day "
-              "(day 1 = each animal's recording start)",
-        xaxis_title="Recording day", yaxis_title="Events",
+        title=("Longitudinal — events per animal-hour per recording day "
+               if per_hour else
+               "Longitudinal — events per recording day ")
+              + "(day 1 = each animal's recording start)",
+        xaxis_title="Recording day",
+        yaxis_title="Events / animal-hour" if per_hour else "Events",
         legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
     return fig
