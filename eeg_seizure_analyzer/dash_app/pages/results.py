@@ -2117,41 +2117,70 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
         "conv_rate_per_h": round(r["conv_rate"], 4) if r["conv_rate"] is not None else None,
         "nonconv_rate_per_h": round(r["nonconv_rate"], 4) if r["nonconv_rate"] is not None else None,
     } for r in group_rollup]
-    # Longitudinal — events + rec-hours per (group, recording day).
-    lc, lh = {}, {}
+    # animal -> group (for the per-animal detail sheets).
+    agrp = {r["animal"]: r.get("primary_group", "") for r in animal_rollup}
+
+    # Daily (per animal × recording day): one row per animal per day, so each
+    # animal is a subject for repeated-measures stats / per-animal trajectories.
+    dc, dh = {}, {}
     for e in vis_events:
         dt, s = _pf(_ev_date(e)), _pf(starts.get(e.get("animal_id") or ""))
         if dt and s:
-            k = (e.get("group_id") or "(unlabeled)", (dt - s).days + 1)
-            lc[k] = lc.get(k, 0) + 1
+            dc[(e.get("animal_id") or "", (dt - s).days + 1)] = \
+                dc.get((e.get("animal_id") or "", (dt - s).days + 1), 0) + 1
     for r in vis_fa:
         dt, s = _pf(r.get("date")), _pf(starts.get(r.get("animal_id") or ""))
         if dt and s:
-            k = (r.get("group_id") or "(unlabeled)", (dt - s).days + 1)
-            lh[k] = lh.get(k, 0.0) + (r.get("valid_sec") or 0) / 3600.0
-    longitudinal = []
-    for (g, di) in sorted(set(lc) | set(lh)):
-        h = lh.get((g, di), 0.0)
-        n = lc.get((g, di), 0)
-        longitudinal.append({"group": g, "recording_day": di, "events": n,
-                             "rec_hours": round(h, 2),
-                             "rate_per_h": round(n / h, 4) if h else None})
-    # Circadian — events per (group, hour of day).
-    circ = {}
+            k = (r.get("animal_id") or "", (dt - s).days + 1)
+            dh[k] = dh.get(k, 0.0) + (r.get("valid_sec") or 0) / 3600.0
+    daily = []
+    for (a, di) in sorted(set(dc) | set(dh)):
+        h = dh.get((a, di), 0.0)
+        n = dc.get((a, di), 0)
+        daily.append({"animal": a, "group": agrp.get(a, ""), "recording_day": di,
+                      "events": n, "rec_hours": round(h, 2),
+                      "rate_per_h": round(n / h, 4) if h else None})
+
+    # Circadian (per animal × hour of day): one row per animal per hour.
+    cc = {}
     for e in vis_events:
         hr = e.get("hour_of_day")
         if hr is not None:
-            k = (e.get("group_id") or "(unlabeled)", int(hr))
-            circ[k] = circ.get(k, 0) + 1
-    circadian = [{"group": g, "hour_of_day": hr, "events": n}
-                 for (g, hr), n in sorted(circ.items())]
-    # Durations — one row per event (duration box plot + duration stats).
-    durations = [{
-        "animal": e.get("animal_id", ""),
-        "group": e.get("group_id") or "(unlabeled)",
-        "type": "convulsive" if e.get("type") == "convulsive" else "non_convulsive",
-        "duration_s": round(float(e.get("duration_sec") or 0), 3),
-    } for e in vis_events if e.get("duration_sec")]
+            k = (e.get("animal_id") or "", int(hr))
+            cc[k] = cc.get(k, 0) + 1
+    circadian = [{"animal": a, "group": agrp.get(a, ""),
+                  "hour_of_day": hr, "events": n}
+                 for (a, hr), n in sorted(cc.items())]
+
+    # Duration (per animal): mean/median per animal, split by event type — one
+    # value per animal so durations can be compared statistically by group.
+    import statistics
+    dba = {}
+    for e in vis_events:
+        d = e.get("duration_sec")
+        if not d:
+            continue
+        rec = dba.setdefault(e.get("animal_id") or "",
+                             {"conv": [], "nonconv": [], "all": []})
+        rec["all"].append(float(d))
+        (rec["conv"] if e.get("type") == "convulsive"
+         else rec["nonconv"]).append(float(d))
+
+    def _mean(lst):
+        return round(sum(lst) / len(lst), 3) if lst else None
+
+    durations = []
+    for a in sorted(dba):
+        rec = dba[a]
+        durations.append({
+            "animal": a, "group": agrp.get(a, ""),
+            "n_conv": len(rec["conv"]), "n_nonconv": len(rec["nonconv"]),
+            "mean_dur_conv_s": _mean(rec["conv"]),
+            "mean_dur_nonconv_s": _mean(rec["nonconv"]),
+            "mean_dur_all_s": _mean(rec["all"]),
+            "median_dur_all_s": (round(statistics.median(rec["all"]), 3)
+                                 if rec["all"] else None),
+        })
 
     path = _save_file("results_graph_data.xlsx", "Export graph data (XLSX)")
     if not path:
@@ -2161,8 +2190,9 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
         wb = openpyxl.Workbook()
         first = True
         for title, rows in (("PerAnimal", per_animal), ("PerGroup", per_group),
-                            ("Longitudinal", longitudinal),
-                            ("Circadian", circadian), ("Durations", durations)):
+                            ("Daily_perAnimal", daily),
+                            ("Circadian_perAnimal", circadian),
+                            ("Duration_perAnimal", durations)):
             ws = wb.active if first else wb.create_sheet()
             ws.title = title
             first = False
