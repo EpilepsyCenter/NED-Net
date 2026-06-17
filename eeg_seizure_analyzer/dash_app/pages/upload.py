@@ -250,6 +250,47 @@ def landing_load_multiple(n_clicks, sid, refresh):
     return (refresh or 0) + 1
 
 
+def _reset_to_landing(state: server_state.SessionState) -> None:
+    """Discard the current recording / multi-file project and clear all
+    navigation flags so the upload tab falls back to the landing screen.
+
+    Lets the user start over from any load screen (e.g. clicked "Load File"
+    by mistake and wants "Load Multiple", or wants to open a different set).
+    """
+    state.recording = None
+    state.all_channels_info = []
+    state.activity_recordings = {}
+    state.channel_pairings = []
+    state.seizure_events = []
+    state.spike_events = []
+    state.detected_events = []
+    state.st_detection_info = {}
+    state.sp_detection_info = {}
+    for key in (
+        "show_upload_form", "show_batch_form",
+        "project_files", "project_active_idx", "project_folder",
+        "upload_source_path", "upload_filename", "video_path",
+        "tr_annotations", "tr_current_idx", "sz_selected_event_key",
+    ):
+        state.extra.pop(key, None)
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Input("upload-home-btn", "n_clicks"),
+    State("session-id", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def go_home(n_clicks, sid, refresh):
+    """Return to the landing/start screen from any load screen."""
+    if not n_clicks:
+        return no_update
+    state = server_state.get_session(sid)
+    _reset_to_landing(state)
+    return (refresh or 0) + 1
+
+
 def _upload_layout() -> html.Div:
     return html.Div(
         style={"padding": "24px", "maxWidth": "800px", "margin": "0 auto"},
@@ -292,6 +333,15 @@ def _upload_layout() -> html.Div:
 
             # Status area
             html.Div(id="upload-status", style={"marginTop": "16px"}),
+
+            # Back to the start screen (e.g. to pick "Load Multiple" instead)
+            html.Div(
+                style={"marginTop": "24px"},
+                children=[
+                    dbc.Button("← Back to start", id="upload-home-btn",
+                               className="btn-ned-secondary"),
+                ],
+            ),
         ],
     )
 
@@ -492,6 +542,11 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                         id="upload-back-btn",
                         className="btn-ned-secondary",
                     ),
+                    dbc.Button(
+                        "← Back to start",
+                        id="upload-home-btn",
+                        className="btn-ned-secondary",
+                    ),
                 ],
             ),
 
@@ -621,6 +676,11 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                         id="upload-new-file-btn",
                         className="btn-ned-secondary",
                     ),
+                    dbc.Button(
+                        "← Back to start",
+                        id="upload-home-btn",
+                        className="btn-ned-secondary",
+                    ),
                 ],
             ),
         ],
@@ -673,7 +733,7 @@ def _batch_browse_layout(state: server_state.SessionState) -> html.Div:
             html.Div(
                 style={"marginTop": "20px"},
                 children=[
-                    dbc.Button("Back", id="batch-back-btn",
+                    dbc.Button("← Back to start", id="batch-back-btn",
                                className="btn-ned-secondary"),
                 ],
             ),
@@ -872,6 +932,11 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                         id="upload-new-file-btn",
                         className="btn-ned-secondary",
                         style={"display": "none"},
+                    ),
+                    dbc.Button(
+                        "← Back to start",
+                        id="upload-home-btn",
+                        className="btn-ned-secondary",
                     ),
                 ],
             ),
@@ -1934,6 +1999,20 @@ def _load_edf_into_state(state: server_state.SessionState, edf_path: str):
     from eeg_seizure_analyzer.io.edf_reader import (
         scan_edf_channels, read_edf, read_edf_paired, auto_pair_channels,
     )
+
+    # Fully reset any previously-loaded recording first, so a new file never
+    # inherits the previous one's channel pairings, activity channels, scanned
+    # channel list, video, or annotation cursor. Without this, loading a new
+    # multi-file project (batch_load_all loads file 0 without clearing) or any
+    # non-paired file after a paired one could show the wrong channels/file in
+    # the viewer. The non-paired branch below otherwise leaves these untouched.
+    state.activity_recordings = {}
+    state.channel_pairings = []
+    state.all_channels_info = []
+    state.extra.pop("tr_annotations", None)
+    state.extra.pop("tr_current_idx", None)
+    state.extra.pop("sz_selected_event_key", None)
+    state.extra.pop("video_path", None)
 
     channel_info = scan_edf_channels(edf_path)
     eeg_indices, act_indices, pairings = auto_pair_channels(channel_info)
