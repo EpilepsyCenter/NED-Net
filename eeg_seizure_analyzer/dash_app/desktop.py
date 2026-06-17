@@ -31,23 +31,43 @@ from eeg_seizure_analyzer.dash_app.main import app
 HOST = "127.0.0.1"
 PREFERRED_PORT = 8051  # native app; falls back to a free port if busy
 TITLE = "NED-Net"
-WIN_WIDTH = 1440
-WIN_HEIGHT = 900
 MIN_SIZE = (960, 640)
+# Default window: a comfortable fraction of the primary screen so it fills a
+# typical laptop display (e.g. ~1730x970 on 1920x1080) without going edge-to-edge.
+WIN_SCREEN_FRACTION = 0.90
+WIN_MAX = (2200, 1400)        # cap so it stays sane on large/ultrawide monitors
+WIN_FALLBACK = (1600, 1000)   # used only if the screen size can't be detected
 SERVER_THREADS = 8  # waitress worker threads
 
 _ASSETS = Path(__file__).parent / "assets"
 _WIN_STATE_PATH = Path.home() / ".eeg_seizure_analyzer" / "window.json"
 
 
+def _default_window_size() -> tuple[int, int]:
+    """A comfortably large default: ~90% of the primary screen, capped so it
+    stays reasonable on big/ultrawide monitors and never below MIN_SIZE.
+
+    Falls back to a fixed size if the screen can't be detected (e.g. a
+    pywebview build without ``screens``).
+    """
+    try:
+        screen = webview.screens[0]
+        w = min(int(int(screen.width) * WIN_SCREEN_FRACTION), WIN_MAX[0])
+        h = min(int(int(screen.height) * WIN_SCREEN_FRACTION), WIN_MAX[1])
+    except Exception:
+        w, h = WIN_FALLBACK
+    return (max(w, MIN_SIZE[0]), max(h, MIN_SIZE[1]))
+
+
 def _load_window_size() -> tuple[int, int]:
-    """Restore the last window size (clamped to MIN_SIZE); defaults otherwise."""
+    """Restore the last saved window size (clamped to MIN_SIZE); otherwise a
+    screen-sized default."""
     try:
         d = json.loads(_WIN_STATE_PATH.read_text())
         return (max(int(d["width"]), MIN_SIZE[0]),
                 max(int(d["height"]), MIN_SIZE[1]))
     except Exception:
-        return WIN_WIDTH, WIN_HEIGHT
+        return _default_window_size()
 
 
 def _save_window_size(width: int, height: int) -> None:
