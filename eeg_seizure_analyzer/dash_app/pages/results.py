@@ -1672,21 +1672,14 @@ def _build_confidence_hist(events, is_seizure) -> go.Figure:
 
 
 def _build_longitudinal(events, starts, fa_rows=None, normalize=None) -> go.Figure:
-    """Events per recording day, one trace per group.
+    """Per recording-day distribution across animals, grouped by group.
 
-    Each event's day index is computed against its animal's recording start —
-    ``starts[animal_id]`` (explicit override, else the animal's earliest
-    recorded date). Day N = (event date − that animal's start) + 1, so cohorts
-    that began on different calendar dates align on a common day-1. Events
-    without a parseable date, or whose animal has no known start, are skipped.
-    The day-1 reference is per animal, so the timeline is *not* anchored to a
-    single calendar date (no global day-1 label).
-
-    When ``normalize == "per_hour"`` and ``fa_rows`` (per-file observation rows)
-    are given, each day's count is divided by the animal-hours recorded on that
-    day index for the group, giving events per animal-hour per day — so the
-    longitudinal view matches the group-comparison normalisation and isn't
-    biased by group size or uneven recording coverage."""
+    For each recording day (day 1 = each animal's own recording start) and
+    group, a bar shows the MEAN per-animal value and the individual animals are
+    overlaid as points. The per-animal value is that animal's event count that
+    day (raw) or events per animal-hour that day (``normalize == "per_hour"``);
+    animals that recorded that day with no events count as 0 so means aren't
+    inflated. Cohorts with different calendar starts align on a common day 1."""
     from datetime import date as _date
 
     fig = go.Figure()
@@ -1698,74 +1691,96 @@ def _build_longitudinal(events, starts, fa_rows=None, normalize=None) -> go.Figu
             return None
 
     start_dt = {a: _parse(s) for a, s in (starts or {}).items()}
-    by_group: dict = {}  # group -> {day_index: count}
+    per_hour = normalize == "per_hour"
+    # Per-(animal, day) event counts and recorded hours.
+    group_of: dict = {}
+    counts: dict = {}
     for e in events:
         dt = _parse(_ev_date(e))
-        s = start_dt.get(e.get("animal_id") or "")
+        a = e.get("animal_id") or ""
+        s = start_dt.get(a)
         if dt is None or s is None:
             continue
         di = (dt - s).days + 1
-        g = e.get("group_id") or "(unlabeled)"
-        by_group.setdefault(g, {})
-        by_group[g][di] = by_group[g].get(di, 0) + 1
-
-    # Per-(group, day) recording hours — denominator for per-animal-hour rates.
-    per_hour = normalize == "per_hour"
+        counts[(a, di)] = counts.get((a, di), 0) + 1
+        if e.get("group_id"):
+            group_of[a] = e["group_id"]
     hours: dict = {}
-    if per_hour and fa_rows:
+    if fa_rows:
         for r in fa_rows:
             dt = _parse(r.get("date"))
-            s = start_dt.get(r.get("animal_id") or "")
+            a = r.get("animal_id") or ""
+            s = start_dt.get(a)
             if dt is None or s is None:
                 continue
             di = (dt - s).days + 1
-            g = r.get("group_id") or "(unlabeled)"
-            hours.setdefault(g, {})
-            hours[g][di] = hours[g].get(di, 0.0) + (r.get("valid_sec") or 0) / 3600.0
-    if not by_group:
+            hours[(a, di)] = hours.get((a, di), 0.0) + (r.get("valid_sec") or 0) / 3600.0
+            group_of.setdefault(a, r.get("group_id") or "")
+
+    def _by_group_day(use_hour):
+        """(group, day) -> list of per-animal values; 0 for recorded-but-empty
+        animal-days. Universe is recording presence (hours) when available."""
+        res: dict = {}
+        universe = (set(hours) if (use_hour and hours)
+                    else (set(hours) | set(counts)))
+        for (a, di) in universe:
+            h = hours.get((a, di), 0.0)
+            n = counts.get((a, di), 0)
+            if use_hour:
+                if h <= 0:
+                    continue
+                v = n / h
+            else:
+                v = n
+            g = group_of.get(a) or "(unlabeled)"
+            res.setdefault((g, di), []).append(v)
+        return res
+
+    by_gd = _by_group_day(per_hour)
+    # Fall back to raw counts if per-animal-hour yields nothing (no hour data).
+    if per_hour and not by_gd:
+        per_hour = False
+        by_gd = _by_group_day(False)
+
+    if not by_gd:
         apply_fig_theme(fig)
-        fig.update_layout(
-            title="Longitudinal (no date data)",
-            xaxis_title="Recording day", yaxis_title="Events")
+        fig.update_layout(title="Longitudinal (no date data)",
+                          xaxis_title="Recording day", yaxis_title="Events")
         return fig
 
-    def _make_traces(use_hour):
-        """Return [(group, idx, xs, ys)] and the total plotted point count."""
-        out, total = [], 0
-        for i, g in enumerate(sorted(by_group)):
-            days = sorted(by_group[g])
-            if use_hour:
-                # Skip days with no recorded hours (rate undefined).
-                xs, ys = [], []
-                for d in days:
-                    h = hours.get(g, {}).get(d, 0.0)
-                    if h > 0:
-                        xs.append(d)
-                        ys.append(by_group[g][d] / h)
-            else:
-                xs, ys = days, [by_group[g][d] for d in days]
-            total += len(xs)
-            out.append((g, i, xs, ys))
-        return out, total
+    groups = sorted({g for (g, _) in by_gd})
+    days = sorted({di for (_, di) in by_gd})
+    n_g = max(len(groups), 1)
+    bw = 0.8 / n_g  # width allotted to each group within a day slot
 
-    traces, total = _make_traces(per_hour)
-    # If per-animal-hour produced nothing plottable (no/ mismatched hour data),
-    # fall back to raw counts so the graph never goes blank when data exists.
-    if per_hour and total == 0:
-        per_hour = False
-        traces, _ = _make_traces(False)
-
-    for g, i, xs, ys in traces:
+    for gi, g in enumerate(groups):
+        off = (gi - (n_g - 1) / 2.0) * bw
+        color = _GROUP_PALETTE[gi % len(_GROUP_PALETTE)]
+        means = [(sum(by_gd[(g, d)]) / len(by_gd[(g, d)]))
+                 if by_gd.get((g, d)) else 0.0 for d in days]
+        fig.add_trace(go.Bar(
+            x=[d + off for d in days], y=means, width=bw, name=g,
+            marker_color=color, opacity=0.45))
+        # Individual animal points, deterministic jitter within the bar.
+        px, py = [], []
+        for d in days:
+            vals = by_gd.get((g, d), [])
+            k = len(vals)
+            for j, v in enumerate(vals):
+                px.append(d + off + (((j + 1) / (k + 1)) - 0.5) * bw * 0.7)
+                py.append(v)
         fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="lines+markers",
-            name=g, line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)])))
+            x=px, y=py, mode="markers", name=g, showlegend=False,
+            marker=dict(color=color, size=5,
+                        line=dict(width=0.5, color="rgba(0,0,0,0.45)"))))
+
     fig.update_layout(
-        title=("Longitudinal — events per animal-hour per recording day "
-               if per_hour else
-               "Longitudinal — events per recording day ")
-              + "(day 1 = each animal's recording start)",
+        barmode="overlay",
+        title="Longitudinal — per-animal "
+              + ("events/animal-hour" if per_hour else "events")
+              + " by recording day (bar = group mean, dots = animals)",
         xaxis_title="Recording day",
-        yaxis_title="Events / animal-hour" if per_hour else "Events",
+        yaxis_title="Events / animal-hour" if per_hour else "Events / animal",
         legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
     return fig
