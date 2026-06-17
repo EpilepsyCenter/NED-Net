@@ -379,6 +379,10 @@ def layout(sid: str | None) -> html.Div:
                     dbc.Col(dcc.Graph(id="res-dist-confidence",
                                       config={"responsive": True}), width=6),
                 ], className="mb-3"),
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="res-dist-duration-group",
+                                      config={"responsive": True}), width=12),
+                ], className="mb-3"),
             ]),
 
             # ── Daily burden + circadian (timeline — live monitoring) ──
@@ -472,6 +476,7 @@ def res_on_project_switch(project):
     Output("res-animal-table", "children"),
     Output("res-dist-duration", "figure"),
     Output("res-dist-confidence", "figure"),
+    Output("res-dist-duration-group", "figure"),
     Output("res-longitudinal", "figure"),
     Input("res-apply", "n_clicks"),
     Input("res-source-selector", "value"),
@@ -542,7 +547,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         return (alert(f"Database error: {e}", "danger"),
                 empty_fig, empty_fig, html.Div(),
                 empty_fig, html.Div(), html.Div(),
-                empty_fig, empty_fig, empty_fig)
+                empty_fig, empty_fig, empty_fig, empty_fig)
 
     # Post-filter by file IDs
     if file_ids:
@@ -630,12 +635,13 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     animal_table = _build_animal_table(animal_rollup, is_seizure)
     dur_fig = _panel_legend(_build_duration_hist(vis_events, is_seizure))
     conf_fig = _panel_legend(_build_confidence_hist(vis_events, is_seizure))
+    dur_grp_fig = _panel_legend(_build_duration_by_group(vis_events, is_seizure))
     long_fig = _panel_legend(
         _build_longitudinal(vis_events, animal_starts, vis_fa, normalize))
 
     return (summary_cards, daily_fig, circ_fig, table,
             group_fig, group_table, animal_table,
-            dur_fig, conf_fig, long_fig)
+            dur_fig, conf_fig, dur_grp_fig, long_fig)
 
 
 @callback(
@@ -1484,6 +1490,48 @@ def _build_duration_hist(events, is_seizure) -> go.Figure:
         fig.add_trace(go.Histogram(x=durs, marker_color=_NONCONV_COLOR))
     fig.update_layout(title="Event duration", xaxis_title="Duration (s)",
                       yaxis_title="Count", legend=dict(orientation="h", y=1.1))
+    apply_fig_theme(fig)
+    return fig
+
+
+def _build_duration_by_group(events, is_seizure) -> go.Figure:
+    """Box plot of event duration by group, split by event type.
+
+    For seizures: grouped boxes per group (Convulsive vs Non-convulsive), so
+    you can compare each type's duration both within and across groups. For
+    spikes (single type): one box per group.
+    """
+    fig = go.Figure()
+    rows = [(e.get("group_id") or "(unlabeled)",
+             "Convulsive" if e.get("type") == "convulsive" else "Non-convulsive",
+             float(e["duration_sec"]))
+            for e in events if e.get("duration_sec")]
+    if not rows:
+        apply_fig_theme(fig)
+        fig.update_layout(title="Event duration by group")
+        return fig
+
+    groups = sorted({r[0] for r in rows})
+    if is_seizure:
+        for tname, color in (("Convulsive", _CONV_COLOR),
+                             ("Non-convulsive", _NONCONV_COLOR)):
+            xs = [r[0] for r in rows if r[1] == tname]
+            ys = [r[2] for r in rows if r[1] == tname]
+            if ys:
+                fig.add_trace(go.Box(x=xs, y=ys, name=tname, marker_color=color,
+                                     boxmean=True))
+        fig.update_layout(boxmode="group")
+        title = "Event duration by group & type"
+    else:
+        for i, g in enumerate(groups):
+            ys = [r[2] for r in rows if r[0] == g]
+            fig.add_trace(go.Box(
+                y=ys, name=g, boxmean=True,
+                marker_color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)]))
+        title = "Spike duration by group"
+    fig.update_layout(title=title, xaxis_title="Group",
+                      yaxis_title="Duration (s)",
+                      legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
     return fig
 
