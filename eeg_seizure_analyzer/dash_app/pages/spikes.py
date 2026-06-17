@@ -184,18 +184,19 @@ def layout(sid: str | None) -> html.Div:
 
             # Detection method selector (Classical / U-Net)
             html.Div(
-                style={"marginBottom": "16px", "maxWidth": "260px"},
+                style={"marginBottom": "16px"},
                 children=[
                     html.Label(
                         "Detection method",
                         style={"fontSize": "0.82rem", "fontWeight": "500",
                                "marginBottom": "6px", "display": "block",
                                "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
+                    dbc.RadioItems(
                         id="sp-method-selector",
                         options=_SP_METHOD_OPTIONS,
                         value=persisted_method,
-                        clearable=False,
+                        inline=True,
+                        className="mb-2",
                         style={"fontSize": "0.82rem"},
                     ),
                 ],
