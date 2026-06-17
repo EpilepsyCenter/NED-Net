@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -151,6 +152,9 @@ def main() -> int:
     ap.add_argument("--merge-gap", type=float, default=2.0)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--no-recursive", action="store_true")
+    ap.add_argument("--path-include", default=None,
+                    help="only process EDFs whose full path matches this regex "
+                         "(e.g. 'Week[123]-' for the first 3 weeks)")
     ap.add_argument("--overwrite", action="store_true",
                     help="re-detect files already in the DB")
     ap.add_argument("--tmpdir", default=os.environ.get("SNIC_TMP", "/tmp"),
@@ -164,6 +168,15 @@ def main() -> int:
     if not files:
         print(f"No EDFs under {args.edf_dir}", file=sys.stderr)
         return 1
+    if args.path_include:
+        rx = re.compile(args.path_include)
+        n_before = len(files)
+        files = [f for f in files if rx.search(f)]
+        print(f"Path filter '{args.path_include}': {len(files)}/{n_before} EDFs kept.",
+              flush=True)
+        if not files:
+            print(f"No EDFs match --path-include '{args.path_include}'", file=sys.stderr)
+            return 1
 
     db.init_db(os.path.abspath(os.path.expanduser(args.db_path)))
     done = set() if args.overwrite else db.get_processed_paths()

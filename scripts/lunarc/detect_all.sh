@@ -36,12 +36,13 @@
 
 # ---- Defaults (used if the var isn't already set / left blank) ----
 : "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/edf_data}"
-: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect.db}"
-: "${MODEL:=unet_kaha_v1}"
-: "${CONV_MODEL:=conv_kaha_v1}"   # blank = use detector ch1 instead of cascade
-: "${METADATA_CSV:=}"             # optional batch metadata CSV/XLSX
-: "${THRESHOLD:=0.5}"
-: "${CONV_THRESHOLD:=0.5}"
+: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect_wk1-3.db}"
+: "${MODEL:=UNetv2_20260615}"
+: "${CONV_MODEL:=Convulsive_v4LUNARC_20260616}"   # blank = use detector ch1 instead of cascade
+: "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"   # full SV2A run, 1893 EDFs
+: "${PATH_INCLUDE:=Week[123]-}"   # only first 3 weeks (WeekN-DayNN subfolders); blank = all
+: "${THRESHOLD:=0.7}"             # UNetv2_20260615 optimal operating point (best F1 0.8126 @ 0.7)
+: "${CONV_THRESHOLD:=0.45}"       # trained operating point (best F1 0.8848 @ 0.45, job 3286330)
 : "${MIN_DURATION:=5}"
 : "${MERGE_GAP:=2}"
 : "${OVERWRITE:=0}"               # 1 = re-detect files already in the DB
@@ -61,6 +62,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask MODEL          "Seizure detector model"
     ask CONV_MODEL     "Convulsive classifier model (blank = none)"
     ask METADATA_CSV   "Batch metadata CSV (blank = none)"
+    ask PATH_INCLUDE   "Path-include regex (blank = all files)"
     ask THRESHOLD      "Seizure threshold"
     ask CONV_THRESHOLD "Convulsive threshold"
     read -r -p "Re-detect files already in the DB? (y/N): " ow
@@ -69,8 +71,9 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Submitting: edf=$EDF_DIR"
     echo "            db=$DB_PATH"
     echo "            model=$MODEL conv=${CONV_MODEL:-none} meta=${METADATA_CSV:-none}"
+    echo "            path_include=${PATH_INCLUDE:-all}"
     echo "            thr=$THRESHOLD conv_thr=$CONV_THRESHOLD overwrite=$OVERWRITE"
-    export EDF_DIR DB_PATH MODEL CONV_MODEL METADATA_CSV THRESHOLD \
+    export EDF_DIR DB_PATH MODEL CONV_MODEL METADATA_CSV PATH_INCLUDE THRESHOLD \
            CONV_THRESHOLD MIN_DURATION MERGE_GAP OVERWRITE
     sbatch --export=ALL "$0"
     exit $?
@@ -86,6 +89,7 @@ echo "Start time: $(date)"
 echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
 echo "Model:      $MODEL   conv=${CONV_MODEL:-none}   meta=${METADATA_CSV:-none}"
+echo "Filter:     path_include=${PATH_INCLUDE:-all}   thr=$THRESHOLD   conv_thr=$CONV_THRESHOLD"
 echo "========================================="
 
 module purge
@@ -99,6 +103,7 @@ mkdir -p logs "$(dirname "$DB_PATH")"
 # Optional args only when set.
 CONV_ARG=();     [ -n "$CONV_MODEL" ]   && CONV_ARG=(--convulsive-model "$CONV_MODEL")
 META_ARG=();     [ -n "$METADATA_CSV" ] && META_ARG=(--metadata-csv "$METADATA_CSV")
+PATH_ARG=();     [ -n "$PATH_INCLUDE" ] && PATH_ARG=(--path-include "$PATH_INCLUDE")
 OVERWRITE_ARG=(); [ "$OVERWRITE" = "1" ] && OVERWRITE_ARG=(--overwrite)
 
 python scripts/lunarc/detect_batch.py \
@@ -111,7 +116,7 @@ python scripts/lunarc/detect_batch.py \
     --merge-gap "$MERGE_GAP" \
     --workers "$(nproc)" \
     --tmpdir "${SNIC_TMP:-/tmp}" \
-    "${CONV_ARG[@]}" "${META_ARG[@]}" "${OVERWRITE_ARG[@]}"
+    "${CONV_ARG[@]}" "${META_ARG[@]}" "${PATH_ARG[@]}" "${OVERWRITE_ARG[@]}"
 
 echo "========================================="
 echo "Detection finished at $(date)"
