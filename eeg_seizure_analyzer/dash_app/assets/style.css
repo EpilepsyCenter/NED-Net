@@ -1,44 +1,51 @@
 /* ── NED-Net Theme ──────────────────────────────────────────────────── */
 
 /* ── Google Fonts import ───────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-    --ned-bg: #f6f8fa;
-    --ned-sidebar: #ffffff;
-    --ned-surface: #ffffff;
-    --ned-surface-hover: #f0f2f5;
-    --ned-border: #d0d7de;
-    --ned-text: #1f2328;
-    --ned-text-muted: #656d76;
-    --ned-accent: #0969da;
-    --ned-accent-hover: #0550ae;
-    --ned-success: #1a7f37;
-    --ned-warning: #9a6700;
-    --ned-danger: #cf222e;
-    --ned-purple: #8250df;
-    --ned-radius: 8px;
-    --ned-transition: 0.2s ease;
+    /* Precision palette — warm-paper canvas, restrained phosphor-cyan accent.
+       Cloned from the TRACER "precision" instrument theme for brand parity. */
+    --ned-bg: #efeee8;            /* base canvas */
+    --ned-sidebar: #f7f6f1;       /* chrome — sidebar / tab bar */
+    --ned-surface: #fcfbf7;       /* cards — lightest warm paper, so they lift */
+    --ned-surface-hover: #e6e4dc;
+    --ned-border: rgba(20, 22, 28, 0.10);
+    --ned-text: #15171b;          /* near-black, never pure */
+    --ned-text-muted: #545863;
+    --ned-accent: oklch(0.54 0.10 215);        /* desaturated cyan, legible on cream */
+    --ned-accent-hover: oklch(0.46 0.12 215);
+    --ned-accent-dim: oklch(0.86 0.05 215);
+    --ned-success: oklch(0.62 0.13 150);
+    --ned-warning: oklch(0.70 0.16 65);
+    --ned-danger: oklch(0.58 0.20 25);
+    --ned-purple: oklch(0.52 0.16 290);
+    --ned-radius: 4px;
+    --ned-transition: 120ms cubic-bezier(0.2, 0.7, 0.2, 1);
     --ned-font: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ned-font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', ui-monospace, monospace;
+    --ned-tracking: 0.08em;       /* uppercase label letter-spacing */
     --ned-font-size: 0.92rem;
 }
 
 /* ── Dark theme overrides ──────────────────────────────────────────── */
 
 [data-theme="dark"] {
-    --ned-bg: #0f1117;
-    --ned-sidebar: #161b22;
-    --ned-surface: #1c2128;
-    --ned-surface-hover: #242a33;
-    --ned-border: #2d333b;
-    --ned-text: #e6edf3;
-    --ned-text-muted: #8b949e;
-    --ned-accent: #58a6ff;
-    --ned-accent-hover: #79c0ff;
-    --ned-success: #3fb950;
-    --ned-warning: #d29922;
-    --ned-danger: #f85149;
-    --ned-purple: #bc8cff;
+    /* Precision dark — blue-black mirror of the warm-paper light theme. */
+    --ned-bg: #0b0d10;
+    --ned-sidebar: #12161b;
+    --ned-surface: #12161b;
+    --ned-surface-hover: #1a1f26;
+    --ned-border: rgba(255, 255, 255, 0.09);
+    --ned-text: #e6e8ec;
+    --ned-text-muted: #9ba2ad;
+    --ned-accent: oklch(0.78 0.10 215);
+    --ned-accent-hover: oklch(0.85 0.10 215);
+    --ned-accent-dim: oklch(0.40 0.08 215);
+    --ned-success: oklch(0.74 0.13 150);
+    --ned-warning: oklch(0.78 0.16 65);
+    --ned-danger: oklch(0.72 0.18 25);
+    --ned-purple: oklch(0.70 0.16 290);
 }
 
 /* ── Global ────────────────────────────────────────────────────────── */
@@ -142,35 +149,50 @@ body {
 
 #tab-bar {
     background: var(--ned-sidebar);
-    border-bottom: 1px solid var(--ned-border);
-    padding: 0 24px;
+    padding: 10px 24px 12px;
     position: sticky;
     top: 0;
     z-index: 50;
 }
 
+/* Main button row — flex with breathing room. Tools stays pushed right by
+   the flex:1 spacer in the markup. No bootstrap .nav-tabs underline. The
+   #subtab-bar is a SEPARATE child below this row, so it stays under the menu. */
+#tab-bar > .nav-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 10px;
+    border-bottom: none !important;
+}
+
+/* Top menu rendered as instrument-panel buttons (TRACER .btn style). */
 #tab-bar .nav-link {
     color: var(--ned-text-muted) !important;
-    border: none !important;
-    border-bottom: 2px solid transparent !important;
-    border-radius: 0 !important;
-    padding: 14px 18px !important;
-    font-size: 1.0rem;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: var(--ned-radius) !important;
+    background: color-mix(in oklab, var(--ned-surface-hover) 55%, transparent) !important;
+    padding: 10px 18px !important;
+    font-family: var(--ned-font-mono) !important;
+    font-size: 0.84rem;
     font-weight: 500;
-    letter-spacing: 0.3px;
-    transition: color var(--ned-transition), border-color var(--ned-transition);
-    background: transparent !important;
+    text-transform: uppercase;
+    letter-spacing: var(--ned-tracking);
+    transition: all var(--ned-transition);
 }
 
 #tab-bar .nav-link:hover {
-    color: var(--ned-text) !important;
-    border-bottom-color: var(--ned-border) !important;
+    color: color-mix(in oklab, var(--ned-text) 70%, var(--ned-accent)) !important;
+    border-color: color-mix(in oklab, var(--ned-border) 50%, var(--ned-accent)) !important;
+    background: var(--ned-surface-hover) !important;
 }
 
+/* Active tab — accent-bordered, accent-tinted "lit" key. */
 #tab-bar .nav-link.active {
     color: var(--ned-accent) !important;
-    border-bottom-color: var(--ned-accent) !important;
-    background: transparent !important;
+    border-color: var(--ned-accent) !important;
+    background: color-mix(in oklab, var(--ned-accent) 12%, transparent) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ned-accent) 25%, transparent) !important;
 }
 
 /* ── Subtab bar ───────────────────────────────────────────────────── */
@@ -178,7 +200,8 @@ body {
 #subtab-bar {
     background: var(--ned-sidebar);
     border-bottom: 1px solid var(--ned-border);
-    padding: 0 24px 0 48px;
+    padding: 0 24px 0 0;     /* #tab-bar already pads 24px left; align submenu under the main buttons */
+    margin-top: 12px;        /* breathing room below the main button row */
 }
 
 #subtab-bar .nav-link {
@@ -187,9 +210,11 @@ body {
     border-bottom: 2px solid transparent !important;
     border-radius: 0 !important;
     padding: 8px 16px !important;
-    font-size: 0.85rem;
-    font-weight: 400;
-    letter-spacing: 0.2px;
+    font-family: var(--ned-font-mono) !important;
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: var(--ned-tracking);
     transition: color var(--ned-transition), border-color var(--ned-transition);
     background: transparent !important;
 }
@@ -540,57 +565,81 @@ p, span, div, h1, h2, h3, h4, h5, h6 {
 
 /* ── Buttons ───────────────────────────────────────────────────────── */
 
-.btn-ned-primary {
-    background: var(--ned-accent) !important;
-    border: none !important;
-    color: #fff !important;
-    font-weight: 600 !important;
-    border-radius: 6px !important;
-    padding: 8px 20px !important;
-    font-size: 0.85rem !important;
-    transition: background var(--ned-transition) !important;
-}
-
-.btn-ned-primary:hover {
-    background: var(--ned-accent-hover) !important;
-}
-
-.btn-ned-secondary {
-    background: transparent !important;
-    border: 1px solid var(--ned-border) !important;
-    color: var(--ned-text) !important;
+/* Shared instrument-key typography: uppercase JetBrains Mono, sharp radius. */
+.btn-ned-primary,
+.btn-ned-secondary,
+.btn-ned-danger {
+    font-family: var(--ned-font-mono) !important;
+    text-transform: uppercase !important;
+    letter-spacing: var(--ned-tracking) !important;
     font-weight: 500 !important;
-    border-radius: 6px !important;
-    padding: 8px 20px !important;
-    font-size: 0.85rem !important;
+    font-size: 0.74rem !important;
+    border-radius: var(--ned-radius) !important;
+    padding: 8px 18px !important;
     transition: all var(--ned-transition) !important;
 }
 
+/* Primary — backlit instrument key: top highlight + crisp edges. */
+.btn-ned-primary {
+    background: linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--ned-accent) 92%, white 8%),
+        var(--ned-accent)
+    ) !important;
+    border: none !important;
+    color: #fff !important;
+    text-shadow: 0 1px 0 color-mix(in oklab, var(--ned-accent) 55%, black 45%) !important;
+    box-shadow:
+        inset 0 1px 0 color-mix(in oklab, var(--ned-accent) 60%, white 40%),
+        0 1px 0 color-mix(in oklab, var(--ned-accent) 60%, black 40%) !important;
+}
+
+.btn-ned-primary:hover {
+    background: linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--ned-accent-hover) 92%, white 8%),
+        var(--ned-accent-hover)
+    ) !important;
+}
+
+.btn-ned-primary:active {
+    transform: translateY(0.5px);
+    box-shadow: inset 0 1px 2px color-mix(in oklab, var(--ned-accent) 50%, black 50%) !important;
+}
+
+.btn-ned-secondary {
+    background: color-mix(in oklab, var(--ned-surface-hover) 55%, transparent) !important;
+    border: 1px solid var(--ned-border) !important;
+    color: var(--ned-text) !important;
+}
+
+/* Hover pulls the text toward accent — reactive without recolouring the fill. */
 .btn-ned-secondary:hover {
-    border-color: var(--ned-text-muted) !important;
-    background: var(--ned-surface) !important;
+    border-color: color-mix(in oklab, var(--ned-border) 50%, var(--ned-accent)) !important;
+    color: color-mix(in oklab, var(--ned-text) 70%, var(--ned-accent)) !important;
+    background: var(--ned-surface-hover) !important;
+}
+
+.btn-ned-secondary:active {
+    transform: translateY(0.5px);
 }
 
 .btn-ned-secondary.active,
 .btn-ned-secondary:active:focus {
     border-color: var(--ned-accent) !important;
-    background: rgba(9, 105, 218, 0.1) !important;
+    background: color-mix(in oklab, var(--ned-accent) 10%, transparent) !important;
     color: var(--ned-accent) !important;
-    box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2) !important;
+    box-shadow: inset 2px 0 0 var(--ned-accent) !important;
 }
 
 .btn-ned-danger {
     background: transparent !important;
-    border: 1px solid rgba(207, 34, 46, 0.4) !important;
+    border: 1px solid color-mix(in oklab, var(--ned-danger) 40%, transparent) !important;
     color: var(--ned-danger) !important;
-    font-weight: 500 !important;
-    border-radius: 6px !important;
-    padding: 8px 20px !important;
-    font-size: 0.85rem !important;
 }
 
 .btn-ned-danger:hover {
-    background: rgba(207, 34, 46, 0.08) !important;
+    background: color-mix(in oklab, var(--ned-danger) 8%, transparent) !important;
 }
 
 /* ── Upload area ───────────────────────────────────────────────────── */
@@ -1003,4 +1052,207 @@ p, span, div, h1, h2, h3, h4, h5, h6 {
     #main-content {
         margin-left: 240px;
     }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   PRECISION REFINEMENTS — the touches that make the UI feel engineered.
+   Ported from the TRACER "precision" palette. Layered at the end so they
+   override the baseline component rules above.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Mono inputs with tabular figures — "armed channel" feel ────────── */
+input[type="number"],
+input[type="text"],
+input[type="search"],
+textarea,
+select,
+.form-select {
+    font-family: var(--ned-font-mono) !important;
+    font-feature-settings: "tnum" !important;
+}
+
+/* Focused input gets a 2px accent strip on its left edge + faint ring,
+   instead of a heavy all-around glow. */
+input[type="number"]:focus,
+input[type="text"]:focus,
+input[type="search"]:focus,
+textarea:focus,
+select:focus,
+.form-select:focus {
+    box-shadow:
+        inset 2px 0 0 var(--ned-accent),
+        0 0 0 1px color-mix(in oklab, var(--ned-accent) 18%, transparent) !important;
+}
+
+/* ── Numeric readouts — confident mono with tabular figures ─────────── */
+.metric-card .metric-value {
+    font-family: var(--ned-font-mono);
+    font-feature-settings: "tnum";
+    letter-spacing: -0.01em;
+}
+
+/* ── Section titles → labelled schematic boundary ───────────────────── *
+   Accent tick · title · hairline rule to the panel's right edge. */
+#tab-content h4 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+#tab-content h4::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: var(--ned-accent);
+    flex-shrink: 0;
+}
+#tab-content h4::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--ned-border);
+    min-width: 12px;
+}
+
+/* ── Selection + scrollbar pick up the accent ───────────────────────── */
+::selection {
+    background: color-mix(in oklab, var(--ned-accent) 28%, transparent);
+    color: var(--ned-text);
+}
+::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--ned-text-muted) 60%, var(--ned-accent));
+}
+
+/* ── Subtle hardware "signature" — 2px accent strip atop the sidebar ── *
+   (#sidebar is position:fixed, which already anchors this ::before — do
+   NOT add position:relative here or it re-enters flow and the margin-left
+   on #main-content doubles into a gap.) */
+#sidebar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        var(--ned-accent) 22%,
+        var(--ned-accent) 78%,
+        transparent 100%
+    );
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* ── Mono uppercase for label-like chrome (instrument-panel branding) ── *
+   Tabs/buttons/inputs/numerics handled above. These cover the remaining
+   "labels": sidebar section headers, the brand subtitle, metric labels,
+   table column headers, and form field labels. Body text & paragraph copy
+   stay in IBM Plex Sans for readability. */
+.sidebar-section-label,
+.metric-card .metric-label,
+#sidebar-brand .subtitle,
+.blinding-badge,
+.form-label,
+label.form-label {
+    font-family: var(--ned-font-mono) !important;
+    letter-spacing: var(--ned-tracking) !important;
+}
+
+/* AG-Grid column headers → uppercase mono, tabular and engineered. */
+.ag-theme-alpine-dark .ag-header-cell-text {
+    font-family: var(--ned-font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.72rem;
+}
+
+/* Every button picks up the instrument-panel face — catches plain Bootstrap
+   dbc.Buttons too (e.g. Analysis tab: Run Analysis, Browse, Generate template,
+   Scan, etc.), not just the .btn-ned-* variants. */
+.btn {
+    font-family: var(--ned-font-mono) !important;
+    text-transform: uppercase !important;
+    letter-spacing: var(--ned-tracking) !important;
+}
+
+/* ── Stock Bootstrap buttons → match the .btn-ned instrument look ─────── *
+   The Analysis tab (and others) use plain dbc.Buttons with Bootstrap colours
+   and sizes. Bring them to the same compact mono sizing + precision palette
+   as the hand-styled .btn-ned-* buttons (e.g. Create / Delete project).
+   Scoped with :not([class*="btn-ned"]) so the .btn-ned-* buttons keep their
+   exact look. */
+.btn:not([class*="btn-ned"]) {
+    font-size: 0.74rem !important;
+    font-weight: 500 !important;
+    border-radius: var(--ned-radius) !important;
+    padding: 7px 16px !important;
+}
+.btn-sm:not([class*="btn-ned"]),
+.btn-group-sm > .btn:not([class*="btn-ned"]) {
+    padding: 6px 12px !important;
+    font-size: 0.72rem !important;
+}
+
+/* Neutral / info / outline → secondary instrument key (Create-project look). */
+.btn-secondary:not([class*="btn-ned"]),
+.btn-info:not([class*="btn-ned"]),
+.btn-light:not([class*="btn-ned"]),
+.btn-outline-secondary:not([class*="btn-ned"]),
+.btn-outline-primary:not([class*="btn-ned"]),
+.btn-outline-info:not([class*="btn-ned"]),
+.btn-outline-light:not([class*="btn-ned"]),
+.btn-outline-dark:not([class*="btn-ned"]) {
+    background: color-mix(in oklab, var(--ned-surface-hover) 55%, transparent) !important;
+    border: 1px solid var(--ned-border) !important;
+    color: var(--ned-text) !important;
+}
+.btn-secondary:not([class*="btn-ned"]):hover,
+.btn-info:not([class*="btn-ned"]):hover,
+.btn-light:not([class*="btn-ned"]):hover,
+.btn-outline-secondary:not([class*="btn-ned"]):hover,
+.btn-outline-primary:not([class*="btn-ned"]):hover,
+.btn-outline-info:not([class*="btn-ned"]):hover,
+.btn-outline-light:not([class*="btn-ned"]):hover,
+.btn-outline-dark:not([class*="btn-ned"]):hover {
+    color: color-mix(in oklab, var(--ned-text) 70%, var(--ned-accent)) !important;
+    border-color: color-mix(in oklab, var(--ned-border) 50%, var(--ned-accent)) !important;
+    background: var(--ned-surface-hover) !important;
+}
+
+/* Primary / success solid → accent fill (Run-action look). */
+.btn-primary:not([class*="btn-ned"]),
+.btn-success:not([class*="btn-ned"]) {
+    background: var(--ned-accent) !important;
+    border: 1px solid var(--ned-accent) !important;
+    color: #fff !important;
+}
+.btn-primary:not([class*="btn-ned"]):hover,
+.btn-success:not([class*="btn-ned"]):hover {
+    background: var(--ned-accent-hover) !important;
+    border-color: var(--ned-accent-hover) !important;
+}
+
+/* Warning → amber outline; danger → red outline (Delete-project look). */
+.btn-warning:not([class*="btn-ned"]),
+.btn-outline-warning:not([class*="btn-ned"]) {
+    background: transparent !important;
+    border: 1px solid color-mix(in oklab, var(--ned-warning) 45%, transparent) !important;
+    color: var(--ned-warning) !important;
+}
+.btn-danger:not([class*="btn-ned"]),
+.btn-outline-danger:not([class*="btn-ned"]) {
+    background: transparent !important;
+    border: 1px solid color-mix(in oklab, var(--ned-danger) 40%, transparent) !important;
+    color: var(--ned-danger) !important;
+}
+.btn-warning:not([class*="btn-ned"]):hover,
+.btn-outline-warning:not([class*="btn-ned"]):hover {
+    background: color-mix(in oklab, var(--ned-warning) 10%, transparent) !important;
+}
+.btn-danger:not([class*="btn-ned"]):hover,
+.btn-outline-danger:not([class*="btn-ned"]):hover {
+    background: color-mix(in oklab, var(--ned-danger) 8%, transparent) !important;
 }

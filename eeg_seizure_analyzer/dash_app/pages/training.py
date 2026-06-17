@@ -1494,9 +1494,9 @@ def layout(sid: str | None) -> html.Div:
                                         label="Convulsive (V)",
                                         value=bool((current_event.features or {}).get("convulsive", False))
                                         if current_event else False,
-                                        style={"fontSize": "0.95rem"},
+                                        style={"fontSize": "0.8rem"},
                                         label_style={"fontWeight": "600",
-                                                     "fontSize": "0.95rem"},
+                                                     "fontSize": "0.8rem"},
                                     ),
                                 ],
                             ),
