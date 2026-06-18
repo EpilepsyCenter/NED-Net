@@ -349,17 +349,6 @@ def get_processed_paths() -> set[str]:
     return {r["path"] for r in rows}
 
 
-def has_category(category: str) -> bool:
-    """True if the active DB holds any events of this category ('seizure' /
-    'spike'). LIMIT 1 short-circuits, so a present category returns instantly;
-    used to open Results on the view that actually has data."""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT 1 FROM events WHERE category = ? LIMIT 1", (category,)
-    ).fetchone()
-    return row is not None
-
-
 def write_chunk(path: str, meta: dict, mode: str) -> int:
     """Insert or replace chunk record, return chunk_id.
 
