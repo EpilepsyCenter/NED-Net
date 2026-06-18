@@ -129,6 +129,7 @@ This installs NED-Net and all required packages:
 | pyedflib | Reading/writing EDF files |
 | pandas | Tabular data handling |
 | plotly | Interactive plots |
+| matplotlib | Vector (SVG) export of the viewer window |
 | dash | Web application framework |
 | dash-bootstrap-components | UI components |
 | dash-ag-grid | Interactive data tables |

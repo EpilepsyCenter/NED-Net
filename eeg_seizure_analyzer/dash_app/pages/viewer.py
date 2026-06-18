@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import platform
+import subprocess
+import sys
+
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -129,6 +133,277 @@ def _filter_spikes_for_viewer(spikes, fv):
         filtered = [e for e in filtered if e.confidence <= max_conf]
 
     return filtered
+
+
+# ── Vector (SVG) export of the current view ───────────────────────────
+
+
+def _save_svg_dialog(default_name: str = "eeg_view.svg") -> str | None:
+    """Native 'Save as' dialog for the SVG export (the in-window webview
+    can't do browser downloads). Returns the chosen path, or None."""
+    title = "Export current view as SVG"
+    if platform.system() == "Darwin":
+        try:
+            r = subprocess.run(
+                ["osascript", "-e",
+                 f'POSIX path of (choose file name with prompt "{title}" '
+                 f'default name "{default_name}")'],
+                capture_output=True, text=True, timeout=120,
+            )
+            return r.stdout.strip() or None
+        except Exception:
+            pass
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", "\n".join([
+                "import tkinter as tk",
+                "from tkinter import filedialog",
+                "root = tk.Tk(); root.withdraw()",
+                "root.attributes('-topmost', True); root.update()",
+                f'p = filedialog.asksaveasfilename(title="{title}", '
+                f'initialfile="{default_name}", defaultextension=".svg")',
+                "root.destroy(); print(p or '')",
+            ])],
+            capture_output=True, text=True, timeout=120,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _export_view_svg(state, path: str) -> None:
+    """Render the current viewer window to a true-vector SVG via matplotlib.
+
+    Reuses the saved ``viewer_settings`` (window, channels, filters, overlays)
+    so the export matches exactly what is on screen. Traces are min/max
+    decimated — fine for publication-sized figures and keeps the SVG light.
+    """
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_svg import FigureCanvasSVG
+    from matplotlib.patches import Rectangle
+
+    rec = state.recording
+    if rec is None:
+        raise ValueError("No recording loaded.")
+
+    s = state.extra.get("viewer_settings", {})
+    start_sec = float(s.get("start", 0) or 0)
+    window_sec = float(s.get("window", 10) or 10)
+    y_range = float(s.get("yrange") or state.extra.get("_viewer_default_yrange", 1.0))
+    if y_range <= 0:
+        y_range = 1.0
+    plot_height = int(s.get("height", 600) or 600)
+    bp_on = bool(s.get("bp_on", True))
+    notch_on = bool(s.get("notch_on", False))
+    bp_low = float(s.get("bp_low", 1.0) or 1.0)
+    bp_high = float(s.get("bp_high", 50.0) or 50.0)
+    notch_freq = float(s.get("notch_freq", 50) or 50)
+    show_events = bool(s.get("show_events", True))
+    show_is = bool(s.get("show_is", False))
+    show_spikes = bool(s.get("show_spikes", False))
+    show_baseline = bool(s.get("show_baseline", True))
+    show_threshold = bool(s.get("show_threshold", True))
+    act_ymin = float(s.get("act_ymin", 0.0) or 0.0)
+    act_ymax = float(s.get("act_ymax", 4.0) or 4.0)
+    channels = [c for c in s.get("channels", list(range(rec.n_channels)))
+                if 0 <= c < rec.n_channels]
+    if not channels:
+        channels = list(range(rec.n_channels))
+    n_ch = len(channels)
+
+    end_sec = min(start_sec + window_sec, rec.duration_sec)
+    start_idx = int(start_sec * rec.fs)
+    end_idx = min(int(end_sec * rec.fs), rec.n_samples)
+
+    # Activity pairing
+    act_rec = state.activity_recordings.get("paired")
+    pairings = state.channel_pairings
+    has_paired_act = False
+    if act_rec is not None and pairings:
+        has_paired_act = any(
+            p.eeg_index in channels and p.activity_index is not None
+            for p in pairings
+        )
+
+    spacing = float(y_range)
+    channel_offsets = {}
+    channel_displayed_data = {}
+
+    fig = Figure(figsize=(10.0, max(2.5, plot_height / 100.0)))
+    FigureCanvasSVG(fig)
+    if has_paired_act:
+        gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.08)
+        ax = fig.add_subplot(gs[0])
+        ax_act = fig.add_subplot(gs[1], sharex=ax)
+    else:
+        ax = fig.add_subplot(1, 1, 1)
+        ax_act = None
+
+    # EEG traces
+    for i, ch_idx in enumerate(channels):
+        data = rec.data[ch_idx, start_idx:end_idx].copy()
+        if bp_on:
+            data = bandpass_filter(data, rec.fs, bp_low, bp_high)
+        if notch_on:
+            data = notch_filter(data, rec.fs, notch_freq)
+        offset = -i * spacing
+        channel_offsets[ch_idx] = offset
+        channel_displayed_data[ch_idx] = data
+        time_axis = np.linspace(start_sec, end_sec, len(data))
+        ds_time, ds_data = _minmax_downsample(time_axis, data + offset)
+        ax.plot(ds_time, ds_data, color="#111111", linewidth=0.5)
+
+    # Seizure rectangles
+    _event_colors = ["#58a6ff", "#3fb950", "#d29922", "#f85149", "#bc8cff", "#f778ba"]
+    _sz_events = [e for e in (state.detected_events or [])
+                  if e.event_type == "seizure"]
+    if show_events and _sz_events:
+        ch_order = list(channel_offsets.keys())
+        for event in _sz_events:
+            if event.offset_sec < start_sec or event.onset_sec > end_sec:
+                continue
+            if event.channel not in channel_offsets:
+                continue
+            ch_offset = channel_offsets[event.channel]
+            half = spacing / 2.0
+            pos = ch_order.index(event.channel)
+            color = _event_colors[pos % len(_event_colors)]
+            x0 = max(event.onset_sec, start_sec)
+            x1 = min(event.offset_sec, end_sec)
+            ax.add_patch(Rectangle(
+                (x0, ch_offset - half), x1 - x0, spacing,
+                facecolor=color, edgecolor=color, alpha=0.18,
+                linewidth=1.0, zorder=0,
+            ))
+
+    # Interictal spike dots
+    if show_is and state.spike_events:
+        if state.extra.get("sp_filter_enabled", True):
+            sp_fv = state.extra.get("sp_filter_values", {})
+            visible_spikes = _filter_spikes_for_viewer(state.spike_events, sp_fv)
+        else:
+            visible_spikes = state.spike_events
+        is_t, is_y = [], []
+        for event in visible_spikes:
+            peak_t = (event.features.get("peak_time_sec", event.onset_sec)
+                      if event.features else event.onset_sec)
+            if peak_t < start_sec or peak_t > end_sec:
+                continue
+            if event.channel not in channel_offsets:
+                continue
+            ch_offset = channel_offsets[event.channel]
+            displayed = channel_displayed_data.get(event.channel)
+            sample_local = int((peak_t - start_sec) * rec.fs)
+            if displayed is not None and 0 <= sample_local < len(displayed):
+                yv = float(displayed[sample_local]) + ch_offset
+            else:
+                yv = ch_offset
+            is_t.append(peak_t)
+            is_y.append(yv)
+        if is_t:
+            ax.scatter(is_t, is_y, c="#3fb950", s=14, marker="o",
+                       alpha=0.85, edgecolors="none", zorder=3)
+
+    # Spike dots + baseline/threshold lines from detection info
+    det_info_all = state.st_detection_info
+    if det_info_all:
+        for ch_idx in channels:
+            det_info = det_info_all.get(ch_idx)
+            if det_info is None:
+                continue
+            ch_offset = channel_offsets[ch_idx]
+            displayed = channel_displayed_data.get(ch_idx)
+            if show_spikes:
+                spike_times = det_info.get("all_spike_times", [])
+                spike_samples = det_info.get("all_spike_samples", [])
+                visible = [j for j, t in enumerate(spike_times)
+                           if start_sec <= t <= end_sec]
+                if visible and displayed is not None:
+                    sp_t = [spike_times[j] for j in visible]
+                    sp_y, sp_colors = [], []
+                    events = state.detected_events or []
+                    for j in visible:
+                        local = spike_samples[j] - start_idx
+                        if 0 <= local < len(displayed):
+                            sp_y.append(float(displayed[local]) + ch_offset)
+                        else:
+                            sp_y.append(ch_offset)
+                    for t in sp_t:
+                        in_event = any(
+                            e.onset_sec <= t <= (e.onset_sec + e.duration_sec)
+                            for e in events if e.channel == ch_idx
+                        )
+                        sp_colors.append("#f85149" if in_event else "#ffb347")
+                    ax.scatter(sp_t, sp_y, c=sp_colors, s=10, marker="o",
+                               edgecolors="none", zorder=3)
+            if show_baseline:
+                baseline_val = det_info.get("baseline_mean")
+                if baseline_val is not None:
+                    for sign in (1, -1):
+                        ax.hlines(ch_offset + sign * baseline_val, start_sec, end_sec,
+                                  color="#3fb950", linewidth=0.7, linestyles=":",
+                                  zorder=2)
+            if show_threshold:
+                threshold_val = det_info.get("threshold")
+                if threshold_val is not None:
+                    for sign in (1, -1):
+                        ax.hlines(ch_offset + sign * threshold_val, start_sec, end_sec,
+                                  color="#d29922", linewidth=0.7, linestyles="--",
+                                  zorder=2)
+
+    # Activity subplot
+    if has_paired_act and ax_act is not None:
+        act_start = int(start_sec * act_rec.fs)
+        act_end = min(int(end_sec * act_rec.fs), act_rec.n_samples)
+        for ch_idx in channels:
+            for p in pairings:
+                if p.eeg_index == ch_idx and p.activity_index is not None:
+                    act_data = act_rec.data[p.activity_index, act_start:act_end]
+                    act_time = np.linspace(start_sec, end_sec, len(act_data))
+                    a_t, a_d = _minmax_downsample(act_time, np.asarray(act_data))
+                    ax_act.plot(a_t, a_d, color="#444444", linewidth=0.6,
+                                label=f"Act: {p.activity_label}")
+        ax_act.set_ylim(act_ymin, act_ymax)
+        act_unit = act_rec.units[0] if act_rec.units else ""
+        ax_act.set_ylabel(f"Activity ({act_unit})" if act_unit else "Activity",
+                          fontsize=8)
+        ax_act.set_xlabel("Time (s)", fontsize=9)
+        ax_act.tick_params(labelsize=8)
+    else:
+        ax.set_xlabel("Time (s)", fontsize=9)
+
+    # EEG axis cosmetics: channel labels at offsets
+    y_ticks = [channel_offsets[ch] for ch in channels]
+    y_labels = [rec.channel_names[ch] for ch in channels]
+    y_upper = spacing / 2
+    y_lower = -(n_ch - 1) * spacing - spacing * 1.5
+    ax.set_yticks(y_ticks)
+    ax.set_yticklabels(y_labels, fontsize=8)
+    ax.set_ylim(y_lower, y_upper)
+    ax.set_xlim(start_sec, end_sec)
+    ax.tick_params(labelsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+        if ax_act is not None:
+            ax_act.spines[spine].set_visible(False)
+
+    # Scale bar (right side of the EEG axis)
+    unit_label = rec.units[0] if rec.units else ""
+    scale_label = f"{y_range:.4g} {unit_label}".strip()
+    bar_center = channel_offsets[channels[0]]
+    bar_y0 = bar_center - spacing / 2
+    bar_y1 = bar_center + spacing / 2
+    ax.annotate(
+        "", xy=(1.015, bar_y1), xytext=(1.015, bar_y0),
+        xycoords=("axes fraction", "data"),
+        arrowprops=dict(arrowstyle="-", color="#666666", linewidth=1.5),
+        annotation_clip=False,
+    )
+    ax.text(1.03, (bar_y0 + bar_y1) / 2, scale_label, rotation=-90,
+            transform=ax.get_yaxis_transform(), ha="left", va="center",
+            fontsize=8, color="#666666")
+
+    fig.savefig(path, format="svg", bbox_inches="tight")
 
 
 # ── Layout ────────────────────────────────────────────────────────────
@@ -324,6 +599,13 @@ def layout(sid: str | None) -> html.Div:
                                className="btn-ned-secondary", style={"fontSize": "1rem"}),
                     dbc.Button("\u23E9", id="nav-fwd-big", size="sm",
                                className="btn-ned-secondary", style={"fontSize": "1rem"}),
+                    dbc.Button("Export SVG", id="viewer-export-svg", size="sm",
+                               className="btn-ned-secondary",
+                               title="Export the current view as a vector SVG",
+                               style={"marginLeft": "12px"}),
+                    html.Span(id="viewer-export-status",
+                              style={"fontSize": "0.75rem",
+                                     "color": "var(--ned-text-muted)"}),
                 ],
             ),
 
@@ -844,3 +1126,36 @@ def update_viewer(
     }
 
     return fig
+
+
+@callback(
+    Output("viewer-export-status", "children"),
+    Input("viewer-export-svg", "n_clicks"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def export_view_svg(n_clicks, sid):
+    """Export the current viewer window as a true-vector SVG (matplotlib)."""
+    import os
+
+    state = server_state.get_session(sid)
+    if state.recording is None:
+        return "No recording loaded."
+
+    fname = state.extra.get("upload_filename") or "eeg"
+    base = os.path.splitext(os.path.basename(fname))[0]
+    s = state.extra.get("viewer_settings", {})
+    start = float(s.get("start", 0) or 0)
+    window = float(s.get("window", 10) or 10)
+    default_name = f"{base}_{start:.0f}-{start + window:.0f}s.svg"
+
+    path = _save_svg_dialog(default_name)
+    if not path:
+        return ""
+    if not path.lower().endswith(".svg"):
+        path += ".svg"
+    try:
+        _export_view_svg(state, path)
+    except Exception as exc:  # surfaced to the user
+        return f"Export failed: {exc}"
+    return f"Saved {os.path.basename(path)}"

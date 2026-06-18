@@ -62,6 +62,7 @@ Core dependencies:
 | pyedflib | EDF file reading/writing |
 | pandas | Tabular data handling |
 | plotly | Interactive graphs |
+| matplotlib | Vector (SVG) export of the viewer window |
 | dash | Web application framework |
 | dash-bootstrap-components | UI components |
 | dash-ag-grid | Interactive data tables |

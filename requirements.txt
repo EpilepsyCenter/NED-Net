@@ -11,6 +11,7 @@ scipy
 pandas
 pyEDFlib
 plotly
+matplotlib
 dash
 dash-bootstrap-components
 dash-ag-grid
