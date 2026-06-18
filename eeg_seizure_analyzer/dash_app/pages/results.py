@@ -67,32 +67,6 @@ def _save_results_state(project: str, state: dict) -> None:
         pass
 
 
-def _resolve_source(saved_source: str | None) -> str:
-    """Pick the Results source (Seizures vs Spikes) so the view opens on a
-    category that actually has data. A spike-only DB (this experiment) would
-    otherwise open on the empty Seizures view and look broken. Honours a saved
-    choice only if that category still has events."""
-    def _auto() -> str:
-        try:
-            if db.has_category("seizure"):
-                return "seizure_cnn"
-            if db.has_category("spike"):
-                return "spike_cnn"
-        except Exception:
-            pass
-        return "seizure_cnn"
-
-    if saved_source is None:
-        return _auto()
-    cat = "spike" if saved_source == "spike_cnn" else "seizure"
-    try:
-        if not db.has_category(cat):
-            return _auto()
-    except Exception:
-        pass
-    return saved_source
-
-
 def _save_file(default_name: str, title: str = "Save file") -> str | None:
     """Native 'Save as' dialog (the in-window webview can't do browser
     downloads). Returns the chosen path, or None if cancelled."""
@@ -556,14 +530,13 @@ def res_on_project_switch(project):
 
     # Restore saved selections for this project (defaults if none / unknown).
     s = _load_results_state(project)
-    source = _resolve_source(s.get("source"))
     return (
         animal_opts, s.get("animals", []),
         file_opts, s.get("files", []),
         s.get("date_start", date_min or ""), s.get("date_end", date_max or ""),
         cohort_opts, s.get("cohort", None),
         group_opts, s.get("group", None),
-        source,
+        s.get("source", "seizure_cnn"),
         s.get("detector", None),
         s.get("normalize", "raw"),
         s.get("modes", ["single", "batch", "live"]),
@@ -652,7 +625,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     # res_on_project_switch restores the visible controls to match in parallel.
     if ctx.triggered_id == "res-project-select":
         s = _load_results_state(project)
-        source = _resolve_source(s.get("source"))
+        source = s.get("source", "seizure_cnn")
         detector = s.get("detector", None)
         normalize = s.get("normalize", "raw")
         date_start = s.get("date_start") or None
