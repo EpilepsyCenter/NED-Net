@@ -46,6 +46,10 @@
 : "${PROMINENCE:=1.5}"
 : "${ISO_WINDOW:=2.0}"            # burst-rejection window (s)
 : "${ISO_MAX:=6}"                 # max neighbours before a spike is rejected
+# Post-detection quality filters (Marco's operating point; 0 = off).
+: "${MIN_CONF:=0.7}"             # composite confidence >=
+: "${MIN_SNR:=10}"              # local SNR >=
+: "${MIN_XBL:=15}"              # amplitude / baseline >=
 : "${OVERWRITE:=0}"              # 1 = re-detect files already in the DB
 
 # ============================================================
@@ -65,6 +69,9 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask ZSCORE       "Amplitude z-score threshold"
     ask PROMINENCE   "Prominence x baseline"
     ask ISO_MAX      "Isolation max neighbours (burst rejection)"
+    ask MIN_CONF     "Min confidence (post-filter; 0 = off)"
+    ask MIN_SNR      "Min local SNR (post-filter; 0 = off)"
+    ask MIN_XBL      "Min amplitude x baseline (post-filter; 0 = off)"
     read -r -p "Re-detect files already in the DB? (y/N): " ow
     [ "$ow" = "y" ] || [ "$ow" = "Y" ] && OVERWRITE=1
     echo "-------------------------------------------------------------"
@@ -72,8 +79,10 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            db=$DB_PATH"
     echo "            meta=${METADATA_CSV:-none}  path_include=${PATH_INCLUDE:-all}"
     echo "            z=$ZSCORE prom=$PROMINENCE iso_max=$ISO_MAX overwrite=$OVERWRITE"
+    echo "            filters: conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL"
     export EDF_DIR DB_PATH METADATA_CSV PATH_INCLUDE ZSCORE BANDPASS_LOW \
-           BANDPASS_HIGH PROMINENCE ISO_WINDOW ISO_MAX OVERWRITE
+           BANDPASS_HIGH PROMINENCE ISO_WINDOW ISO_MAX MIN_CONF MIN_SNR MIN_XBL \
+           OVERWRITE
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -89,6 +98,7 @@ echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
 echo "Meta:       ${METADATA_CSV:-none}   path_include=${PATH_INCLUDE:-all}"
 echo "Detector:   z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE iso=$ISO_MAX/$ISO_WINDOW"
+echo "Filters:    conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL  (0 = off)"
 echo "========================================="
 
 module purge
@@ -113,6 +123,9 @@ python scripts/lunarc/detect_spikes_batch.py \
     --prominence "$PROMINENCE" \
     --isolation-window-sec "$ISO_WINDOW" \
     --isolation-max-neighbours "$ISO_MAX" \
+    --min-confidence "$MIN_CONF" \
+    --min-local-snr "$MIN_SNR" \
+    --min-xbaseline "$MIN_XBL" \
     --workers "$(nproc)" \
     --tmpdir "${SNIC_TMP:-/tmp}" \
     "${META_ARG[@]}" "${PATH_ARG[@]}" "${OVERWRITE_ARG[@]}"

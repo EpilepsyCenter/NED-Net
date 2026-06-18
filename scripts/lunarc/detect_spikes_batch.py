@@ -70,6 +70,9 @@ def _process_one(edf_path: str):
             params=cfg["params"],
             mode="batch",
             file_metadata=meta,
+            min_confidence=cfg["min_confidence"],
+            min_local_snr=cfg["min_local_snr"],
+            min_amplitude_x_baseline=cfg["min_xbaseline"],
         )
         return edf_path, int(r.get("n_events", 0)), None
     except Exception as e:  # one bad file must not abort the sweep
@@ -177,6 +180,13 @@ def main() -> int:
                     help="window to count neighbours for burst rejection")
     ap.add_argument("--isolation-max-neighbours", type=int, default=6,
                     help="max spikes in window before the spike is rejected")
+    # Post-detection quality filters (same as the Spikes-tab filters; 0 = off).
+    ap.add_argument("--min-confidence", type=float, default=0.0,
+                    help="keep spikes with composite confidence >= this (GUI: 0.7)")
+    ap.add_argument("--min-local-snr", type=float, default=0.0,
+                    help="keep spikes with local SNR >= this (GUI: 10)")
+    ap.add_argument("--min-xbaseline", type=float, default=0.0,
+                    help="keep spikes with amplitude/baseline >= this (GUI: 15)")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--no-recursive", action="store_true")
     ap.add_argument("--path-include", default=None,
@@ -214,6 +224,9 @@ def main() -> int:
     print(f"Detector: z={args.zscore} bp={args.bandpass_low}-{args.bandpass_high}Hz "
           f"prom={args.prominence} iso={args.isolation_max_neighbours}/"
           f"{args.isolation_window_sec}s", flush=True)
+    print(f"Filters:  confidence>={args.min_confidence} "
+          f"local_snr>={args.min_local_snr} x_baseline>={args.min_xbaseline} "
+          f"(0 = off)", flush=True)
     if not todo:
         print("Nothing to do.")
         return 0
@@ -222,7 +235,10 @@ def main() -> int:
     if args.metadata_csv:
         print(f"Loaded metadata for {len(metadata)} files from {args.metadata_csv}")
 
-    cfg = dict(params=_build_params(args), metadata=metadata)
+    cfg = dict(params=_build_params(args), metadata=metadata,
+               min_confidence=args.min_confidence,
+               min_local_snr=args.min_local_snr,
+               min_xbaseline=args.min_xbaseline)
     work_tmp = os.path.join(args.tmpdir, f"nedspk_{os.getpid()}")
     os.makedirs(work_tmp, exist_ok=True)
 
