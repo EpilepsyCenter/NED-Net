@@ -676,6 +676,177 @@ def process_spike_chunk(
         raise
 
 
+def process_spike_chunk_classical(
+    edf_path: str,
+    params=None,
+    mode: str = "single",
+    cohort: str = "",
+    group_id: str = "",
+    file_metadata: dict | None = None,
+    selected_channels: list[int] | None = None,
+) -> dict:
+    """Run the CLASSICAL (rule-based) IS detector on an EDF and write to SQLite.
+
+    The non-ML twin of :func:`process_spike_chunk`: identical DB layout,
+    date/day/hour stamping and per-animal bookkeeping, but events come from
+    :class:`detection.spike.SpikeDetector` instead of the spike CNN. This lets a
+    precise classical detector populate a project DB across the whole dataset
+    without training a model — used by the headless cluster sweep
+    (``scripts/lunarc/detect_spikes_batch.py``).
+
+    Events are written with ``source="spike_classical"``, ``category="spike"``.
+    """
+    from eeg_seizure_analyzer.config import SpikeDetectionParams
+    from eeg_seizure_analyzer.detection.spike import SpikeDetector
+    from eeg_seizure_analyzer.detection.base import detect_chunked
+    from eeg_seizure_analyzer.io.edf_reader import read_edf
+
+    t_start = time.time()
+    if params is None:
+        params = SpikeDetectionParams()
+
+    if file_metadata:
+        cohort = file_metadata.get("cohort", "") or cohort
+        group_id = file_metadata.get("group_id", "") or group_id
+
+    ch_info = scan_edf_channels(edf_path)
+    eeg_idx, act_idx, pairings = auto_pair_channels(ch_info)
+    if not eeg_idx:
+        raise ValueError(f"No EEG channels found in {edf_path}")
+
+    eeg_fs = ch_info[eeg_idx[0]]["fs"]
+    rec_duration = ch_info[eeg_idx[0]]["n_samples"] / eeg_fs
+
+    ch_ids = load_channel_ids(edf_path) or {}
+    if file_metadata and file_metadata.get("channel_ids"):
+        for ch_idx, animal_id in file_metadata["channel_ids"].items():
+            ch_idx = int(ch_idx)
+            if ch_idx not in ch_ids:
+                ch_ids[ch_idx] = animal_id
+
+    # Per-channel cohort/group: sidecar first, batch metadata supplements;
+    # file-level cohort/group is the per-event fallback.
+    _tags = load_channel_tags(edf_path)
+    ch_cohort = dict(_tags.get("cohort", {}))
+    ch_group = dict(_tags.get("group", {}))
+    if file_metadata:
+        for _k, _v in (file_metadata.get("channel_cohort") or {}).items():
+            ch_cohort.setdefault(int(_k), _v)
+        for _k, _v in (file_metadata.get("channel_group") or {}).items():
+            ch_group.setdefault(int(_k), _v)
+
+    # Detect only on EEG channels that carry an animal ID — an unmapped channel
+    # can't be attributed to an animal in Results, so it would only add noise.
+    want = [c for c in (selected_channels or eeg_idx) if ch_ids.get(c)]
+    if not want:
+        raise ValueError(
+            f"No animal-ID-mapped EEG channels for {edf_path}; "
+            "supply a metadata CSV or channel sidecars."
+        )
+
+    chunk_id = db.write_chunk(edf_path, {
+        "cohort": cohort,
+        "group_id": group_id,
+        "date": parse_date_from_path(edf_path),
+        "chunk_start_sec": 0,
+        "chunk_end_sec": rec_duration,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+    }, mode)
+
+    db.write_file_animals(
+        chunk_id,
+        _build_file_animals(eeg_idx, ch_ids, ch_cohort, ch_group,
+                            rec_duration, cohort, group_id),
+    )
+
+    try:
+        det = SpikeDetector()
+        # Long files: stream in 30-min chunks (two-pass global baseline) so a
+        # whole-node parallel sweep never loads multi-GB recordings per worker.
+        # detect_chunked tags events with the original channel index it is given.
+        if rec_duration > 1800 and edf_path.lower().endswith(".edf"):
+            spikes, _info = detect_chunked(
+                det, path=edf_path, channels=want,
+                chunk_duration_sec=1800.0, overlap_sec=10.0, params=params)
+        else:
+            # Load only the EEG channels (uniform fs) by original index; detect
+            # on the chunk-local position and remap ev.channel back to the
+            # original EDF index, mirroring detect_chunked's channel semantics.
+            load_list = list(eeg_idx)
+            rec = read_edf(edf_path, channels=load_list)
+            rec.source_path = edf_path
+            want_set = set(want)
+            spikes = []
+            for pos, ch in enumerate(load_list):
+                if ch not in want_set:
+                    continue
+                ch_sp = det.detect(rec, pos, params=params)
+                for ev in ch_sp:
+                    ev.channel = ch
+                spikes.extend(ch_sp)
+
+        file_start_hour = _get_file_start_hour(edf_path)
+        date = parse_date_from_path(edf_path)
+
+        event_dicts = []
+        for ev in spikes:
+            animal_id = ch_ids.get(ev.channel, "")
+            if not animal_id:
+                continue  # drop events on unmapped channels
+            hour = None
+            if file_start_hour is not None:
+                hour = (file_start_hour + int(ev.onset_sec // 3600)) % 24
+            event_dicts.append({
+                "animal_id": animal_id,
+                "date": date,
+                "start_sec": ev.onset_sec,
+                "end_sec": ev.offset_sec,
+                "duration_sec": ev.duration_sec,
+                "type": "interictal_spike",
+                "subtype": None,
+                "cnn_confidence": ev.confidence,
+                "convulsive_confidence": 0.0,
+                "movement_flag": getattr(ev, "movement_flag", False),
+                "recording_day": None,
+                "hour_of_day": hour,
+                "source": "spike_classical",
+                "cohort": ch_cohort.get(ev.channel, cohort),
+                "group_id": ch_group.get(ev.channel, group_id),
+                "channel": ev.channel,
+            })
+
+        db.write_events(chunk_id, event_dicts,
+                        source="spike_classical", category="spike")
+
+        # Per-animal summaries (spikes are all non-convulsive by nature).
+        events_by_animal: dict[str, list] = {}
+        for d in event_dicts:
+            events_by_animal.setdefault(d["animal_id"], []).append(d)
+        for animal_id, aevents in events_by_animal.items():
+            db.write_summary(chunk_id, animal_id or "", {
+                "n_convulsive": 0,
+                "n_nonconvulsive": len(aevents),
+                "n_flagged": 0,
+                "total_duration_sec": sum(e["duration_sec"] for e in aevents),
+            })
+
+        processing_sec = time.time() - t_start
+        db.update_chunk_timing(chunk_id, processing_sec)
+
+        return {
+            "skipped": False,
+            "chunk_id": chunk_id,
+            "n_events": len(event_dicts),
+            "n_spikes": len(event_dicts),
+            "processing_sec": round(processing_sec, 1),
+        }
+
+    except Exception as e:
+        db.mark_chunk_error(chunk_id, str(e))
+        raise
+
+
 def _get_file_start_hour(edf_path: str) -> int | None:
     """Try to extract file start hour from EDF header."""
     try:
