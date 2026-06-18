@@ -41,6 +41,7 @@ def train_spike_model(
     train_config: TrainConfig | None = None,
     model_name: str | None = None,
     progress_callback: Callable[[dict], None] | None = None,
+    stop_check_fn: Callable[[], bool] | None = None,
 ) -> dict:
     """Train an interictal spike detection model.
 
@@ -157,6 +158,7 @@ def train_spike_model(
     best_metrics = {}
     best_epoch = 0
     epochs_without_improvement = 0
+    stopped = False
 
     model_dir = MODELS_DIR / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -168,6 +170,10 @@ def train_spike_model(
         model.train()
         train_losses = []
         for eeg, mask, meta in train_loader:
+            # Cooperative stop: break promptly (within a batch) on user request.
+            if stop_check_fn is not None and stop_check_fn():
+                stopped = True
+                break
             eeg = eeg.to(device)
             mask = mask.to(device)
 
@@ -177,6 +183,11 @@ def train_spike_model(
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
+
+        if stopped:
+            print(f"[IS] Training stopped by user during epoch {epoch}. "
+                  f"Keeping best model so far (epoch {best_epoch}).")
+            break
 
         avg_train_loss = np.mean(train_losses)
 
@@ -293,6 +304,7 @@ def train_spike_model(
         "best_metrics": best_metrics,
         "history": history,
         "n_params": n_params,
+        "stopped_by_user": stopped,
     }
 
 
