@@ -1754,6 +1754,17 @@ def _build_animal_table(rollup, is_seizure):
     )
 
 
+def _hist_bar(values, color, nbins: int = 60) -> go.Bar:
+    """Server-side histogram as a go.Bar — ships ~nbins bars instead of the raw
+    values. go.Histogram bins client-side, so at ~2M spikes it would serialise
+    tens of MB to the browser and freeze the tab; this keeps it to a few KB."""
+    arr = np.asarray(values, dtype=float)
+    counts, edges = np.histogram(arr, bins=nbins)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    return go.Bar(x=centers, y=counts, width=(edges[1] - edges[0]),
+                  marker_color=color, showlegend=False)
+
+
 def _build_duration_hist(events, is_seizure) -> go.Figure:
     fig = go.Figure()
     durs = [float(e["duration_sec"]) for e in events if e.get("duration_sec")]
@@ -1772,7 +1783,7 @@ def _build_duration_hist(events, is_seizure) -> go.Figure:
                                    marker_color=_NONCONV_COLOR, opacity=0.65))
         fig.update_layout(barmode="overlay")
     else:
-        fig.add_trace(go.Histogram(x=durs, marker_color=_NONCONV_COLOR))
+        fig.add_trace(_hist_bar(durs, _NONCONV_COLOR))
     fig.update_layout(title="Event duration", xaxis_title="Duration (s)",
                       yaxis_title="Count", legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
@@ -1808,10 +1819,20 @@ def _build_duration_by_group(events, is_seizure) -> go.Figure:
         fig.update_layout(boxmode="group")
         title = "Event duration by group & type"
     else:
+        # Precompute quartiles server-side and pass them to go.Box (not raw y):
+        # at ~2M spikes, raw y would serialise tens of MB to the browser.
         for i, g in enumerate(groups):
-            ys = [r[2] for r in rows if r[0] == g]
+            ys = np.asarray([r[2] for r in rows if r[0] == g], dtype=float)
+            if ys.size == 0:
+                continue
+            q1, med, q3 = (float(v) for v in np.percentile(ys, [25, 50, 75]))
+            iqr = q3 - q1
+            lo = float(ys[ys >= q1 - 1.5 * iqr].min())
+            hi = float(ys[ys <= q3 + 1.5 * iqr].max())
             fig.add_trace(go.Box(
-                y=ys, name=g, boxmean=True,
+                name=g, q1=[q1], median=[med], q3=[q3],
+                lowerfence=[lo], upperfence=[hi], mean=[float(ys.mean())],
+                boxmean=True,
                 marker_color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)]))
         title = "Spike duration by group"
     fig.update_layout(title=title, xaxis_title="Group",
@@ -1842,7 +1863,7 @@ def _build_confidence_hist(events, is_seizure) -> go.Figure:
                                    marker_color=_NONCONV_COLOR, opacity=0.65))
         fig.update_layout(barmode="overlay")
     else:
-        fig.add_trace(go.Histogram(x=confs, marker_color=_NONCONV_COLOR))
+        fig.add_trace(_hist_bar(confs, _NONCONV_COLOR))
     fig.update_layout(title="Detector confidence", xaxis_title="Confidence",
                       yaxis_title="Count", legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
