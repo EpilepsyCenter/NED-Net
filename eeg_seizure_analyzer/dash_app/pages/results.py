@@ -2237,9 +2237,10 @@ def export_all_events(n, project):
 def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
                       types, min_conf, file_ids, cohort, group_id):
     """Export the computed values BEHIND the Results graphs as a multi-sheet
-    XLSX (PerAnimal / PerGroup / Longitudinal / Circadian / Durations), under
-    the current filters — so each plot can be reproduced and statistics run in
-    Prism (e.g. per-animal rate by group)."""
+    XLSX under the current filters, for stats in Prism. Sheets: PerAnimal /
+    PerGroup (per-subject stats tables), Daily_counts_byGroup / Daily_rate_byGroup
+    / Circadian_byGroup (WIDE grouped tables — rows = day/hour, columns = animals
+    side by side under their group), and Duration_perAnimal."""
     if not n:
         return no_update
     from datetime import date as _date
@@ -2332,24 +2333,33 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
         if dt and s:
             k = (r.get("animal_id") or "", (dt - s).days + 1)
             dh[k] = dh.get(k, 0.0) + (r.get("valid_sec") or 0) / 3600.0
-    daily = []
-    for (a, di) in sorted(set(dc) | set(dh)):
-        h = dh.get((a, di), 0.0)
-        n = dc.get((a, di), 0)
-        daily.append({"animal": a, "group": agrp.get(a, ""), "recording_day": di,
-                      "events": n, "rec_hours": round(h, 2),
-                      "rate_per_h": round(n / h, 4) if h else None})
-
-    # Circadian (per animal × hour of day): one row per animal per hour.
+    # Circadian counts (per animal × hour of day).
     cc = {}
     for e in vis_events:
         hr = e.get("hour_of_day")
         if hr is not None:
             k = (e.get("animal_id") or "", int(hr))
             cc[k] = cc.get(k, 0) + 1
-    circadian = [{"animal": a, "group": agrp.get(a, ""),
-                  "hour_of_day": hr, "events": n}
-                 for (a, hr), n in sorted(cc.items())]
+
+    # Wide "grouped" tables for Prism: rows = recording day / hour of day,
+    # columns = animals ordered by group (same-group animals side by side), with
+    # two header rows (group, then animal). Far quicker to paste than the old
+    # one-row-per-datapoint layout.
+    def _wide(cells, xs, x_label):
+        anims = sorted(agrp, key=lambda a: (agrp.get(a) or "~", a))
+        anims = [a for a in anims if any((a, x) in cells for x in xs)]
+        rows = [[""] + [agrp.get(a, "") for a in anims],
+                [x_label] + anims]
+        for x in xs:
+            rows.append([x] + [cells.get((a, x)) for a in anims])
+        return rows
+
+    days = sorted({di for (_a, di) in (set(dc) | set(dh))})
+    daily_rate = {k: round(dc.get(k, 0) / dh[k], 4)
+                  for k in (set(dc) | set(dh)) if dh.get(k)}
+    daily_counts_wide = _wide(dc, days, "recording_day")
+    daily_rate_wide = _wide(daily_rate, days, "recording_day")
+    circadian_wide = _wide(cc, list(range(24)), "hour_of_day")
 
     # Duration (per animal): mean/median per animal, split by event type — one
     # value per animal so durations can be compared statistically by group.
@@ -2387,14 +2397,8 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
     try:
         import openpyxl
         wb = openpyxl.Workbook()
-        first = True
-        for title, rows in (("PerAnimal", per_animal), ("PerGroup", per_group),
-                            ("Daily_perAnimal", daily),
-                            ("Circadian_perAnimal", circadian),
-                            ("Duration_perAnimal", durations)):
-            ws = wb.active if first else wb.create_sheet()
-            ws.title = title
-            first = False
+
+        def _write_dict(ws, rows):  # one row per dict, keys as the header
             if rows:
                 cols = list(rows[0].keys())
                 ws.append(cols)
@@ -2402,9 +2406,30 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
                     ws.append([row.get(c) for c in cols])
             else:
                 ws.append(["(no data)"])
+
+        def _write_raw(ws, rows):  # pre-built wide rows (list of lists)
+            for row in (rows or [["(no data)"]]):
+                ws.append(row)
+
+        # (name, kind, data). "dict" = per-animal/group stats tables; "raw" =
+        # wide grouped tables (animals side by side under their group).
+        sheets = [
+            ("PerAnimal", "dict", per_animal),
+            ("PerGroup", "dict", per_group),
+            ("Daily_counts_byGroup", "raw", daily_counts_wide),
+            ("Daily_rate_byGroup", "raw", daily_rate_wide),
+            ("Circadian_byGroup", "raw", circadian_wide),
+            ("Duration_perAnimal", "dict", durations),
+        ]
+        first = True
+        for title, kind, rows in sheets:
+            ws = wb.active if first else wb.create_sheet()
+            ws.title = title
+            first = False
+            (_write_dict if kind == "dict" else _write_raw)(ws, rows)
         wb.save(path)
     except Exception as e:
         return html.Span(f"Error: {e}", style={"color": "var(--ned-danger)"})
     return html.Span(
         f"Exported graph data ({len(per_animal)} animals, "
-        f"{len(longitudinal)} day-rows) to {path}", style={"color": "#2ea043"})
+        f"{len(days)} days) to {path}", style={"color": "#2ea043"})
