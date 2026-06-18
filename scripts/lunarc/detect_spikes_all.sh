@@ -40,12 +40,15 @@
 : "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/sv2a_spikes.db}"
 : "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"  # full SV2A run
 : "${PATH_INCLUDE:=Week[123]-}"   # only first 3 weeks; blank = all files
-: "${ZSCORE:=4.0}"                # amplitude threshold = mean + z*std (GUI z=4-5)
-: "${BANDPASS_LOW:=10.0}"
-: "${BANDPASS_HIGH:=70.0}"
-: "${PROMINENCE:=1.5}"
+# Detector defaults mirror the Spikes-tab GUI (_sp_params_from_dict); Marco
+# runs z=4-5 (GUI default is 7).
+: "${ZSCORE:=4.0}"                # amplitude threshold = mean + z*std
+: "${BANDPASS_LOW:=3.0}"
+: "${BANDPASS_HIGH:=50.0}"
+: "${PROMINENCE:=6.0}"           # prominence x baseline
+: "${REFRACTORY:=750}"           # refractory period (ms)
 : "${ISO_WINDOW:=2.0}"            # burst-rejection window (s)
-: "${ISO_MAX:=6}"                 # max neighbours before a spike is rejected
+: "${ISO_MAX:=1}"                 # max neighbours before a spike is rejected
 # Post-detection quality filters (Marco's operating point; 0 = off).
 : "${MIN_CONF:=0.7}"             # composite confidence >=
 : "${MIN_SNR:=10}"              # local SNR >=
@@ -67,7 +70,10 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask METADATA_CSV "Batch metadata CSV (blank = none)"
     ask PATH_INCLUDE "Path-include regex (blank = all files)"
     ask ZSCORE       "Amplitude z-score threshold"
+    ask BANDPASS_LOW "Bandpass low (Hz)"
+    ask BANDPASS_HIGH "Bandpass high (Hz)"
     ask PROMINENCE   "Prominence x baseline"
+    ask REFRACTORY   "Refractory (ms)"
     ask ISO_MAX      "Isolation max neighbours (burst rejection)"
     ask MIN_CONF     "Min confidence (post-filter; 0 = off)"
     ask MIN_SNR      "Min local SNR (post-filter; 0 = off)"
@@ -78,11 +84,11 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Submitting: edf=$EDF_DIR"
     echo "            db=$DB_PATH"
     echo "            meta=${METADATA_CSV:-none}  path_include=${PATH_INCLUDE:-all}"
-    echo "            z=$ZSCORE prom=$PROMINENCE iso_max=$ISO_MAX overwrite=$OVERWRITE"
+    echo "            z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE refr=$REFRACTORY iso_max=$ISO_MAX overwrite=$OVERWRITE"
     echo "            filters: conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL"
     export EDF_DIR DB_PATH METADATA_CSV PATH_INCLUDE ZSCORE BANDPASS_LOW \
-           BANDPASS_HIGH PROMINENCE ISO_WINDOW ISO_MAX MIN_CONF MIN_SNR MIN_XBL \
-           OVERWRITE
+           BANDPASS_HIGH PROMINENCE REFRACTORY ISO_WINDOW ISO_MAX MIN_CONF \
+           MIN_SNR MIN_XBL OVERWRITE
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -97,7 +103,7 @@ echo "Start time: $(date)"
 echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
 echo "Meta:       ${METADATA_CSV:-none}   path_include=${PATH_INCLUDE:-all}"
-echo "Detector:   z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE iso=$ISO_MAX/$ISO_WINDOW"
+echo "Detector:   z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE refr=${REFRACTORY}ms iso=$ISO_MAX/$ISO_WINDOW"
 echo "Filters:    conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL  (0 = off)"
 echo "========================================="
 
@@ -121,6 +127,7 @@ python scripts/lunarc/detect_spikes_batch.py \
     --bandpass-low "$BANDPASS_LOW" \
     --bandpass-high "$BANDPASS_HIGH" \
     --prominence "$PROMINENCE" \
+    --refractory-ms "$REFRACTORY" \
     --isolation-window-sec "$ISO_WINDOW" \
     --isolation-max-neighbours "$ISO_MAX" \
     --min-confidence "$MIN_CONF" \

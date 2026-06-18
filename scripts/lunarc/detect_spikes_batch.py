@@ -136,7 +136,13 @@ def _merge_part(final_db: str, part_db: str) -> None:
 
 
 def _build_params(args):
-    """Construct SpikeDetectionParams from CLI args (defaults match config.py)."""
+    """Construct SpikeDetectionParams from CLI args.
+
+    Defaults mirror the Spikes-tab classical detector (dash_app spikes.py
+    _sp_params_from_dict), NOT config.SpikeDetectionParams — the GUI ships
+    different defaults (3-50 Hz, prom 6, dur 10-300 ms, refr 750 ms, baseline
+    25%/30 s, isolation 1) and those are the operating point to reproduce.
+    """
     from eeg_seizure_analyzer.config import SpikeDetectionParams
     return SpikeDetectionParams(
         bandpass_low=args.bandpass_low,
@@ -149,6 +155,7 @@ def _build_params(args):
         refractory_ms=args.refractory_ms,
         baseline_method=args.baseline_method,
         baseline_percentile=args.baseline_percentile,
+        baseline_rms_window_sec=args.baseline_rms_window_sec,
         isolation_window_sec=args.isolation_window_sec,
         isolation_max_neighbours=args.isolation_max_neighbours,
     )
@@ -161,24 +168,28 @@ def main() -> int:
     ap.add_argument("--db-path", required=True, help="final project DB to write")
     ap.add_argument("--metadata-csv", default=None,
                     help="batch metadata CSV/XLSX (filename -> cohort/group/animal)")
-    # Classical spike detector knobs (defaults == config.SpikeDetectionParams).
-    ap.add_argument("--zscore", type=float, default=4.0,
-                    help="amplitude threshold as mean + z*std (the GUI's z=4-5)")
-    ap.add_argument("--bandpass-low", type=float, default=10.0)
-    ap.add_argument("--bandpass-high", type=float, default=70.0)
+    # Classical spike detector knobs. Defaults mirror the Spikes-tab GUI
+    # (_sp_params_from_dict), the operating point to reproduce — NOT config.py.
+    ap.add_argument("--zscore", type=float, default=7.0,
+                    help="amplitude threshold as mean + z*std (GUI default 7; "
+                         "Marco runs 4-5)")
+    ap.add_argument("--bandpass-low", type=float, default=3.0)
+    ap.add_argument("--bandpass-high", type=float, default=50.0)
     ap.add_argument("--min-amplitude-uv", type=float, default=0.0,
                     help="absolute amplitude floor (uV); 0 = disabled")
-    ap.add_argument("--prominence", type=float, default=1.5,
+    ap.add_argument("--prominence", type=float, default=6.0,
                     help="prominence relative to baseline")
-    ap.add_argument("--max-duration-ms", type=float, default=70.0)
-    ap.add_argument("--min-duration-ms", type=float, default=2.0)
-    ap.add_argument("--refractory-ms", type=float, default=200.0)
+    ap.add_argument("--max-duration-ms", type=float, default=300.0)
+    ap.add_argument("--min-duration-ms", type=float, default=10.0)
+    ap.add_argument("--refractory-ms", type=float, default=750.0)
     ap.add_argument("--baseline-method", default="percentile",
                     choices=("percentile", "rolling", "first_n"))
-    ap.add_argument("--baseline-percentile", type=int, default=15)
+    ap.add_argument("--baseline-percentile", type=int, default=25)
+    ap.add_argument("--baseline-rms-window-sec", type=float, default=30.0,
+                    help="RMS window for quiet-period baseline estimation")
     ap.add_argument("--isolation-window-sec", type=float, default=2.0,
                     help="window to count neighbours for burst rejection")
-    ap.add_argument("--isolation-max-neighbours", type=int, default=6,
+    ap.add_argument("--isolation-max-neighbours", type=int, default=1,
                     help="max spikes in window before the spike is rejected")
     # Post-detection quality filters (same as the Spikes-tab filters; 0 = off).
     ap.add_argument("--min-confidence", type=float, default=0.0,
