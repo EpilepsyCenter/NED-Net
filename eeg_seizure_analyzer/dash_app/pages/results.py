@@ -1287,6 +1287,44 @@ def _build_circadian(circadian: list[dict]) -> go.Figure:
 
 _ISI_MIN_S = 0.1      # clamp ISIs to a sane plotting range (refractory ~0.75s)
 _ISI_MAX_S = 1000.0
+_ISI_NBINS = 50       # log-spaced bins; shared by the plot and the export
+
+
+def _isi_bins():
+    """Log-spaced ISI bin edges and centres — the single source of truth for
+    both the distribution plot and its exported table."""
+    edges = np.logspace(np.log10(_ISI_MIN_S), np.log10(_ISI_MAX_S), _ISI_NBINS)
+    centers = np.sqrt(edges[:-1] * edges[1:])
+    return edges, centers
+
+
+def _isi_distribution_table(isis: dict):
+    """Per-group probability per ISI bin (same binning as the plot).
+    Returns (centers, {group: probabilities})."""
+    edges, centers = _isi_bins()
+    out: dict = {}
+    for g in sorted(isis):
+        arr = np.asarray(isis[g])
+        arr = arr[(arr >= _ISI_MIN_S) & (arr <= _ISI_MAX_S)]
+        if arr.size == 0:
+            continue
+        h, _ = np.histogram(arr, bins=edges)
+        tot = h.sum()
+        if tot:
+            out[g] = h / tot
+    return centers, out
+
+
+def _isi_cdf_table(isis: dict, at):
+    """Empirical cumulative probability P(ISI <= x) per group, evaluated at the
+    points ``at`` (the ISI bin edges) so the CDF is compact and on the same
+    grid as the distribution — no need to ship ~2M raw intervals."""
+    out: dict = {}
+    for g in sorted(isis):
+        arr = np.sort(np.asarray(isis[g]))
+        if arr.size:
+            out[g] = np.searchsorted(arr, at, side="right") / arr.size
+    return out
 
 
 def _isis_by_group(events) -> dict:
@@ -1321,25 +1359,15 @@ def _build_isi_distribution(events) -> go.Figure:
     """Inter-spike-interval frequency distribution, one normalised curve per
     group (log-spaced bins; probability so groups compare regardless of n)."""
     fig = go.Figure()
-    isis = _isis_by_group(events)
-    if not any(isis.values()):
+    centers, probs = _isi_distribution_table(_isis_by_group(events))
+    if not probs:
         apply_fig_theme(fig)
         fig.update_layout(title="Inter-spike interval distribution",
                           xaxis_title="ISI (s)", yaxis_title="Probability")
         return fig
-    bins = np.logspace(np.log10(_ISI_MIN_S), np.log10(_ISI_MAX_S), 50)
-    centers = np.sqrt(bins[:-1] * bins[1:])
-    for i, g in enumerate(sorted(isis)):
-        arr = np.asarray(isis[g])
-        arr = arr[(arr >= _ISI_MIN_S) & (arr <= _ISI_MAX_S)]
-        if arr.size == 0:
-            continue
-        h, _ = np.histogram(arr, bins=bins)
-        tot = h.sum()
-        if tot == 0:
-            continue
+    for i, g in enumerate(sorted(probs)):
         fig.add_trace(go.Scatter(
-            x=centers, y=h / tot, mode="lines", name=g,
+            x=centers, y=probs[g], mode="lines", name=g,
             line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)], width=2)))
     fig.update_layout(
         title="Inter-spike interval distribution",
@@ -2361,6 +2389,30 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
     daily_rate_wide = _wide(daily_rate, days, "recording_day")
     circadian_wide = _wide(cc, list(range(24)), "hour_of_day")
 
+    # Interictal-spike ISI distribution + CDF — pre-binned (the user can't
+    # reasonably bin ~2M intervals in Prism), using the same log-spaced bins as
+    # the plots. Columns = group (the plots pool animals within a group).
+    isi_dist_wide, isi_cdf_wide = [], []
+    if category == "spike":
+        isis = _isis_by_group(vis_events)
+        centers, probs = _isi_distribution_table(isis)
+        dist_groups = sorted(probs)
+        if dist_groups:
+            isi_dist_wide.append(["ISI_center_s"] + dist_groups)
+            for i, c in enumerate(centers):
+                isi_dist_wide.append(
+                    [round(float(c), 4)]
+                    + [round(float(probs[g][i]), 6) for g in dist_groups])
+        edges, _centers = _isi_bins()
+        cdf = _isi_cdf_table(isis, edges)
+        cdf_groups = sorted(cdf)
+        if cdf_groups:
+            isi_cdf_wide.append(["ISI_s"] + cdf_groups)
+            for j, x in enumerate(edges):
+                isi_cdf_wide.append(
+                    [round(float(x), 4)]
+                    + [round(float(cdf[g][j]), 6) for g in cdf_groups])
+
     # Duration (per animal): mean/median per animal, split by event type — one
     # value per animal so durations can be compared statistically by group.
     import statistics
@@ -2421,6 +2473,9 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
             ("Circadian_byGroup", "raw", circadian_wide),
             ("Duration_perAnimal", "dict", durations),
         ]
+        if category == "spike":
+            sheets += [("ISI_distribution", "raw", isi_dist_wide),
+                       ("ISI_CDF", "raw", isi_cdf_wide)]
         first = True
         for title, kind, rows in sheets:
             ws = wb.active if first else wb.create_sheet()
