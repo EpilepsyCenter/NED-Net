@@ -418,6 +418,23 @@ def layout(sid: str | None) -> html.Div:
                 ], className="mb-3"),
             ]),
 
+            # ── Interictal-spike analysis (shown only for the Spikes view) ──
+            html.Div(id="res-panel-is", style={"display": "none"}, children=[
+                html.H6("Interictal spike analysis",
+                        style={"color": "var(--ned-accent)",
+                               "marginTop": "8px"}),
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="res-is-isi",
+                                      config={"responsive": True}), width=6),
+                    dbc.Col(dcc.Graph(id="res-is-isi-cdf",
+                                      config={"responsive": True}), width=6),
+                ], className="mb-3"),
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="res-is-diurnal",
+                                      config={"responsive": True}), width=12),
+                ], className="mb-3"),
+            ]),
+
             # ── Daily burden + circadian (timeline — live monitoring) ──
             dbc.Row([
                 dbc.Col(dcc.Graph(id="res-daily-burden",
@@ -575,6 +592,10 @@ def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
     Output("res-dist-confidence", "figure"),
     Output("res-dist-duration-group", "figure"),
     Output("res-longitudinal", "figure"),
+    Output("res-panel-is", "style"),
+    Output("res-is-isi", "figure"),
+    Output("res-is-isi-cdf", "figure"),
+    Output("res-is-diurnal", "figure"),
     Input("res-apply", "n_clicks"),
     Input("res-source-selector", "value"),
     Input("res-project-select", "value"),
@@ -654,7 +675,8 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         return (alert(f"Database error: {e}", "danger"),
                 empty_fig, empty_fig, html.Div(),
                 empty_fig, html.Div(), html.Div(),
-                empty_fig, empty_fig, empty_fig, empty_fig)
+                empty_fig, empty_fig, empty_fig, empty_fig,
+                {"display": "none"}, empty_fig, empty_fig, empty_fig)
 
     # Post-filter by file IDs
     if file_ids:
@@ -746,9 +768,23 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     long_fig = _panel_legend(
         _build_longitudinal(vis_events, animal_starts, vis_fa, normalize))
 
+    # Interictal-spike-specific panels — only for the Spikes view; hidden
+    # (and left blank) otherwise so the seizure layout is unchanged.
+    if category == "spike":
+        is_style = {"display": "block"}
+        isi_fig = _panel_legend(_build_isi_distribution(vis_events))
+        isi_cdf_fig = _panel_legend(_build_isi_cdf(vis_events))
+        diurnal_fig = _panel_legend(_build_spike_diurnal(vis_events))
+    else:
+        is_style = {"display": "none"}
+        _blank = go.Figure()
+        apply_fig_theme(_blank)
+        isi_fig = isi_cdf_fig = diurnal_fig = _blank
+
     return (summary_cards, daily_fig, circ_fig, table,
             group_fig, group_table, animal_table,
-            dur_fig, conf_fig, dur_grp_fig, long_fig)
+            dur_fig, conf_fig, dur_grp_fig, long_fig,
+            is_style, isi_fig, isi_cdf_fig, diurnal_fig)
 
 
 @callback(
@@ -1237,6 +1273,148 @@ def _build_circadian(circadian: list[dict]) -> go.Figure:
         xaxis_title="Hour of day", yaxis_title="Events",
         legend=dict(orientation="h", y=1.1),
     )
+    apply_fig_theme(fig)
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Interictal-spike-specific views (ISI distribution / CDF / diurnal profile)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# These reuse the already-filtered event list (fast: ~0.4s even for ~2M spikes)
+# rather than re-querying. ISI = inter-spike interval, computed per animal WITHIN
+# each file (chunk) so gaps between files don't create spurious huge intervals.
+
+_ISI_MIN_S = 0.1      # clamp ISIs to a sane plotting range (refractory ~0.75s)
+_ISI_MAX_S = 1000.0
+
+
+def _isis_by_group(events) -> dict:
+    """Map group_id -> list of inter-spike intervals (seconds).
+
+    ISIs are diffs of sorted spike onset times within each (animal, file); the
+    file's group label is used so SV2A vs Control can be compared directly.
+    """
+    from collections import defaultdict
+    onsets: dict = defaultdict(list)
+    grp_of: dict = {}
+    for e in events:
+        key = (e.get("animal_id") or "", e.get("chunk_id"))
+        onsets[key].append(e.get("start_sec") or 0.0)
+        grp_of[key] = e.get("group_id") or "(unlabeled)"
+    out: dict = defaultdict(list)
+    for key, ts in onsets.items():
+        if len(ts) < 2:
+            continue
+        ts.sort()
+        g = grp_of.get(key, "(unlabeled)")
+        prev = ts[0]
+        for t in ts[1:]:
+            d = t - prev
+            prev = t
+            if d > 0:
+                out[g].append(d)
+    return out
+
+
+def _build_isi_distribution(events) -> go.Figure:
+    """Inter-spike-interval frequency distribution, one normalised curve per
+    group (log-spaced bins; probability so groups compare regardless of n)."""
+    fig = go.Figure()
+    isis = _isis_by_group(events)
+    if not any(isis.values()):
+        apply_fig_theme(fig)
+        fig.update_layout(title="Inter-spike interval distribution",
+                          xaxis_title="ISI (s)", yaxis_title="Probability")
+        return fig
+    bins = np.logspace(np.log10(_ISI_MIN_S), np.log10(_ISI_MAX_S), 50)
+    centers = np.sqrt(bins[:-1] * bins[1:])
+    for i, g in enumerate(sorted(isis)):
+        arr = np.asarray(isis[g])
+        arr = arr[(arr >= _ISI_MIN_S) & (arr <= _ISI_MAX_S)]
+        if arr.size == 0:
+            continue
+        h, _ = np.histogram(arr, bins=bins)
+        tot = h.sum()
+        if tot == 0:
+            continue
+        fig.add_trace(go.Scatter(
+            x=centers, y=h / tot, mode="lines", name=g,
+            line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)], width=2)))
+    fig.update_layout(
+        title="Inter-spike interval distribution",
+        xaxis_title="ISI (s)", yaxis_title="Probability",
+        legend=dict(orientation="h", y=1.1))
+    fig.update_xaxes(type="log")
+    apply_fig_theme(fig)
+    return fig
+
+
+def _build_isi_cdf(events) -> go.Figure:
+    """Cumulative probability of inter-spike intervals, one curve per group.
+    A rightward shift = longer intervals (sparser firing); good for KS-style
+    visual comparison between SV2A and Control."""
+    fig = go.Figure()
+    isis = _isis_by_group(events)
+    if not any(isis.values()):
+        apply_fig_theme(fig)
+        fig.update_layout(title="ISI cumulative probability",
+                          xaxis_title="ISI (s)",
+                          yaxis_title="Cumulative probability")
+        return fig
+    for i, g in enumerate(sorted(isis)):
+        arr = np.sort(np.asarray(isis[g]))
+        if arr.size == 0:
+            continue
+        y = np.arange(1, arr.size + 1) / arr.size
+        if arr.size > 4000:  # thin for the browser; shape is preserved
+            idx = np.linspace(0, arr.size - 1, 4000).astype(int)
+            arr, y = arr[idx], y[idx]
+        fig.add_trace(go.Scatter(
+            x=arr, y=y, mode="lines", name=g,
+            line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)], width=2)))
+    fig.update_layout(
+        title="ISI cumulative probability",
+        xaxis_title="ISI (s)", yaxis_title="Cumulative probability",
+        legend=dict(orientation="h", y=1.1))
+    fig.update_xaxes(type="log")
+    apply_fig_theme(fig)
+    return fig
+
+
+def _build_spike_diurnal(events) -> go.Figure:
+    """Diurnal spike profile: mean spikes per animal in each hour of day, one
+    line per group. Reveals circadian modulation of interictal activity; the
+    per-animal mean controls for differing group sizes."""
+    from collections import defaultdict
+    fig = go.Figure()
+    dated = [e for e in events if e.get("hour_of_day") is not None]
+    if not dated:
+        apply_fig_theme(fig)
+        fig.update_layout(title="Diurnal spike profile",
+                          xaxis_title="Hour of day",
+                          yaxis_title="Spikes per animal")
+        return fig
+    cnt: dict = defaultdict(int)
+    animals_in: dict = defaultdict(set)
+    for e in dated:
+        g = e.get("group_id") or "(unlabeled)"
+        a = e.get("animal_id") or ""
+        cnt[(g, a, e.get("hour_of_day"))] += 1
+        animals_in[g].add(a)
+    hours = list(range(24))
+    labels = [f"{h:02d}:00" for h in hours]
+    for i, g in enumerate(sorted(animals_in)):
+        animals = animals_in[g]
+        n = len(animals) or 1
+        y = [sum(cnt.get((g, a, h), 0) for a in animals) / n for h in hours]
+        fig.add_trace(go.Scatter(
+            x=labels, y=y, mode="lines+markers", name=g,
+            line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)], width=2)))
+    fig.update_layout(
+        title="Diurnal spike profile (mean per animal)",
+        xaxis_title="Hour of day", yaxis_title="Spikes per animal",
+        legend=dict(orientation="h", y=1.1))
     apply_fig_theme(fig)
     return fig
 
