@@ -846,9 +846,15 @@ def _render_epochs(history: list, best_epoch: int = 0):
 
 def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
     """Background thread: run training and write progress after each epoch."""
-    # Stage-2 convulsive classifier uses its own loop; both share the same
-    # progress-dict contract, so the rest of this worker is identical.
-    if train_config.architecture == "convulsive_classifier":
+    # Interictal-spike datasets train through their own pipeline (1-class masks,
+    # 4s windows, spike-appropriate metrics). Convulsive / seizure U-Net models
+    # share train.py. All three honour the same progress-dict + return contract,
+    # so the rest of this worker is identical.
+    if dataset_def.get("type") == "spike":
+        from eeg_seizure_analyzer.ml.spike_train import (
+            train_spike_model as train_fn,
+        )
+    elif train_config.architecture == "convulsive_classifier":
         from eeg_seizure_analyzer.ml.train_convulsive import (
             train_convulsive_model as train_fn,
         )
@@ -985,15 +991,23 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
         ],
     }
 
-    from eeg_seizure_analyzer.ml.dataset import DatasetConfig
     from eeg_seizure_analyzer.ml.train import TrainConfig
 
     # Animal IDs to drop from the dataset (comma- or space-separated).
     excl = tuple(s for s in re.split(r"[,\s]+", (exclude_animals or "").strip()) if s)
-    dataset_config = DatasetConfig(
-        neg_pos_ratio=_to_float(neg_ratio, 2.0),
-        exclude_animals=excl,
-    )
+    if ann_type == "spike":
+        from eeg_seizure_analyzer.ml.spike_dataset import SpikeDatasetConfig
+        # SpikeDatasetConfig has no exclude_animals field; per-animal exclusion
+        # isn't supported for spike datasets yet.
+        dataset_config = SpikeDatasetConfig(
+            neg_pos_ratio=_to_float(neg_ratio, 2.0),
+        )
+    else:
+        from eeg_seizure_analyzer.ml.dataset import DatasetConfig
+        dataset_config = DatasetConfig(
+            neg_pos_ratio=_to_float(neg_ratio, 2.0),
+            exclude_animals=excl,
+        )
     _arch = architecture or "unet"
     # The radio uses the short value "convulsive"; the saved/loaded architecture
     # tag is "convulsive_classifier" (matches metadata + load_trained_model).

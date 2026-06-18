@@ -705,14 +705,18 @@ def split_by_animal(
             "different channels on the Load tab."
         )
 
+    # Spike specs (SpikeWindowSpec) carry no convulsive concept, so the
+    # convulsive stratum is simply empty for them and the split falls through to
+    # balancing by total window count. getattr keeps this helper shared.
     def _has_convulsive(aid: str) -> bool:
-        return any(s.convulsive_intervals for s in animals[aid])
+        return any(getattr(s, "convulsive_intervals", None) for s in animals[aid])
 
     conv_ids = [a for a in animal_ids if _has_convulsive(a)]
     other_ids = [a for a in animal_ids if not _has_convulsive(a)]
 
     def _n_conv(aid: str) -> int:
-        return sum(1 for s in animals[aid] if s.convulsive_intervals)
+        return sum(1 for s in animals[aid]
+                   if getattr(s, "convulsive_intervals", None))
 
     val_animals: set[str] = set()
 

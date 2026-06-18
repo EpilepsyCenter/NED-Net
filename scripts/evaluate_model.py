@@ -1,12 +1,17 @@
 #!/usr/bin/env python
-"""Evaluate a trained seizure model on its held-out validation animals.
+"""Evaluate a trained model on its held-out validation animals.
 
 Reproduces the exact (deterministic, animal-wise) train/val split the model was
 trained with, runs the saved best checkpoint over the validation windows, and
-reports event-level metrics for BOTH output channels — channel 0 (all seizures)
-and channel 1 (convulsive subset) — at the 0.5 threshold and at the best
-threshold (swept). Also prints a per-animal recall breakdown, because the val
-set is usually only a few animals and the aggregate number hides that variance.
+reports event-level metrics at the 0.5 threshold and at the best threshold
+(swept). Also prints a per-animal recall breakdown, because the val set is
+usually only a few animals and the aggregate number hides that variance.
+
+Routes by model kind read from metadata.json:
+- seizure U-Net / BENDR: scores channel 0 (all seizures) and channel 1
+  (convulsive subset);
+- convulsive_classifier: single binary convulsive head;
+- interictal spike (model_type == "spike"): single spike head, 50ms merge gap.
 
 Usage
 -----
@@ -54,7 +59,11 @@ def _resolve_model_dir(arg: str | None) -> Path:
     print("Available models (most recent first):\n")
     for f in rows:
         d = json.load(open(f))
-        print(f"  {f.parent.name:32s} arch={d.get('architecture','?'):6s} "
+        # Spike models tag themselves via model_type; seizure/convulsive use
+        # architecture. Show whichever identifies the model.
+        kind = ("spike" if d.get("model_type") == "spike"
+                else d.get("architecture", "?"))
+        print(f"  {f.parent.name:32s} arch={kind:6s} "
               f"best_epoch={d.get('best_epoch','?')} "
               f"best_val_loss={d.get('best_val_loss','?')}")
     print("\nRun again with a model name to evaluate it.")
@@ -91,15 +100,37 @@ def _build_net(meta: dict, device):
     return model.to(device).eval()
 
 
-def _report(name: str, preds, targets, fs: int) -> None:
+def _sweep_threshold(preds, targets, fs: int, merge_gap_sec: float):
+    """Best (threshold, metrics) by event F1, using an explicit merge gap.
+
+    ``_best_threshold_metrics`` hardcodes the seizure 1.0s merge gap; spikes
+    need a much shorter one (~50ms), so the spike path sweeps via this helper.
+    """
+    best_t, best = 0.5, None
+    for i in range(1, 20):  # 0.05 .. 0.95
+        t = i / 20.0
+        m = _compute_metrics(preds, targets, threshold=t, fs=fs,
+                             merge_gap_sec=merge_gap_sec)
+        if best is None or m["event_f1"] > best["event_f1"]:
+            best, best_t = m, t
+    return best_t, (best or {})
+
+
+def _report(name: str, preds, targets, fs: int,
+            merge_gap_sec: float | None = None) -> None:
     n_windows_with_events = sum(int((t > 0.5).any()) for t in targets)
     print(f"\n=== {name} ===")
     print(f"val windows with events: {n_windows_with_events}")
     if n_windows_with_events == 0:
         print("  (no positive events in val — nothing to score)")
         return
-    m = _compute_metrics(preds, targets, threshold=0.5, fs=fs)
-    bt, bm = _best_threshold_metrics(preds, targets, fs=fs)
+    if merge_gap_sec is None:
+        m = _compute_metrics(preds, targets, threshold=0.5, fs=fs)
+        bt, bm = _best_threshold_metrics(preds, targets, fs=fs)
+    else:
+        m = _compute_metrics(preds, targets, threshold=0.5, fs=fs,
+                             merge_gap_sec=merge_gap_sec)
+        bt, bm = _sweep_threshold(preds, targets, fs, merge_gap_sec)
     print(f"  @0.5   F1={m['event_f1']:.3f}  P={m['event_precision']:.3f}  "
           f"R={m['event_recall']:.3f}   (true_events={m['true_events']})")
     print(f"  best   F1={bm['event_f1']:.3f}  P={bm['event_precision']:.3f}  "
@@ -183,11 +214,101 @@ def _evaluate_convulsive(meta: dict, model_dir: Path) -> None:
               f"convulsive={int(at.sum())}")
 
 
+def _evaluate_spike(meta: dict, model_dir: Path) -> None:
+    """Evaluate an interictal-spike model on its held-out val animals.
+
+    Spike models are single-channel (n_classes=1) U-Nets trained on 4s windows;
+    they reproduce the same animal-wise split via build_spike_datasets and score
+    with a spike-appropriate 50ms event merge gap (matching spike_train.py).
+    """
+    from eeg_seizure_analyzer.ml.spike_dataset import (
+        SpikeDatasetConfig, build_spike_datasets,
+    )
+
+    SPIKE_MERGE_GAP_SEC = 0.05  # matches the merge gap used during training
+
+    dc = meta["dataset_config"]
+    folder = meta.get("dataset_folder") or meta.get("dataset", {}).get("folder")
+    if not folder or not Path(folder).is_dir():
+        sys.exit(f"Dataset folder from metadata not found: {folder}")
+
+    print(f"Model:   {model_dir.name}  (interictal spike, "
+          f"best_epoch={meta.get('best_epoch')})")
+    print(f"Folder:  {folder}")
+
+    valid = {f.name for f in fields(SpikeDatasetConfig)}
+    cfg = SpikeDatasetConfig(**{k: v for k, v in dc.items() if k in valid})
+    scan = scan_annotation_files(folder, "spike")
+    dataset_def = {"name": meta.get("dataset_name", "eval"), "folder": folder,
+                   "type": "spike",
+                   "files": [{"edf_path": r["edf_path"]} for r in scan]}
+    _, val_ds, cfg = build_spike_datasets(dataset_def, cfg)
+    fs = cfg.target_fs
+    animals = sorted({s.animal_id for s in val_ds.specs})
+    print(f"Val:     {len(val_ds)} windows from {len(animals)} animals: {animals}")
+
+    device = (torch.device("mps") if torch.backends.mps.is_available()
+              else torch.device("cpu"))
+    tc = meta.get("train_config", {})
+    model = build_model(
+        n_eeg_channels=meta["n_eeg_channels"],
+        include_activity=meta["include_activity"],
+        n_activity_channels=meta["n_activity_channels"],
+        base_filters=tc.get("base_filters", 32),
+        depth=tc.get("depth", 4), dropout=tc.get("dropout", 0.2),
+        n_classes=1,
+    )
+    state = torch.load(model_dir / "best_model.pt",
+                       map_location=device, weights_only=True)
+    model.load_state_dict(state)
+    model = model.to(device).eval()
+
+    preds, targs, win_animal = [], [], []
+    with torch.no_grad():
+        for i in range(len(val_ds)):
+            eeg, mask, _ = val_ds[i]
+            out = torch.sigmoid(model(eeg.unsqueeze(0).to(device)))[0].cpu().numpy()
+            preds.append(out[0])
+            targs.append(mask.numpy()[0])
+            win_animal.append(val_ds.specs[i].animal_id)
+
+    _report("INTERICTAL SPIKE", preds, targs, fs,
+            merge_gap_sec=SPIKE_MERGE_GAP_SEC)
+
+    # Per-animal spike recall at the best global threshold.
+    thr, _ = _sweep_threshold(preds, targs, fs, SPIKE_MERGE_GAP_SEC)
+    print(f"\n=== Per-animal spike recall (@thr={thr}) ===")
+    for a in animals:
+        idx = [i for i, w in enumerate(win_animal) if w == a]
+        ap = [preds[i] for i in idx]
+        at = [targs[i] for i in idx]
+        if not any((t > 0.5).any() for t in at):
+            print(f"  {a:10s} (no spikes in val windows)")
+            continue
+        am = _compute_metrics(ap, at, threshold=thr, fs=fs,
+                              merge_gap_sec=SPIKE_MERGE_GAP_SEC)
+        print(f"  {a:10s} R={am['event_recall']:.3f}  P={am['event_precision']:.3f}  "
+              f"events={am['true_events']}")
+
+
 def main() -> None:
-    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    argv = sys.argv[1:]
+    folder_override = None
+    if "--folder" in argv:
+        i = argv.index("--folder")
+        folder_override = argv[i + 1]
+        del argv[i:i + 2]
+    arg = argv[0] if argv else None
     model_dir = _resolve_model_dir(arg)
     meta = json.load(open(model_dir / "metadata.json"))
     meta["_model_dir"] = str(model_dir)
+    if folder_override:
+        meta["dataset_folder"] = folder_override
+        print(f"(folder override: {folder_override})")
+
+    if meta.get("model_type") == "spike":
+        _evaluate_spike(meta, model_dir)
+        return
 
     if meta.get("architecture") == "convulsive_classifier":
         _evaluate_convulsive(meta, model_dir)
