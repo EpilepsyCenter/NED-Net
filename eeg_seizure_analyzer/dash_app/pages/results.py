@@ -1299,9 +1299,16 @@ def _isi_bins():
 
 
 def _isi_distribution_table(isis: dict):
-    """Per-group probability per ISI bin (same binning as the plot).
-    Returns (centers, {group: probabilities})."""
+    """Per-group probability DENSITY per ISI bin: (count / total) / bin_width.
+
+    Dividing by bin width is essential with log-spaced bins — plotting raw
+    per-bin probability makes the geometrically wider high-ISI bins accumulate
+    more counts and pushes the apparent peak toward the median (a binning
+    artifact). Density puts the peak at the true mode. Integrates to 1 over ISI.
+    Returns (edges, centers, {group: density}).
+    """
     edges, centers = _isi_bins()
+    widths = np.diff(edges)
     out: dict = {}
     for g in sorted(isis):
         arr = np.asarray(isis[g])
@@ -1311,8 +1318,8 @@ def _isi_distribution_table(isis: dict):
         h, _ = np.histogram(arr, bins=edges)
         tot = h.sum()
         if tot:
-            out[g] = h / tot
-    return centers, out
+            out[g] = (h / tot) / widths
+    return edges, centers, out
 
 
 def _isi_cdf_table(isis: dict, at):
@@ -1356,22 +1363,24 @@ def _isis_by_group(events) -> dict:
 
 
 def _build_isi_distribution(events) -> go.Figure:
-    """Inter-spike-interval frequency distribution, one normalised curve per
-    group (log-spaced bins; probability so groups compare regardless of n)."""
+    """Inter-spike-interval frequency distribution, one density curve per group
+    (log-spaced bins, normalised to probability density so the peak reflects the
+    true mode, not the bin width, and groups compare regardless of n)."""
     fig = go.Figure()
-    centers, probs = _isi_distribution_table(_isis_by_group(events))
-    if not probs:
+    _edges, centers, dens = _isi_distribution_table(_isis_by_group(events))
+    if not dens:
         apply_fig_theme(fig)
         fig.update_layout(title="Inter-spike interval distribution",
-                          xaxis_title="ISI (s)", yaxis_title="Probability")
+                          xaxis_title="ISI (s)",
+                          yaxis_title="Probability density (1/s)")
         return fig
-    for i, g in enumerate(sorted(probs)):
+    for i, g in enumerate(sorted(dens)):
         fig.add_trace(go.Scatter(
-            x=centers, y=probs[g], mode="lines", name=g,
+            x=centers, y=dens[g], mode="lines", name=g,
             line=dict(color=_GROUP_PALETTE[i % len(_GROUP_PALETTE)], width=2)))
     fig.update_layout(
         title="Inter-spike interval distribution",
-        xaxis_title="ISI (s)", yaxis_title="Probability",
+        xaxis_title="ISI (s)", yaxis_title="Probability density (1/s)",
         legend=dict(orientation="h", y=1.1))
     fig.update_xaxes(type="log")
     apply_fig_theme(fig)
@@ -2395,15 +2404,17 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
     isi_dist_wide, isi_cdf_wide = [], []
     if category == "spike":
         isis = _isis_by_group(vis_events)
-        centers, probs = _isi_distribution_table(isis)
-        dist_groups = sorted(probs)
+        edges, centers, dens = _isi_distribution_table(isis)
+        dist_groups = sorted(dens)
         if dist_groups:
-            isi_dist_wide.append(["ISI_center_s"] + dist_groups)
+            # Density (1/s) per group, with bin edges so the binning is explicit.
+            isi_dist_wide.append(
+                ["ISI_low_s", "ISI_high_s", "ISI_center_s"] + dist_groups)
             for i, c in enumerate(centers):
                 isi_dist_wide.append(
-                    [round(float(c), 4)]
-                    + [round(float(probs[g][i]), 6) for g in dist_groups])
-        edges, _centers = _isi_bins()
+                    [round(float(edges[i]), 4), round(float(edges[i + 1]), 4),
+                     round(float(c), 4)]
+                    + [round(float(dens[g][i]), 6) for g in dist_groups])
         cdf = _isi_cdf_table(isis, edges)
         cdf_groups = sorted(cdf)
         if cdf_groups:
