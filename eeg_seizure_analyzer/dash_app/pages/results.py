@@ -662,7 +662,6 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         filter_kw["mode"] = modes[0] if len(modes) == 1 else None
 
     try:
-        summary = db.get_summary(**filter_kw)
         events = db.get_events(**filter_kw)
         # Daily burden is computed in Python from the filtered events (so it can
         # split by group and honour exclude/censor); circadian stays DB-side.
@@ -688,30 +687,6 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         events = [e for e in events if e.get("animal_id") in animals]
     if types and len(types) < 2:
         events = [e for e in events if e.get("type") in types]
-
-    # Summary cards — adapt layout based on category
-    n_total = summary["total_events"]
-
-    if category == "spike":
-        summary_cards = dbc.Row([
-            dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
-            dbc.Col(metric_card("Animals", str(summary.get("n_animals_analyzed", summary["n_animals"]))), width=2),
-            dbc.Col(metric_card("Total spikes", str(n_total), accent=True), width=2),
-            dbc.Col(metric_card("Flagged", str(summary["n_flagged"])), width=2),
-        ], className="g-2 mb-3")
-    else:
-        n_conv = summary["n_convulsive"]
-        n_nonconv = summary["n_nonconvulsive"]
-        pct_c = f"({round(100*n_conv/n_total)}%)" if n_total else ""
-        pct_nc = f"({round(100*n_nonconv/n_total)}%)" if n_total else ""
-        summary_cards = dbc.Row([
-            dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
-            dbc.Col(metric_card("Animals", str(summary.get("n_animals_analyzed", summary["n_animals"]))), width=2),
-            dbc.Col(metric_card("Total events", str(n_total), accent=True), width=2),
-            dbc.Col(metric_card("Convulsive", f"{n_conv} {pct_c}"), width=2),
-            dbc.Col(metric_card("Non-conv", f"{n_nonconv} {pct_nc}"), width=2),
-            dbc.Col(metric_card("Flagged", str(summary["n_flagged"])), width=2),
-        ], className="g-2 mb-3")
 
     circ_fig = _panel_legend(_build_circadian(circadian))
     filters_active = bool(
@@ -749,6 +724,37 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     vis_events = [e for e in agg_events
                   if (e.get("animal_id") or "") not in excluded]
     vis_fa = [r for r in fa_rows if (r.get("animal_id") or "") not in excluded]
+
+    # Summary cards — computed from the SAME filtered + censored set the plots
+    # use (vis_events / vis_fa), so every filter (including multi-animal and the
+    # file filter, which get_summary ignored) changes the cards, not just the
+    # graphs.
+    files_set = ({r.get("chunk_id") for r in vis_fa}
+                 or {e.get("chunk_id") for e in vis_events})
+    animals_set = ({r.get("animal_id") for r in vis_fa if r.get("animal_id")}
+                   or {e.get("animal_id") for e in vis_events if e.get("animal_id")})
+    n_total = len(vis_events)
+    n_conv = sum(1 for e in vis_events if e.get("type") == "convulsive")
+    n_nonconv = n_total - n_conv
+    n_flagged = sum(1 for e in vis_events if e.get("movement_flag"))
+    if category == "spike":
+        summary_cards = dbc.Row([
+            dbc.Col(metric_card("Files", str(len(files_set))), width=2),
+            dbc.Col(metric_card("Animals", str(len(animals_set))), width=2),
+            dbc.Col(metric_card("Total spikes", str(n_total), accent=True), width=2),
+            dbc.Col(metric_card("Flagged", str(n_flagged)), width=2),
+        ], className="g-2 mb-3")
+    else:
+        pct_c = f"({round(100*n_conv/n_total)}%)" if n_total else ""
+        pct_nc = f"({round(100*n_nonconv/n_total)}%)" if n_total else ""
+        summary_cards = dbc.Row([
+            dbc.Col(metric_card("Files", str(len(files_set))), width=2),
+            dbc.Col(metric_card("Animals", str(len(animals_set))), width=2),
+            dbc.Col(metric_card("Total events", str(n_total), accent=True), width=2),
+            dbc.Col(metric_card("Convulsive", f"{n_conv} {pct_c}"), width=2),
+            dbc.Col(metric_card("Non-conv", f"{n_nonconv} {pct_nc}"), width=2),
+            dbc.Col(metric_card("Flagged", str(n_flagged)), width=2),
+        ], className="g-2 mb-3")
 
     group_rollup = _group_rollup(vis_events, vis_fa)
     animal_rollup = _animal_rollup(agg_events, fa_rows, status)
