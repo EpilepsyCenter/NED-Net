@@ -676,6 +676,27 @@ def process_spike_chunk(
         raise
 
 
+def _filter_spike_events(events, *, min_confidence=0.0, min_local_snr=0.0,
+                         min_amplitude_x_baseline=0.0):
+    """Post-detection quality filters for classical spikes.
+
+    Mirrors the Spikes-tab filters (dash_app _apply_spike_filters): composite
+    confidence, local SNR and amplitude-relative-to-baseline, all inclusive
+    (``>=``). A threshold of 0 disables that filter.
+    """
+    out = events
+    if min_confidence > 0:
+        out = [e for e in out if e.confidence >= min_confidence]
+    if min_local_snr > 0:
+        out = [e for e in out
+               if (e.features.get("local_snr") or 0) >= min_local_snr]
+    if min_amplitude_x_baseline > 0:
+        out = [e for e in out
+               if (e.features.get("amplitude_x_baseline") or 0)
+               >= min_amplitude_x_baseline]
+    return out
+
+
 def process_spike_chunk_classical(
     edf_path: str,
     params=None,
@@ -684,6 +705,9 @@ def process_spike_chunk_classical(
     group_id: str = "",
     file_metadata: dict | None = None,
     selected_channels: list[int] | None = None,
+    min_confidence: float = 0.0,
+    min_local_snr: float = 0.0,
+    min_amplitude_x_baseline: float = 0.0,
 ) -> dict:
     """Run the CLASSICAL (rule-based) IS detector on an EDF and write to SQLite.
 
@@ -785,6 +809,12 @@ def process_spike_chunk_classical(
                 for ev in ch_sp:
                     ev.channel = ch
                 spikes.extend(ch_sp)
+
+        # Post-detection quality filters (same as the Spikes-tab filters).
+        spikes = _filter_spike_events(
+            spikes, min_confidence=min_confidence,
+            min_local_snr=min_local_snr,
+            min_amplitude_x_baseline=min_amplitude_x_baseline)
 
         file_start_hour = _get_file_start_hour(edf_path)
         date = parse_date_from_path(edf_path)
