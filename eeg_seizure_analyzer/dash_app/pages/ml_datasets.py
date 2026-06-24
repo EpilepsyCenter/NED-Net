@@ -168,7 +168,10 @@ def layout(sid: str | None) -> html.Div:
                                 id="ml-architecture",
                                 options=[
                                     {"label": "U-Net", "value": "unet"},
-                                    {"label": "BENDR", "value": "bendr"},
+                                    # BENDR removed from the UI 2026-06-24: shelved after
+                                    # the CUDA fine-tune verdict (event_f1 ~0 vs U-Net 0.78).
+                                    # Training code + CLI (train_bendr) are retained, just
+                                    # not user-selectable here.
                                     {"label": "Convulsive Classifier",
                                      "value": "convulsive"},
                                 ],
