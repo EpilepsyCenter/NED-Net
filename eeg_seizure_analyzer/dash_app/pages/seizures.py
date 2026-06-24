@@ -35,7 +35,10 @@ _METHOD_OPTIONS = [
     {"label": "Autocorrelation", "value": "autocorrelation"},
     {"label": "Ensemble", "value": "ensemble"},
     {"label": "U-Net", "value": "unet"},
-    {"label": "BENDR", "value": "bendr"},
+    # BENDR removed from the UI 2026-06-24: shelved after the CUDA fine-tune
+    # verdict (event_f1 ~0 vs U-Net 0.78). Detection code + the _bendr_params
+    # panel/callbacks are retained (and _DETECTOR_NAMES still maps "bendr" so
+    # historical BENDR-tagged events still render), just not user-selectable.
 ]
 
 _DETECTOR_NAMES = {
