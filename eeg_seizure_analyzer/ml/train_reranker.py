@@ -69,11 +69,16 @@ def _read_eeg_at_target_fs(edf_path: str):
     return SimpleNamespace(fs=float(TARGET_FS), data=data, n_samples=data.shape[1])
 
 
-def build_reranker_table(dataset_def: dict, progress_callback=None) -> dict:
+def build_reranker_table(dataset_def: dict, progress_callback=None,
+                         exclude_animals=()) -> dict:
     """Scan a dataset's annotations and compute the re-ranker feature table.
+
+    ``exclude_animals`` (animal IDs) are dropped from the table entirely, so the
+    fit and its cross-validated metrics never see them — a clean hold-out.
 
     Returns a dict with X, y, groups, conv, det_conf, method, feature_names.
     """
+    exclude = set(exclude_animals or ())
     files = dataset_def.get("files")
     if not files:
         files = scan_annotation_files(dataset_def["folder"], annotation_type="seizure")
@@ -89,7 +94,8 @@ def build_reranker_table(dataset_def: dict, progress_callback=None) -> dict:
         if not anns:
             continue
         labeled = [a for a in anns
-                   if a.label in ("confirmed", "rejected") and a.event_type == "seizure"]
+                   if a.label in ("confirmed", "rejected") and a.event_type == "seizure"
+                   and (a.animal_id or edf) not in exclude]
         if not labeled:
             continue
         try:
@@ -188,7 +194,9 @@ def train_reranker_model(
     if progress_callback:
         progress_callback({"stage": "build", "files_done": 0,
                            "n_files": len(dataset_def.get("files") or []), "events": 0})
-    tbl = build_reranker_table(dataset_def, progress_callback=progress_callback)
+    exclude = tuple(getattr(dataset_config, "exclude_animals", ()) or ())
+    tbl = build_reranker_table(dataset_def, progress_callback=progress_callback,
+                               exclude_animals=exclude)
     X, y, groups = tbl["X"], tbl["y"], tbl["groups"]
     if len(y) < 50 or len(set(y)) < 2 or len(set(groups)) < 2:
         raise ValueError(
