@@ -1750,6 +1750,60 @@ def _reranker_control(state) -> html.Div:
     )
 
 
+def _read_model_metadata(model_name: str) -> dict:
+    """Load a trained model's metadata.json (empty dict if unavailable)."""
+    if not model_name:
+        return {}
+    import json
+    from eeg_seizure_analyzer.ml.train import MODELS_DIR
+    try:
+        with open(MODELS_DIR / model_name / "metadata.json") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _suggested_thresholds(unet_model: str, convmodel: str = ""):
+    """Optimal seizure + convulsive thresholds for a model, from training.
+
+    Training records the threshold that maximised event-F1 on validation
+    (``best_threshold`` for the seizure channel, ``conv_best_threshold`` for the
+    U-Net's convulsive channel). When a standalone convulsive classifier is
+    chosen instead, its own ``best_threshold`` governs the convulsive call.
+
+    Returns ``(seiz_thr, conv_thr, info_children)`` — thresholds are None when
+    absent; info_children is a list of Dash nodes for the model-info panel.
+    """
+    bm = _read_model_metadata(unet_model).get("best_metrics") or {}
+    seiz = bm.get("best_threshold")
+    seiz_f1 = bm.get("best_event_f1") or bm.get("event_f1")
+    if convmodel:
+        cbm = _read_model_metadata(convmodel).get("best_metrics") or {}
+        conv = cbm.get("best_threshold")
+        conv_f1 = cbm.get("best_event_f1") or cbm.get("event_f1")
+        conv_src = f"classifier “{convmodel}”"
+    else:
+        conv = bm.get("conv_best_threshold")
+        conv_f1 = bm.get("conv_best_event_f1")
+        conv_src = "U-Net convulsive channel"
+
+    if seiz is None and conv is None:
+        return seiz, conv, []
+    rows = [html.Div("Suggested thresholds (training optimum):",
+                     style={"fontWeight": "600", "marginBottom": "2px"})]
+    if seiz is not None:
+        rows.append(html.Div(
+            f"• Seizure: {seiz:.2f}"
+            + (f" — val event F1 {seiz_f1:.2f}" if seiz_f1 else "")))
+    if conv is not None:
+        rows.append(html.Div(
+            f"• Convulsive: {conv:.2f} ({conv_src})"
+            + (f" — val event F1 {conv_f1:.2f}" if conv_f1 else "")))
+    rows.append(html.Div("Sliders are set to these — adjust if needed.",
+                         style={"opacity": "0.75", "marginTop": "2px"}))
+    return seiz, conv, rows
+
+
 def _unet_params(state) -> html.Div:
     """Build U-Net (ML) parameter controls: model selector + inference params."""
     try:
@@ -1776,6 +1830,16 @@ def _unet_params(state) -> html.Div:
 
     # Persisted slider values
     unet_p = state.extra.get("sz_unet_params", {})
+
+    # Default the thresholds to the chosen model's training optimum (the old
+    # hard 0.5 was a guess). A persisted user value still wins; otherwise fall
+    # back to the optimum, then 0.5. The info panel always shows the optimum.
+    _convmodel = state.extra.get("sz_unet_convmodel", "")
+    seiz_opt, conv_opt, info_children = _suggested_thresholds(default_model, _convmodel)
+    seiz_default = unet_p.get("threshold",
+                              seiz_opt if seiz_opt is not None else 0.5)
+    conv_default = unet_p.get("convulsive_threshold",
+                              conv_opt if conv_opt is not None else 0.5)
 
     return html.Div([
         dbc.Row([
@@ -1805,15 +1869,17 @@ def _unet_params(state) -> html.Div:
                         param_control(
                             "Threshold", "sz-unet-threshold",
                             0.1, 0.9, 0.05,
-                            unet_p.get("threshold", 0.5),
-                            "Probability threshold. Lower = more sensitive.",
+                            seiz_default,
+                            "Probability threshold. Lower = more sensitive. "
+                            "Defaults to the model's training optimum.",
                         ),
                         param_control(
                             "Convulsive threshold", "sz-unet-conv-threshold",
                             0.1, 0.9, 0.05,
-                            unet_p.get("convulsive_threshold", 0.5),
+                            conv_default,
                             "Threshold on the convulsive channel (ch1) for "
-                            "labelling an event convulsive.",
+                            "labelling an event convulsive. Defaults to the "
+                            "model's training optimum.",
                         ),
                         param_control(
                             "Min duration (s)", "sz-unet-min-dur",
@@ -1846,6 +1912,7 @@ def _unet_params(state) -> html.Div:
                     html.Hr(style={"margin": "12px 0", "borderColor": "var(--ned-border)"}),
                     html.Div(
                         id="sz-unet-model-info",
+                        children=info_children,
                         style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
                     ),
                 ], style={"padding": "12px", "border": "1px solid var(--ned-border)",
@@ -1853,6 +1920,31 @@ def _unet_params(state) -> html.Div:
             ], width=6),
         ], className="g-3 mb-3"),
     ])
+
+
+@callback(
+    Output({"type": "param-slider", "key": "sz-unet-threshold"}, "value",
+           allow_duplicate=True),
+    Output({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value",
+           allow_duplicate=True),
+    Output("sz-unet-model-info", "children"),
+    Input("sz-unet-model", "value"),
+    Input("sz-unet-convmodel", "value"),
+    prevent_initial_call=True,
+)
+def suggest_unet_thresholds(unet_model, convmodel):
+    """When the U-Net model (or its convulsive classifier) changes, set the
+    threshold sliders to that model's training optimum and explain it.
+
+    The clientside MATCH callback then propagates the slider value to its input
+    + display, so only the slider value needs setting here.
+    """
+    seiz, conv, info = _suggested_thresholds(unet_model, convmodel)
+    if not info:
+        return no_update, no_update, []
+    return (seiz if seiz is not None else no_update,
+            conv if conv is not None else no_update,
+            info)
 
 
 # ── Collapse toggle callbacks ─────────────────────────────────────────
