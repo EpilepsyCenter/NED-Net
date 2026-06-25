@@ -240,7 +240,9 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
-                    # Config row
+                    # Config row — gradient-training hyperparameters. Hidden for
+                    # the Event Re-ranker (tabular fit, no epochs/batch/LR/etc.).
+                    html.Div(id="ml-train-hyperparams", children=[
                     dbc.Row([
                         dbc.Col([
                             html.Label("Epochs",
@@ -285,6 +287,15 @@ def layout(sid: str | None) -> html.Div:
                                       className="form-control", size="sm"),
                         ], width=2),
                     ], className="g-2 mb-3"),
+                    ]),  # /ml-train-hyperparams
+
+                    # Note shown in place of the hyperparameters for the re-ranker.
+                    html.Div(
+                        id="ml-reranker-note",
+                        children="",
+                        style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)",
+                               "marginBottom": "12px"},
+                    ),
 
                     dbc.Row([
                         dbc.Col([
@@ -942,21 +953,38 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
 @callback(
     Output("ml-bendr-train-params", "style"),
     Output("ml-pretrained-weights", "options"),
+    Output("ml-train-hyperparams", "style"),
+    Output("ml-reranker-note", "children"),
     Input("ml-architecture", "value"),
     prevent_initial_call=True,
 )
-def toggle_bendr_train_params(architecture):
-    """Show/hide BENDR-specific training params and populate weights dropdown."""
+def toggle_arch_train_params(architecture):
+    """Show/hide architecture-specific training controls.
+
+    - BENDR: reveal the pre-trained-weights / encoder-LR / freeze panel.
+    - Re-ranker: hide the gradient-training hyperparameters entirely (it's a
+      tabular fit with no epochs/batch/LR/patience/pos-weight/neg-ratio) and
+      explain what it does instead. Exclude-animals stays visible — it's honoured.
+    """
+    options = []
     if architecture == "bendr":
-        # Scan for pre-trained weights files
         from pathlib import Path
         pretrained_dir = Path.home() / ".eeg_seizure_analyzer" / "pretrained"
-        options = []
         if pretrained_dir.exists():
             for f in sorted(pretrained_dir.glob("*.pt")):
                 options.append({"label": f.stem, "value": str(f)})
-        return {"display": "block"}, options
-    return {"display": "none"}, []
+    bendr_style = {"display": "block"} if architecture == "bendr" else {"display": "none"}
+
+    if architecture == "reranker":
+        hp_style = {"display": "none"}
+        note = ("Event Re-ranker has no epochs/batch/learning rate — it fits a "
+                "tabular model on every confirmed & rejected seizure candidate "
+                "(per-animal cross-validated). Use “Exclude animal IDs” to hold "
+                "animals out of the fit.")
+    else:
+        hp_style = {"display": "block"}
+        note = ""
+    return bendr_style, options, hp_style, note
 
 
 @callback(
