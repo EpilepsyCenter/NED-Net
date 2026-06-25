@@ -174,6 +174,10 @@ def layout(sid: str | None) -> html.Div:
                                     # not user-selectable here.
                                     {"label": "Convulsive Classifier",
                                      "value": "convulsive"},
+                                    # Tabular precision layer (sklearn, no torch);
+                                    # re-scores classical OR U-Net candidates.
+                                    {"label": "Event Re-ranker",
+                                     "value": "reranker"},
                                 ],
                                 value="unet",
                                 inline=True,
@@ -861,12 +865,29 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
         from eeg_seizure_analyzer.ml.train_convulsive import (
             train_convulsive_model as train_fn,
         )
+    elif train_config.architecture == "reranker":
+        from eeg_seizure_analyzer.ml.train_reranker import (
+            train_reranker_model as train_fn,
+        )
     else:
         from eeg_seizure_analyzer.ml.train import train_model as train_fn
 
     history: list = []  # accumulate so the UI can show every epoch live
 
     def _on_epoch(info):
+        # The re-ranker has no epochs: it emits build-stage dicts (no "epoch"
+        # key) while reading EDFs, then one final epoch=1 dict. Surface the
+        # build progress as a status line and skip the history append for it.
+        if "epoch" not in info:
+            _write_train_progress(sid, {
+                "status": "building_dataset",
+                "epoch": 0,
+                "total_epochs": getattr(train_config, "epochs", 0),
+                "files_done": info.get("files_done"),
+                "n_files": info.get("n_files"),
+                "events": info.get("events"),
+            })
+            return
         history.append(info)
         _write_train_progress(sid, {
             "status": "training",
