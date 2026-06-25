@@ -923,27 +923,28 @@ def _render_epochs(history: list, best_epoch: int = 0):
     ])
 
 
+def _import_train_fn(dataset_def, train_config):
+    """Resolve the training entrypoint for the chosen dataset/architecture.
+
+    Interictal-spike datasets train through their own pipeline; convulsive /
+    seizure U-Net models share train.py; the re-ranker is a tabular sklearn fit.
+    All honour the same progress-dict + return contract. Kept separate so the
+    import (which can fail, e.g. the re-ranker needs scikit-learn/joblib) runs
+    inside the worker's try/except and surfaces as a visible error.
+    """
+    if dataset_def.get("type") == "spike":
+        from eeg_seizure_analyzer.ml.spike_train import train_spike_model as fn
+    elif train_config.architecture == "convulsive_classifier":
+        from eeg_seizure_analyzer.ml.train_convulsive import train_convulsive_model as fn
+    elif train_config.architecture == "reranker":
+        from eeg_seizure_analyzer.ml.train_reranker import train_reranker_model as fn
+    else:
+        from eeg_seizure_analyzer.ml.train import train_model as fn
+    return fn
+
+
 def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
     """Background thread: run training and write progress after each epoch."""
-    # Interictal-spike datasets train through their own pipeline (1-class masks,
-    # 4s windows, spike-appropriate metrics). Convulsive / seizure U-Net models
-    # share train.py. All three honour the same progress-dict + return contract,
-    # so the rest of this worker is identical.
-    if dataset_def.get("type") == "spike":
-        from eeg_seizure_analyzer.ml.spike_train import (
-            train_spike_model as train_fn,
-        )
-    elif train_config.architecture == "convulsive_classifier":
-        from eeg_seizure_analyzer.ml.train_convulsive import (
-            train_convulsive_model as train_fn,
-        )
-    elif train_config.architecture == "reranker":
-        from eeg_seizure_analyzer.ml.train_reranker import (
-            train_reranker_model as train_fn,
-        )
-    else:
-        from eeg_seizure_analyzer.ml.train import train_model as train_fn
-
     history: list = []  # accumulate so the UI can show every epoch live
 
     def _on_epoch(info):
@@ -980,6 +981,11 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
             "epoch": 0,
             "total_epochs": train_config.epochs,
         })
+
+        # Import inside the guard: a missing optional dep (e.g. scikit-learn /
+        # joblib for the re-ranker) raises here and becomes a visible "error"
+        # status instead of silently killing this thread and freezing the UI.
+        train_fn = _import_train_fn(dataset_def, train_config)
 
         result = train_fn(
             dataset_def=dataset_def,
@@ -1243,18 +1249,43 @@ def poll_training(n_intervals, is_running, sid):
     status = info.get("status", "")
 
     if status == "building_dataset":
-        bar = html.Div([
-            dbc.Progress(
-                value=100, striped=True, animated=True,
-                color="info",
-                style={"height": "24px", "marginBottom": "8px"},
-            ),
-            html.Div(
-                "📦 Building dataset (loading EDF files, extracting windows)...",
-                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
-                       "textAlign": "center"},
-            ),
-        ])
+        # The re-ranker reads every EDF and extracts features per event before
+        # any "training" — slow (minutes). Surface the per-file counter it emits
+        # so the bar visibly advances instead of looking hung.
+        done = info.get("files_done")
+        total_f = info.get("n_files")
+        events = info.get("events")
+        if done is not None and total_f:
+            pct = int(100 * done / total_f) if total_f > 0 else 0
+            detail = (f"📦 Reading recordings & extracting features — "
+                      f"file {done}/{total_f}"
+                      + (f" · {events} events so far" if events else ""))
+            bar = html.Div([
+                dbc.Progress(
+                    value=pct, striped=True, animated=True, color="info",
+                    label=f"{done}/{total_f}",
+                    style={"height": "24px", "marginBottom": "8px"},
+                ),
+                html.Div(
+                    detail,
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
+                           "textAlign": "center"},
+                ),
+            ])
+        else:
+            bar = html.Div([
+                dbc.Progress(
+                    value=100, striped=True, animated=True,
+                    color="info",
+                    style={"height": "24px", "marginBottom": "8px"},
+                ),
+                html.Div(
+                    "📦 Building dataset (loading EDF files, extracting "
+                    "features)...",
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
+                           "textAlign": "center"},
+                ),
+            ])
         return bar, no_update, no_update, no_update, no_update, ""
 
     if status == "training":

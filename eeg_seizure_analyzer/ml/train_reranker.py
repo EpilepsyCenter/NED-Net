@@ -120,7 +120,7 @@ def build_reranker_table(dataset_def: dict, progress_callback=None,
             groups.append(a.animal_id or edf)
             det_conf.append(a.detector_confidence)
             method.append((a.features or {}).get("detection_method", "?"))
-        if progress_callback and (fi + 1) % 10 == 0:
+        if progress_callback and (fi == 0 or (fi + 1) % 5 == 0 or fi + 1 == n_files):
             progress_callback({"stage": "build", "files_done": fi + 1,
                                "n_files": n_files, "events": len(y),
                                "elapsed_sec": time.time() - t0})
