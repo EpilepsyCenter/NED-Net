@@ -22,19 +22,29 @@ import sqlite3
 from collections import defaultdict
 
 
-def _summarise(db_path: str, min_conf: float, keep_convulsive: bool = False) -> dict:
+def _summarise(db_path: str, min_conf: float, keep_convulsive: bool = False,
+               path_like: str | None = None) -> dict:
     db_path = os.path.abspath(os.path.expanduser(db_path))
     c = sqlite3.connect(db_path)
     # Only non-excluded events; apply the confidence cut (no-op at 0.0). With
     # keep_convulsive, the cut applies to non-convulsive only — convulsive events
     # are trusted via the cascade classifier, not the (non-conv) re-ranker.
+    # path_like restricts to files whose path contains the substring (e.g.
+    # "Week4" / a SQL LIKE pattern) so one combined DB can be sliced by week.
     conv_clause = "type='convulsive' OR " if keep_convulsive else ""
+    join = "JOIN chunks ch ON e.chunk_id=ch.id "
+    # GLOB so character classes work: 'Week[123]' = wk1-3, 'Week[456]' = wk4-6.
+    glob = f"*{path_like}*" if path_like else None
+    where_path = "AND ch.path GLOB ? " if glob else ""
+    params = [min_conf] + ([glob] if glob else [])
     rows = c.execute(
-        "SELECT animal_id, type, duration_sec, cnn_confidence "
-        "FROM events WHERE COALESCE(excluded,0)=0 "
-        f"AND ({conv_clause}COALESCE(cnn_confidence,1.0) >= ?)", (min_conf,)
-    ).fetchall()
-    n_files = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        "SELECT e.animal_id, e.type, e.duration_sec, e.cnn_confidence "
+        f"FROM events e {join}WHERE COALESCE(e.excluded,0)=0 "
+        f"AND ({conv_clause}COALESCE(e.cnn_confidence,1.0) >= ?) {where_path}",
+        params).fetchall()
+    nf_where = "WHERE path GLOB ?" if glob else ""
+    n_files = c.execute(f"SELECT COUNT(*) FROM chunks {nf_where}",
+                        ([glob] if glob else [])).fetchone()[0]
     c.close()
 
     per_animal: dict[str, int] = defaultdict(int)
@@ -72,12 +82,17 @@ def main() -> int:
                     help="never drop convulsive events on the confidence cut "
                          "(re-ranker is a non-convulsive layer; convulsive are "
                          "trusted via the cascade). Applies to the NEW DB.")
+    ap.add_argument("--path-like", default=None,
+                    help="restrict BOTH DBs to files whose path contains this "
+                         "(e.g. 'Week4' or a LIKE pattern) — slice one combined "
+                         "DB by week. Repeat per week for in/out-of-sample splits.")
     args = ap.parse_args()
 
     # The old DB's confidences are raw CNN, so the convulsive carve-out is moot
     # there; apply keep_convulsive only to the (re-ranked) new DB.
-    old = _summarise(args.old, args.old_min_confidence or 0.0)
-    new = _summarise(args.new, args.min_confidence, keep_convulsive=args.keep_convulsive)
+    old = _summarise(args.old, args.old_min_confidence or 0.0, path_like=args.path_like)
+    new = _summarise(args.new, args.min_confidence,
+                     keep_convulsive=args.keep_convulsive, path_like=args.path_like)
 
     def line(label, a, b):
         print(f"  {label:24s} {a:>12} {b:>12}")
