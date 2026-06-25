@@ -26,6 +26,23 @@ from eeg_seizure_analyzer.io.channel_ids import load_channel_ids
 # ── Layout ───────────────────────────────────────────────────────────
 
 
+def _param_label(text: str, tip: str | None = None,
+                 font_size: str = "0.78rem") -> html.Label:
+    """A muted field label with an optional ``(?)`` hover tooltip.
+
+    Matches the convention used by ``components.param_control`` (native HTML
+    ``title`` on a help-cursor span) so the explanation appears on hover.
+    """
+    children = [text]
+    if tip:
+        children.append(html.Span(
+            " (?)", title=tip,
+            style={"cursor": "help", "opacity": "0.5"},
+        ))
+    return html.Label(children,
+                      style={"fontSize": font_size, "color": "var(--ned-text-muted)"})
+
+
 def layout(sid: str | None) -> html.Div:
     """Return the ML dataset builder layout."""
     state = server_state.get_session(sid)
@@ -77,8 +94,11 @@ def layout(sid: str | None) -> html.Div:
             ),
 
             # ── Annotation type ──────────────────────────────────
-            html.Label("Annotation type",
-                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
+            _param_label(
+                "Annotation type",
+                "Which sidecar labels to train on: Seizure events (for U-Net, "
+                "Convulsive, Re-ranker) or Interictal Spikes (their own model).",
+                font_size="0.82rem"),
             dbc.RadioItems(
                 id="ml-type-radio",
                 options=[
@@ -150,9 +170,12 @@ def layout(sid: str | None) -> html.Div:
                     # Model name + architecture
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Model name",
-                                       style={"fontSize": "0.82rem",
-                                              "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Model name",
+                                "Folder name the trained model is saved under. "
+                                "Pick something recognisable, e.g. study1_v1. "
+                                "Reusing a name overwrites that model.",
+                                font_size="0.82rem"),
                             dbc.Input(
                                 id="ml-model-name",
                                 placeholder="e.g. study1_v1",
@@ -161,9 +184,15 @@ def layout(sid: str | None) -> html.Div:
                             ),
                         ], width=4),
                         dbc.Col([
-                            html.Label("Architecture",
-                                       style={"fontSize": "0.82rem",
-                                              "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Architecture",
+                                "What to train. U-Net = the seizure detector "
+                                "(finds candidate events). Convulsive Classifier "
+                                "= Stage-2 model labelling each event convulsive "
+                                "vs non-convulsive. Event Re-ranker = tabular layer "
+                                "that re-scores confidence of candidates a detector "
+                                "already found (filters false positives).",
+                                font_size="0.82rem"),
                             dbc.RadioItems(
                                 id="ml-architecture",
                                 options=[
@@ -193,9 +222,12 @@ def layout(sid: str | None) -> html.Div:
                         children=[
                             dbc.Row([
                                 dbc.Col([
-                                    html.Label("Encoder LR",
-                                               style={"fontSize": "0.78rem",
-                                                      "color": "var(--ned-text-muted)"}),
+                                    _param_label(
+                                        "Encoder LR",
+                                        "Learning rate for the pre-trained BENDR "
+                                        "encoder, kept much smaller than the head "
+                                        "LR so fine-tuning doesn't wipe pre-trained "
+                                        "features."),
                                     dbc.Input(
                                         id="ml-encoder-lr", type="text",
                                         value="0.00001",
@@ -203,9 +235,12 @@ def layout(sid: str | None) -> html.Div:
                                     ),
                                 ], width=2),
                                 dbc.Col([
-                                    html.Label("Freeze encoder (epochs)",
-                                               style={"fontSize": "0.78rem",
-                                                      "color": "var(--ned-text-muted)"}),
+                                    _param_label(
+                                        "Freeze encoder (epochs)",
+                                        "Train only the decoder head for this many "
+                                        "epochs before unfreezing the encoder. Lets "
+                                        "the head settle first so early gradients "
+                                        "don't corrupt pre-trained weights."),
                                     dbc.Input(
                                         id="ml-freeze-epochs", type="text",
                                         value="5",
@@ -213,9 +248,12 @@ def layout(sid: str | None) -> html.Div:
                                     ),
                                 ], width=2),
                                 dbc.Col([
-                                    html.Label("Pre-trained weights",
-                                               style={"fontSize": "0.78rem",
-                                                      "color": "var(--ned-text-muted)"}),
+                                    _param_label(
+                                        "Pre-trained weights",
+                                        "Self-supervised BENDR checkpoint (.pt) to "
+                                        "start from, found in "
+                                        "~/.eeg_seizure_analyzer/pretrained/. None = "
+                                        "train from scratch."),
                                     dcc.Dropdown(
                                         id="ml-pretrained-weights",
                                         options=[],
@@ -245,43 +283,62 @@ def layout(sid: str | None) -> html.Div:
                     html.Div(id="ml-train-hyperparams", children=[
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Epochs",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Epochs",
+                                "Maximum passes over the training set. Training can "
+                                "stop earlier once validation stops improving "
+                                "(see Patience)."),
                             dbc.Input(id="ml-epochs", type="text",
                                       value="50",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Batch size",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Batch size",
+                                "Number of windows per gradient step. Larger is "
+                                "faster and steadier but uses more memory — lower it "
+                                "if you hit out-of-memory errors."),
                             dbc.Input(id="ml-batch-size", type="text",
                                       value="8",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Learning rate",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Learning rate",
+                                "Step size for weight updates. Too high diverges, too "
+                                "low trains slowly. 1e-3 is a sane default for the "
+                                "U-Net."),
                             dbc.Input(id="ml-lr", type="text",
                                       value="0.001",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Patience",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Patience",
+                                "Early stopping: halt if validation loss hasn't "
+                                "improved for this many epochs. The best checkpoint "
+                                "is kept, not the last."),
                             dbc.Input(id="ml-patience", type="text",
                                       value="10",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Pos weight",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Pos weight",
+                                "Multiplier on the positive (seizure) class in the "
+                                "loss, to counter class imbalance. Higher = more "
+                                "sensitive but more false positives."),
                             dbc.Input(id="ml-pos-weight", type="text",
                                       value="5.0",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Neg/Pos ratio",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Neg/Pos ratio",
+                                "Background (negative) windows sampled per positive "
+                                "window when building the training set. Higher = more "
+                                "negatives = fewer false positives, but can dilute "
+                                "the seizure signal."),
                             dbc.Input(id="ml-neg-ratio", type="text",
                                       value="2.0",
                                       className="form-control", size="sm"),
@@ -299,8 +356,12 @@ def layout(sid: str | None) -> html.Div:
 
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Exclude animal IDs (comma/space-separated)",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Exclude animal IDs (comma/space-separated)",
+                                "Animal IDs to leave out of training entirely, so "
+                                "they stay an unseen test set. Splits are per-animal, "
+                                "so excluding here guarantees no leakage from that "
+                                "animal into the model."),
                             dbc.Input(id="ml-exclude-animals", type="text",
                                       value="", placeholder="e.g. 355676",
                                       className="form-control", size="sm"),
