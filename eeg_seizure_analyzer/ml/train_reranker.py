@@ -253,18 +253,34 @@ def load_reranker(model_name: str):
     return bundle["model"], bundle["feature_names"], meta
 
 
+def _is_convulsive(ev) -> bool:
+    """True if the cascade/detector has already flagged this event convulsive."""
+    f = ev.features or {}
+    return bool(f.get("convulsive")) or f.get("seizure_subtype") == "convulsive"
+
+
 def apply_reranker(events: list[DetectedEvent], recording, model_name: str,
-                   all_events: list[DetectedEvent] | None = None) -> list[DetectedEvent]:
+                   all_events: list[DetectedEvent] | None = None,
+                   skip_convulsive: bool = True) -> list[DetectedEvent]:
     """Score each event's P(real) and write it to ``event.confidence``.
 
     ``recording`` must be at ~TARGET_FS (the app's working rate). The previous
     heuristic confidence is preserved under ``quality_metrics['heuristic_confidence']``.
+
+    With ``skip_convulsive`` (default), events already flagged convulsive by the
+    Stage-2 cascade are left untouched: the re-ranker was trained on pooled
+    events with almost no false-convulsive examples, so its score is unreliable
+    on convulsive morphology — those events are trusted via the cascade
+    classifier, not re-scored or filtered here. The re-ranker is a
+    non-convulsive precision layer.
     """
     model, feat_names, _ = load_reranker(model_name)
     ctx = all_events if all_events is not None else events
     n_ch = recording.data.shape[0]
     for ev in events:
         if ev.channel >= n_ch:  # event on a channel absent from this recording
+            continue
+        if skip_convulsive and _is_convulsive(ev):
             continue
         feats = extract_event_features(recording, ev, all_events=ctx)
         row = np.asarray([[float(feats.get(k, np.nan)) for k in feat_names]], float)
