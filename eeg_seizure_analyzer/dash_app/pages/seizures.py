@@ -647,6 +647,11 @@ def layout(sid: str | None) -> html.Div:
                 style={"display": "none"},
             ),
 
+            # ── Event re-ranker (post-processing, detector-agnostic) ──
+            # A trained tabular model re-scores every candidate's confidence
+            # from raw-signal features. Applies on top of ANY detector.
+            _reranker_control(state),
+
             # Action buttons
             html.Div(
                 style={"display": "flex", "gap": "12px", "marginBottom": "20px",
@@ -1683,6 +1688,68 @@ def _convulsive_dropdown(dropdown_id: str, default: str) -> html.Div:
     ], style={"marginBottom": "12px"})
 
 
+def _reranker_model_options() -> list[dict]:
+    """Dropdown options for trained event re-rankers (Stage-3 precision layer)."""
+    try:
+        from eeg_seizure_analyzer.ml.train import list_models
+        models = [m for m in list_models()
+                  if m.get("architecture") == "reranker"]
+    except Exception:
+        models = []
+    opts = []
+    for m in models:
+        # list_models surfaces avg_precision under the generic best_event_f1 key
+        # (the re-ranker aliases AP→event_f1 so the listing renders a score).
+        ap = m.get("best_event_f1")
+        label = f"{m['name']} — AP: {ap:.2f}" if ap else m["name"]
+        opts.append({"label": label, "value": m["name"]})
+    return opts
+
+
+def _reranker_control(state) -> html.Div:
+    """Optional post-detection re-ranker: a toggle + trained-model picker.
+
+    When enabled with a model selected, ``run_detection`` re-scores every
+    candidate's ``confidence`` from raw-signal features (detector-agnostic), so
+    the confidence filter then operates on the learned P(real) instead of the
+    heuristic. Works on top of any detector (classical or U-Net).
+    """
+    opts = _reranker_model_options()
+    default = state.extra.get("sz_reranker_model", "")
+    if default not in {o["value"] for o in opts}:
+        default = opts[0]["value"] if opts else None
+    return html.Div(
+        style={"border": "1px solid var(--ned-border)", "borderRadius": "6px",
+               "padding": "10px 12px", "marginBottom": "16px"},
+        children=[
+            dbc.Checkbox(
+                id="sz-reranker-enabled",
+                label="Re-rank events with a trained model",
+                value=False,
+                style={"fontSize": "0.85rem", "fontWeight": "600"},
+            ),
+            html.Div(
+                "Re-scores each candidate's confidence from raw-signal features "
+                "(pre-/post-ictal context, morphology). Replaces the heuristic "
+                "confidence; the original is kept under quality metrics."
+                if opts else
+                "No re-ranker models available — train one in the Training tab "
+                "(architecture: Event Re-ranker) first.",
+                style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
+                       "margin": "4px 0 8px"},
+            ),
+            dcc.Dropdown(
+                id="sz-reranker-model",
+                options=opts,
+                value=default,
+                clearable=False,
+                placeholder="Train an event re-ranker first",
+                style={"fontSize": "0.82rem", "maxWidth": "420px"},
+            ),
+        ],
+    )
+
+
 def _unet_params(state) -> html.Div:
     """Build U-Net (ML) parameter controls: model selector + inference params."""
     try:
@@ -2147,6 +2214,9 @@ def auto_save_sz_extras(*args):
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
+    # ── Event re-ranker (post-processing) ──
+    State("sz-reranker-enabled", "value"),
+    State("sz-reranker-model", "value"),
     # Session
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -2197,6 +2267,8 @@ def run_detection(
     # U-Net
     unet_model, unet_convmodel, unet_threshold, unet_conv_threshold,
     unet_min_dur, unet_merge_gap,
+    # Event re-ranker
+    reranker_enabled, reranker_model,
     sid,
 ):
     """Run seizure detection (multi-method), clear results, or apply filters."""
@@ -2666,6 +2738,21 @@ def run_detection(
                 event.confidence = compute_confidence_score(qm)
             except Exception:
                 pass  # keep pass-1 values
+
+        # ── Pass 3 (optional): learned re-ranker ───────────────────────
+        # Replace the heuristic confidence with a trained model's P(real),
+        # computed from the same raw-signal features used at training time.
+        # Detector-agnostic, so it applies to whatever method produced the
+        # candidates. Original heuristic confidence is preserved under
+        # quality_metrics['heuristic_confidence'].
+        if reranker_enabled and reranker_model and seizures:
+            try:
+                from eeg_seizure_analyzer.ml.train_reranker import apply_reranker
+                apply_reranker(seizures, rec, reranker_model, all_events=seizures)
+                state.extra["sz_reranker_model"] = reranker_model
+            except Exception:
+                import traceback
+                traceback.print_exc()  # keep heuristic confidence on failure
 
         # Assign stable event IDs (1-based, sorted by channel then onset)
         seizures.sort(key=lambda e: (e.channel, e.onset_sec))

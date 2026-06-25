@@ -21,8 +21,12 @@ waitress>=3.0
 pywebview>=5.0; sys_platform != "linux"
 pywebview[qt]>=5.0; sys_platform == "linux"   # Qt backend bundles its web engine
 
-# ── Optional: machine learning (uncomment to enable training / CNN) ───
-# For CUDA builds, install torch separately per https://pytorch.org/get-started/locally/
+# ── Machine learning ──────────────────────────────────────────────────
+# Event re-ranker (tabular, lightweight) — enabled by default:
+scikit-learn>=1.3
+joblib>=1.3
+# CNN detectors (U-Net / convulsive) need torch (heavy). For CUDA builds,
+# install torch separately per https://pytorch.org/get-started/locally/
 # torch
 
 # ── Optional: LabChart (ADICHT) support on Windows ────────────────────
