@@ -1840,6 +1840,10 @@ def _unet_params(state) -> html.Div:
                               seiz_opt if seiz_opt is not None else 0.5)
     conv_default = unet_p.get("convulsive_threshold",
                               conv_opt if conv_opt is not None else 0.5)
+    # Boundary (hysteresis) threshold defaults to roughly half the detection
+    # threshold — comfortably below it so onset/offset ramps get captured.
+    bnd_default = unet_p.get("boundary_threshold",
+                             round((seiz_default or 0.5) * 0.5, 2))
 
     return html.Div([
         dbc.Row([
@@ -1870,8 +1874,20 @@ def _unet_params(state) -> html.Div:
                             "Threshold", "sz-unet-threshold",
                             0.1, 0.9, 0.05,
                             seiz_default,
-                            "Probability threshold. Lower = more sensitive. "
-                            "Defaults to the model's training optimum.",
+                            "Detection threshold — an event's core must exceed "
+                            "it. Lower = more sensitive. Defaults to the model's "
+                            "training optimum.",
+                        ),
+                        param_control(
+                            "Boundary threshold (hysteresis)",
+                            "sz-unet-bnd-threshold",
+                            0.05, 0.9, 0.05,
+                            bnd_default,
+                            "Lower threshold that grows each event's onset/offset "
+                            "outward along the probability curve, capturing the "
+                            "seizure ramp-up/decay so boundaries aren't clipped "
+                            "short. Set below the detection threshold; equal to "
+                            "it (or higher) disables growing.",
                         ),
                         param_control(
                             "Convulsive threshold", "sz-unet-conv-threshold",
@@ -2303,6 +2319,7 @@ def auto_save_sz_extras(*args):
     State("sz-unet-model", "value"),
     State("sz-unet-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-bnd-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
@@ -2357,8 +2374,8 @@ def run_detection(
     bendr_model, bendr_convmodel, bendr_threshold, bendr_conv_threshold,
     bendr_min_dur, bendr_merge_gap,
     # U-Net
-    unet_model, unet_convmodel, unet_threshold, unet_conv_threshold,
-    unet_min_dur, unet_merge_gap,
+    unet_model, unet_convmodel, unet_threshold, unet_bnd_threshold,
+    unet_conv_threshold, unet_min_dur, unet_merge_gap,
     # Event re-ranker
     reranker_enabled, reranker_model,
     sid,
@@ -2589,6 +2606,7 @@ def run_detection(
                 _ml_thr, _ml_convthr, _ml_mindur, _ml_merge = (
                     bendr_threshold, bendr_conv_threshold,
                     bendr_min_dur, bendr_merge_gap)
+                _ml_bnd = None  # no hysteresis control in the (shelved) BENDR panel
                 _model_key, _params_key = "sz_bendr_model", "sz_bendr_params"
                 _convmodel_key = "sz_bendr_convmodel"
             else:
@@ -2597,6 +2615,7 @@ def run_detection(
                 _ml_thr, _ml_convthr, _ml_mindur, _ml_merge = (
                     unet_threshold, unet_conv_threshold,
                     unet_min_dur, unet_merge_gap)
+                _ml_bnd = unet_bnd_threshold
                 _model_key, _params_key = "sz_unet_model", "sz_unet_params"
                 _convmodel_key = "sz_unet_convmodel"
 
@@ -2620,12 +2639,18 @@ def run_detection(
             _convthr = float(_ml_convthr or 0.5)
             _mindur = float(_ml_mindur or 3.0)
             _merge = float(_ml_merge or 2.0)
+            # Hysteresis boundary threshold: only meaningful below the detection
+            # threshold. If unset or >= detection, pass None (no growing).
+            _bnd = float(_ml_bnd) if _ml_bnd is not None else None
+            if _bnd is not None and _bnd >= _thr:
+                _bnd = None
 
             # Persist params for this method
             state.extra[_model_key] = _ml_model
             state.extra[_convmodel_key] = _ml_convmodel or ""
             state.extra[_params_key] = {
                 "threshold": _thr,
+                "boundary_threshold": (_ml_bnd if _ml_bnd is not None else _thr),
                 "convulsive_threshold": _convthr,
                 "min_duration_sec": _mindur,
                 "merge_gap_sec": _merge,
@@ -2636,6 +2661,7 @@ def run_detection(
                 model_name=_ml_model,
                 channels=selected_channels,
                 threshold=_thr,
+                boundary_threshold=_bnd,
                 convulsive_threshold=_convthr,
                 min_duration_sec=_mindur,
                 merge_gap_sec=_merge,
@@ -3916,6 +3942,11 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
         ml_convthr = float(sz_params.get("ml_convulsive_threshold", 0.5))
         ml_mindur = float(sz_params.get("ml_min_duration_sec", 3.0))
         ml_merge = float(sz_params.get("ml_merge_gap_sec", 2.0))
+        # Hysteresis boundary threshold (U-Net only); None / >= detection = off.
+        ml_bnd = sz_params.get("ml_boundary_threshold")
+        ml_bnd = float(ml_bnd) if ml_bnd is not None else None
+        if ml_bnd is not None and ml_bnd >= ml_thr:
+            ml_bnd = None
         detector_name = "BENDR" if method == "bendr" else "U-Net"
     else:
         detector, params, detector_name, (bp_low, bp_high) = (
@@ -3986,6 +4017,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
                 seizures = predict_seizures(
                     edf_path=edf_path, model_name=ml_model,
                     channels=selected_channels, threshold=ml_thr,
+                    boundary_threshold=ml_bnd,
                     convulsive_threshold=ml_convthr,
                     min_duration_sec=ml_mindur, merge_gap_sec=ml_merge,
                     convulsive_model_name=ml_convmodel,
@@ -4122,6 +4154,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     State("sz-unet-model", "value"),
     State("sz-unet-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-bnd-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
@@ -4130,8 +4163,8 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
 )
 def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
                      bendr_convthr, bendr_mindur, bendr_merge, unet_model,
-                     unet_convmodel, unet_thr, unet_convthr, unet_mindur,
-                     unet_merge, sid):
+                     unet_convmodel, unet_thr, unet_bnd, unet_convthr,
+                     unet_mindur, unet_merge, sid):
     """Launch the background detection thread and start polling."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -4165,10 +4198,12 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
             ml_model, ml_thr, ml_convthr, ml_mindur, ml_merge = (
                 bendr_model, bendr_thr, bendr_convthr, bendr_mindur, bendr_merge)
             ml_convmodel = bendr_convmodel
+            ml_bnd = None  # no hysteresis control in the (shelved) BENDR panel
         else:
             ml_model, ml_thr, ml_convthr, ml_mindur, ml_merge = (
                 unet_model, unet_thr, unet_convthr, unet_mindur, unet_merge)
             ml_convmodel = unet_convmodel
+            ml_bnd = unet_bnd
         if not ml_model:
             label = "BENDR" if method == "bendr" else "U-Net"
             return (
@@ -4180,6 +4215,8 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
         sz_params["ml_model"] = ml_model
         sz_params["ml_convmodel"] = ml_convmodel or ""
         sz_params["ml_threshold"] = float(ml_thr or 0.5)
+        sz_params["ml_boundary_threshold"] = (
+            float(ml_bnd) if ml_bnd is not None else None)
         sz_params["ml_convulsive_threshold"] = float(ml_convthr or 0.5)
         sz_params["ml_min_duration_sec"] = float(ml_mindur or 3.0)
         sz_params["ml_merge_gap_sec"] = float(ml_merge or 2.0)

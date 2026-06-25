@@ -31,6 +31,7 @@ def predict_seizures(
     model_name: str,
     channels: list[int] | None = None,
     threshold: float = 0.5,
+    boundary_threshold: float | None = None,
     convulsive_threshold: float = 0.5,
     min_duration_sec: float = 3.0,
     merge_gap_sec: float = 2.0,
@@ -53,6 +54,14 @@ def predict_seizures(
         EEG channel indices to process. None = auto-detect all EEG channels.
     threshold : float
         Probability threshold for seizure detection (channel 0, all seizures).
+        An event must have a core whose probability exceeds this — keeps
+        detection precise.
+    boundary_threshold : float, optional
+        Lower threshold used to *grow* each detected event's onset/offset
+        outward along the probability curve (hysteresis). Captures the seizure's
+        ramp-up/decay that sits below the detection ``threshold``, so boundaries
+        aren't clipped short. None or >= ``threshold`` disables growing (the
+        boundaries are exactly the detection-threshold crossings, as before).
     convulsive_threshold : float
         Threshold on the convulsive channel (1) mean probability for labelling a
         detected event convulsive vs non-convulsive.
@@ -200,6 +209,7 @@ def predict_seizures(
         binary = (avg_probs > threshold).astype(int)
         ch_events = _extract_events(
             binary, avg_probs, target_fs,
+            boundary_threshold=boundary_threshold,
             min_duration_sec=min_duration_sec,
             merge_gap_sec=merge_gap_sec,
             channel=eeg_ch,
@@ -282,6 +292,7 @@ def _extract_events(
     binary: np.ndarray,
     probs: np.ndarray,
     fs: int,
+    boundary_threshold: float | None = None,
     min_duration_sec: float = 3.0,
     merge_gap_sec: float = 2.0,
     channel: int = 0,
@@ -295,9 +306,11 @@ def _extract_events(
 
     Parameters
     ----------
-    binary : (n_samples,) binary array
+    binary : (n_samples,) binary array — the detection-threshold mask (cores)
     probs : (n_samples,) seizure probability array
     fs : sampling rate
+    boundary_threshold : lower prob to grow each core's onset/offset out to
+        (hysteresis). None disables growing.
     min_duration_sec : discard events shorter than this
     merge_gap_sec : merge events closer than this
     channel : EEG channel index
@@ -309,7 +322,7 @@ def _extract_events(
     -------
     list[DetectedEvent]
     """
-    # Find contiguous segments
+    # Find contiguous detection cores (runs above the detection threshold)
     segments = []
     in_seg = False
     start = 0
@@ -323,13 +336,36 @@ def _extract_events(
     if in_seg:
         segments.append((start, len(binary)))
 
-    # Merge close segments
-    merge_gap_samples = int(merge_gap_sec * fs)
-    if merge_gap_samples > 0 and len(segments) > 1:
+    # Hysteresis: grow each core outward to where the probability falls below
+    # the (lower) boundary threshold, capturing the seizure's ramp-up/decay that
+    # sits under the detection threshold. A core only exists where prob exceeded
+    # the (higher) detection threshold, so this never invents new events — it
+    # only widens the ones already found. Disabled when boundary_threshold is
+    # None or not below the core edges (then onset/offset stay at the crossings).
+    if boundary_threshold is not None and segments:
+        n = len(probs)
+        grown = []
+        for s, e in segments:
+            ns = s
+            while ns > 0 and probs[ns - 1] > boundary_threshold:
+                ns -= 1
+            ne = e
+            while ne < n and probs[ne] > boundary_threshold:
+                ne += 1
+            grown.append((ns, ne))
+        # Growing can reorder/overlap neighbours; sort so the merge below (which
+        # assumes ascending starts) collapses any overlaps correctly.
+        segments = sorted(grown)
+
+    # Merge close segments (and always coalesce overlaps, which hysteresis
+    # growing can create even when merge_gap is 0).
+    merge_gap_samples = max(0, int(merge_gap_sec * fs))
+    if len(segments) > 1:
         merged = [segments[0]]
         for s, e in segments[1:]:
             if s - merged[-1][1] <= merge_gap_samples:
-                merged[-1] = (merged[-1][0], e)
+                # extend; keep the later end (a nested segment must not shrink it)
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
             else:
                 merged.append((s, e))
         segments = merged
