@@ -262,7 +262,10 @@ def apply_reranker(events: list[DetectedEvent], recording, model_name: str,
     """
     model, feat_names, _ = load_reranker(model_name)
     ctx = all_events if all_events is not None else events
+    n_ch = recording.data.shape[0]
     for ev in events:
+        if ev.channel >= n_ch:  # event on a channel absent from this recording
+            continue
         feats = extract_event_features(recording, ev, all_events=ctx)
         row = np.asarray([[float(feats.get(k, np.nan)) for k in feat_names]], float)
         p = float(model.predict_proba(row)[0, 1])

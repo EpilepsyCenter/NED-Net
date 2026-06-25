@@ -66,6 +66,7 @@ def _process_one(edf_path: str):
             edf_path=edf_path,
             model_name=cfg["model"],
             confidence_threshold=cfg["threshold"],
+            boundary_threshold=cfg["boundary_threshold"],
             convulsive_threshold=cfg["conv_threshold"],
             min_duration_sec=cfg["min_duration"],
             merge_gap_sec=cfg["merge_gap"],
@@ -74,6 +75,7 @@ def _process_one(edf_path: str):
             file_metadata=meta,
             overwrite=True,  # part-DB is always fresh; never skip here
             convulsive_model_name=cfg["conv_model"],
+            reranker_model=cfg["reranker_model"],
         )
         return edf_path, int(r.get("n_events", 0)), None
     except Exception as e:  # one bad file must not abort the sweep
@@ -146,7 +148,14 @@ def main() -> int:
                     help="convulsive classifier model name (cascade stage 2)")
     ap.add_argument("--metadata-csv", default=None,
                     help="batch metadata CSV/XLSX (filename -> cohort/group/animal)")
-    ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--threshold", type=float, default=0.5,
+                    help="detection threshold — event core must exceed it")
+    ap.add_argument("--boundary-threshold", type=float, default=None,
+                    help="lower hysteresis threshold to grow event onset/offset "
+                         "out to (captures ramps). Omit / >= --threshold = off")
+    ap.add_argument("--reranker-model", default=None,
+                    help="event re-ranker model name; when set, each event's "
+                         "confidence is replaced by the learned P(real)")
     ap.add_argument("--conv-threshold", type=float, default=0.5)
     ap.add_argument("--min-duration", type=float, default=5.0)
     ap.add_argument("--merge-gap", type=float, default=2.0)
@@ -193,9 +202,16 @@ def main() -> int:
 
     cfg = dict(
         model=args.model, conv_model=args.convulsive_model, metadata=metadata,
-        threshold=args.threshold, conv_threshold=args.conv_threshold,
+        threshold=args.threshold, boundary_threshold=args.boundary_threshold,
+        reranker_model=args.reranker_model,
+        conv_threshold=args.conv_threshold,
         min_duration=args.min_duration, merge_gap=args.merge_gap,
     )
+    print(f"Detection: thr={args.threshold} "
+          f"boundary={args.boundary_threshold if args.boundary_threshold is not None else 'off'} "
+          f"reranker={args.reranker_model or 'none'} "
+          f"conv_thr={args.conv_threshold} min_dur={args.min_duration}", flush=True)
+
     work_tmp = os.path.join(args.tmpdir, f"neddet_{os.getpid()}")
     os.makedirs(work_tmp, exist_ok=True)
 
