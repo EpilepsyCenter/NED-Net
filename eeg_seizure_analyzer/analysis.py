@@ -330,6 +330,8 @@ def process_chunk(
     file_metadata: dict | None = None,
     overwrite: bool = False,
     convulsive_model_name: str | None = None,
+    boundary_threshold: float | None = None,
+    reranker_model: str | None = None,
 ) -> dict:
     """Master detection function shared by all three analysis modes.
 
@@ -436,6 +438,7 @@ def process_chunk(
             model_name=model_name,
             channels=None,  # auto-detect all EEG channels
             threshold=confidence_threshold,
+            boundary_threshold=boundary_threshold,
             convulsive_threshold=convulsive_threshold,
             min_duration_sec=min_duration_sec,
             merge_gap_sec=merge_gap_sec,
@@ -447,6 +450,16 @@ def process_chunk(
         events = classify_event_types(
             events, edf_path, eeg_idx, eeg_fs, classification_params,
         )
+
+        # Optional Stage-3 re-ranker: replace each event's confidence with the
+        # learned P(real), computed from the raw signal (same path as training).
+        # cnn_confidence in the DB then holds the re-ranker score.
+        if reranker_model and events:
+            from eeg_seizure_analyzer.ml.train_reranker import (
+                _read_eeg_at_target_fs, apply_reranker,
+            )
+            rr_rec = _read_eeg_at_target_fs(edf_path)
+            apply_reranker(events, rr_rec, reranker_model, all_events=events)
 
         # Determine hour-of-day for each event from file start time
         file_start_hour = _get_file_start_hour(edf_path)
