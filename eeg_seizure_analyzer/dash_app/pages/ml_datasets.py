@@ -1333,6 +1333,60 @@ def poll_training(n_intervals, is_running, sid):
         title = ("⏹ Training Stopped (best model kept)" if was_stopped
                  else "✅ Training Complete")
 
+        # The re-ranker reports retrieval metrics (ROC-AUC / average precision /
+        # false-positives removed at a recall target), not the U-Net's per-sample
+        # / per-event F1. Detect it by its signature key and render its own panel.
+        if "roc_auc" in best_metrics:
+            def _pct(x):
+                return f"{x:.1%}" if isinstance(x, (int, float)) else "—"
+
+            def _f3(x):
+                return f"{x:.3f}" if isinstance(x, (int, float)) else "—"
+            m = best_metrics
+            results = html.Div([
+                html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
+                html.H5(title,
+                        style={"color": "var(--ned-success)", "marginBottom": "12px"}),
+                dbc.Row([
+                    dbc.Col(metric_card("Model", info.get("model_name", "")), width=3),
+                    dbc.Col(metric_card("ROC-AUC", _f3(m.get("roc_auc")),
+                                        accent=True), width=2),
+                    dbc.Col(metric_card("Avg precision", _f3(m.get("avg_precision")),
+                                        accent=True), width=3),
+                    dbc.Col(metric_card("Events", f"{m.get('n_events', 0):,}"), width=2),
+                    dbc.Col(metric_card("Animals", str(m.get("n_animals", 0))), width=2),
+                ], className="g-2 mb-2"),
+                dbc.Row([
+                    dbc.Col(metric_card("Real / False",
+                                        f"{m.get('n_pos', 0)} / {m.get('n_neg', 0)}"),
+                            width=3),
+                    dbc.Col(metric_card("FP removed @95% recall",
+                                        _pct(m.get("fp_removed_at_recall_95"))), width=3),
+                    dbc.Col(metric_card("FP removed @90% recall",
+                                        _pct(m.get("fp_removed_at_recall_90"))), width=3),
+                    dbc.Col(metric_card("Threshold @90%",
+                                        _f3(m.get("threshold_at_recall_90"))), width=3),
+                ], className="g-2 mb-3"),
+                html.Div(
+                    "Per-animal cross-validated. Apply it in the Seizures tab "
+                    "(“Re-rank events with a trained model”) — it replaces each "
+                    "candidate's confidence with this model's P(real).",
+                    style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
+                html.Div(
+                    f"Model saved to: {model_path}",
+                    style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
+                           "marginTop": "6px"}),
+            ])
+            done_bar = html.Div([dbc.Progress(
+                value=100, color="success", label="Complete",
+                style={"height": "24px", "marginBottom": "8px"})])
+            try:
+                _progress_path(sid).unlink()
+            except Exception:
+                pass
+            _clear_stop(sid)
+            return done_bar, True, False, False, results, ""
+
         # Build results summary
         results = html.Div([
             html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
