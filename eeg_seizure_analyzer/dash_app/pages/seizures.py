@@ -1707,45 +1707,22 @@ def _reranker_model_options() -> list[dict]:
 
 
 def _reranker_control(state) -> html.Div:
-    """Optional post-detection re-ranker: a toggle + trained-model picker.
+    """Hidden placeholder for the (retired) post-detection re-ranker.
 
-    When enabled with a model selected, ``run_detection`` re-scores every
-    candidate's ``confidence`` from raw-signal features (detector-agnostic), so
-    the confidence filter then operates on the learned P(real) instead of the
-    heuristic. Works on top of any detector (classical or U-Net).
+    Removed from the UI 2026-06-26: a human spot-check (out-of-sample wk4-6)
+    showed the re-ranker does NOT generalise as a precision filter — at the 0.5
+    cut it confidently dropped real seizures (94% of its rejects were real),
+    while the lower-threshold + hysteresis detection alone gives ~98%-precision
+    candidates. Detection no longer gates on it. The components are kept here
+    (hidden, toggle off) so ``run_detection``'s States still resolve and the
+    apply path (train_reranker.apply_reranker) stays available if a future
+    model, retrained with hard negatives, earns its place back.
     """
-    opts = _reranker_model_options()
-    default = state.extra.get("sz_reranker_model", "")
-    if default not in {o["value"] for o in opts}:
-        default = opts[0]["value"] if opts else None
     return html.Div(
-        style={"border": "1px solid var(--ned-border)", "borderRadius": "6px",
-               "padding": "10px 12px", "marginBottom": "16px"},
+        style={"display": "none"},
         children=[
-            dbc.Checkbox(
-                id="sz-reranker-enabled",
-                label="Re-rank events with a trained model",
-                value=False,
-                style={"fontSize": "0.85rem", "fontWeight": "600"},
-            ),
-            html.Div(
-                "Re-scores each candidate's confidence from raw-signal features "
-                "(pre-/post-ictal context, morphology). Replaces the heuristic "
-                "confidence; the original is kept under quality metrics."
-                if opts else
-                "No re-ranker models available — train one in the Training tab "
-                "(architecture: Event Re-ranker) first.",
-                style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
-                       "margin": "4px 0 8px"},
-            ),
-            dcc.Dropdown(
-                id="sz-reranker-model",
-                options=opts,
-                value=default,
-                clearable=False,
-                placeholder="Train an event re-ranker first",
-                style={"fontSize": "0.82rem", "maxWidth": "420px"},
-            ),
+            dbc.Checkbox(id="sz-reranker-enabled", value=False),
+            dcc.Dropdown(id="sz-reranker-model", options=[], value=None),
         ],
     )
 
