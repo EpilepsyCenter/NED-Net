@@ -1100,6 +1100,7 @@ def start_live_monitoring(
     classification_params: ClassificationParams | None = None,
     live_template: dict | None = None,
     convulsive_model_name: str | None = None,
+    boundary_threshold: float | None = None,
 ):
     """Start live monitoring in a background thread.
 
@@ -1121,7 +1122,7 @@ def start_live_monitoring(
             convulsive_threshold,
             min_duration_sec, merge_gap_sec, wait_sec,
             process_backlog, cohort, group_id, classification_params,
-            live_template, convulsive_model_name,
+            live_template, convulsive_model_name, boundary_threshold,
         ),
         daemon=True,
     )
@@ -1143,7 +1144,7 @@ def _live_monitor_worker(
     convulsive_threshold,
     min_duration_sec, merge_gap_sec, wait_sec,
     process_backlog, cohort, group_id, classification_params,
-    live_template=None, convulsive_model_name=None,
+    live_template=None, convulsive_model_name=None, boundary_threshold=None,
 ):
     """Background thread for live monitoring."""
     _update_status(
@@ -1173,6 +1174,7 @@ def _live_monitor_worker(
                     edf_path=edf_path,
                     model_name=model_name,
                     confidence_threshold=confidence_threshold,
+                    boundary_threshold=boundary_threshold,
                     convulsive_threshold=convulsive_threshold,
                     min_duration_sec=min_duration_sec,
                     merge_gap_sec=merge_gap_sec,
@@ -1223,6 +1225,7 @@ def _live_monitor_worker(
                     edf_path=event.src_path,
                     model_name=model_name,
                     confidence_threshold=confidence_threshold,
+                    boundary_threshold=boundary_threshold,
                     convulsive_threshold=convulsive_threshold,
                     min_duration_sec=min_duration_sec,
                     merge_gap_sec=merge_gap_sec,
