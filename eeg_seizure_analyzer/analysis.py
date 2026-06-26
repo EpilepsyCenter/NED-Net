@@ -955,6 +955,7 @@ def run_batch(
     metadata_path: str | None = None,
     detection_type: str = "seizure",
     convulsive_model_name: str | None = None,
+    boundary_threshold: float | None = None,
 ):
     """Run batch analysis in the current thread.
 
@@ -1048,6 +1049,7 @@ def run_batch(
                     edf_path=edf_path,
                     model_name=model_name,
                     confidence_threshold=confidence_threshold,
+                    boundary_threshold=boundary_threshold,
                     convulsive_threshold=convulsive_threshold,
                     min_duration_sec=min_duration_sec,
                     merge_gap_sec=merge_gap_sec,
