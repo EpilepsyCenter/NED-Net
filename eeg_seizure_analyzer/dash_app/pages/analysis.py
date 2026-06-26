@@ -1401,6 +1401,7 @@ def cancel_batch(n):
     State("an-conv-model", "value"),
     State("an-threshold", "value"),
     State("an-conv-threshold", "value"),
+    State("an-bnd-threshold", "value"),
     State("an-min-duration", "value"),
     State("an-merge-gap", "value"),
     State("an-hvsw-freq", "value"),
@@ -1413,8 +1414,8 @@ def cancel_batch(n):
     prevent_initial_call=True,
 )
 def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
-               threshold, conv_threshold, min_dur, merge_gap, hvsw_freq,
-               hvsw_swi, hpd_freq, hpd_hfi, det_type, template_path, sid):
+               threshold, conv_threshold, bnd_threshold, min_dur, merge_gap,
+               hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi, det_type, template_path, sid):
     if not n:
         return no_update, no_update, no_update
     if not model_name or not folder:
@@ -1422,6 +1423,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
 
     threshold = float(threshold or 0.5)
     conv_threshold = float(conv_threshold or 0.5)
+    bnd = _parse_boundary(bnd_threshold, threshold)
     conv_model_name = conv_model_name or None
     cls_params = ClassificationParams(
         hvsw_max_freq_hz=float(hvsw_freq or 4.0),
@@ -1439,6 +1441,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
         "convulsive_model_name": conv_model_name or "",
         "confidence_threshold": threshold,
         "convulsive_threshold": conv_threshold,
+        "boundary_threshold": bnd_threshold,
         "min_duration_sec": min_dur,
         "merge_gap_sec": merge_gap,
         "hvsw_max_freq_hz": hvsw_freq,
@@ -1468,6 +1471,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
         watch_folder=folder,
         model_name=model_name,
         confidence_threshold=threshold,
+        boundary_threshold=bnd,
         convulsive_threshold=float(conv_threshold or 0.5),
         min_duration_sec=float(min_dur or 5.0),
         merge_gap_sec=float(merge_gap or 2.0),
