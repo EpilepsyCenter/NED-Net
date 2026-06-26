@@ -35,20 +35,19 @@
 #SBATCH --no-requeue
 
 # ---- Defaults (used if the var isn't already set / left blank) ----
+# FINAL production workflow (decided 2026-06-26 after human spot-check):
+# U-Net @ 0.5 + hysteresis boundary 0.1 + cascade convulsive, NO re-ranker.
+# (Re-ranker dropped real seizures out-of-sample; boundary 0.3 clipped events ~3s
+# vs hand-drawn truth, 0.1 matches them.)
 : "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/edf_data}"
-# New-workflow run writes to a *_v2 DB so the original wk1-3 run is kept for
-# side-by-side comparison.
-: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect_wk1-3_v2.db}"
+: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect_wk1-6_final.db}"
 : "${MODEL:=UNetv2_20260615}"
 : "${CONV_MODEL:=Convulsive_v4LUNARC_20260616}"   # blank = use detector ch1 instead of cascade
 : "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"   # full SV2A run, 1893 EDFs
-: "${PATH_INCLUDE:=Week[123]-}"   # only first 3 weeks (WeekN-DayNN subfolders); blank = all
-# New workflow: lower detection threshold for recall, then hysteresis grows the
-# boundaries back out and the re-ranker filters the extra false positives.
-# (Old full run used THRESHOLD=0.7, no boundary, no re-ranker.)
-: "${THRESHOLD:=0.5}"             # detection core; was 0.7 (F1-opt). Lower = more sensitive
-: "${BOUNDARY_THRESHOLD:=0.3}"    # hysteresis: grow onset/offset out to this. blank/>=THRESHOLD = off
-: "${RERANKER_MODEL:=Re-rankerv2_20260625}"   # event re-ranker (AUC 0.97); blank = none. NEEDS scikit-learn+joblib in the env
+: "${PATH_INCLUDE:=Week[123456]-}"   # all 6 weeks (WeekN-DayNN subfolders); blank = all incl. stray Week7
+: "${THRESHOLD:=0.5}"             # detection core. Lower = more sensitive
+: "${BOUNDARY_THRESHOLD:=0.1}"    # hysteresis: grow onset/offset out to this (matches hand-drawn boundaries). blank/>=THRESHOLD = off
+: "${RERANKER_MODEL:=}"           # SHELVED — leave blank. (Didn't generalise as a filter.)
 : "${CONV_THRESHOLD:=0.45}"       # trained operating point (best F1 0.8848 @ 0.45, job 3286330)
 : "${MIN_DURATION:=5}"
 : "${MERGE_GAP:=2}"
