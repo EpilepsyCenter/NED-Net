@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 windows = ["adi-reader>=0.0.13", "cffi"]
-ml = ["torch>=2.0"]
+ml = ["torch>=2.0", "scikit-learn>=1.3", "joblib>=1.3"]
 dev = ["pytest>=7.0", "pytest-cov"]
 # Native desktop window (pywebview) + production WSGI server.
 # Windows/macOS pull their webview backend automatically; Linux uses
