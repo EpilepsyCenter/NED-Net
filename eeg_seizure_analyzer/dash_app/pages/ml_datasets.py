@@ -203,10 +203,14 @@ def layout(sid: str | None) -> html.Div:
                                     # not user-selectable here.
                                     {"label": "Convulsive Classifier",
                                      "value": "convulsive"},
-                                    # Tabular precision layer (sklearn, no torch);
-                                    # re-scores classical OR U-Net candidates.
-                                    {"label": "Event Re-ranker",
-                                     "value": "reranker"},
+                                    # Event Re-ranker removed from the UI 2026-06-26:
+                                    # human spot-check (out-of-sample wk4-6) showed it
+                                    # does NOT generalise as a precision filter — it
+                                    # confidently dropped real seizures (94% of its
+                                    # rejects were real). Training code/CLI retained
+                                    # (could be retrained with hard negatives), just
+                                    # not user-selectable. Detection uses U-Net +
+                                    # hysteresis boundaries instead.
                                 ],
                                 value="unet",
                                 inline=True,
