@@ -35,13 +35,19 @@
 #SBATCH --no-requeue
 
 # ---- Defaults (used if the var isn't already set / left blank) ----
+# FINAL production workflow (decided 2026-06-26 after human spot-check):
+# U-Net @ 0.5 + hysteresis boundary 0.1 + cascade convulsive, NO re-ranker.
+# (Re-ranker dropped real seizures out-of-sample; boundary 0.3 clipped events ~3s
+# vs hand-drawn truth, 0.1 matches them.)
 : "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/edf_data}"
-: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect_wk1-3.db}"
+: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect_wk1-6_final.db}"
 : "${MODEL:=UNetv2_20260615}"
 : "${CONV_MODEL:=Convulsive_v4LUNARC_20260616}"   # blank = use detector ch1 instead of cascade
 : "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"   # full SV2A run, 1893 EDFs
-: "${PATH_INCLUDE:=Week[123]-}"   # only first 3 weeks (WeekN-DayNN subfolders); blank = all
-: "${THRESHOLD:=0.7}"             # UNetv2_20260615 optimal operating point (best F1 0.8126 @ 0.7)
+: "${PATH_INCLUDE:=Week[123456]-}"   # all 6 weeks (WeekN-DayNN subfolders); blank = all incl. stray Week7
+: "${THRESHOLD:=0.5}"             # detection core. Lower = more sensitive
+: "${BOUNDARY_THRESHOLD:=0.1}"    # hysteresis: grow onset/offset out to this (matches hand-drawn boundaries). blank/>=THRESHOLD = off
+: "${RERANKER_MODEL:=}"           # SHELVED — leave blank. (Didn't generalise as a filter.)
 : "${CONV_THRESHOLD:=0.45}"       # trained operating point (best F1 0.8848 @ 0.45, job 3286330)
 : "${MIN_DURATION:=5}"
 : "${MERGE_GAP:=2}"
@@ -63,7 +69,9 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask CONV_MODEL     "Convulsive classifier model (blank = none)"
     ask METADATA_CSV   "Batch metadata CSV (blank = none)"
     ask PATH_INCLUDE   "Path-include regex (blank = all files)"
-    ask THRESHOLD      "Seizure threshold"
+    ask THRESHOLD      "Seizure detection threshold"
+    ask BOUNDARY_THRESHOLD "Boundary (hysteresis) threshold (blank/>=det = off)"
+    ask RERANKER_MODEL "Event re-ranker model (blank = none)"
     ask CONV_THRESHOLD "Convulsive threshold"
     read -r -p "Re-detect files already in the DB? (y/N): " ow
     [ "$ow" = "y" ] || [ "$ow" = "Y" ] && OVERWRITE=1
@@ -72,9 +80,10 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            db=$DB_PATH"
     echo "            model=$MODEL conv=${CONV_MODEL:-none} meta=${METADATA_CSV:-none}"
     echo "            path_include=${PATH_INCLUDE:-all}"
-    echo "            thr=$THRESHOLD conv_thr=$CONV_THRESHOLD overwrite=$OVERWRITE"
+    echo "            thr=$THRESHOLD boundary=${BOUNDARY_THRESHOLD:-off} reranker=${RERANKER_MODEL:-none}"
+    echo "            conv_thr=$CONV_THRESHOLD overwrite=$OVERWRITE"
     export EDF_DIR DB_PATH MODEL CONV_MODEL METADATA_CSV PATH_INCLUDE THRESHOLD \
-           CONV_THRESHOLD MIN_DURATION MERGE_GAP OVERWRITE
+           BOUNDARY_THRESHOLD RERANKER_MODEL CONV_THRESHOLD MIN_DURATION MERGE_GAP OVERWRITE
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -90,6 +99,7 @@ echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
 echo "Model:      $MODEL   conv=${CONV_MODEL:-none}   meta=${METADATA_CSV:-none}"
 echo "Filter:     path_include=${PATH_INCLUDE:-all}   thr=$THRESHOLD   conv_thr=$CONV_THRESHOLD"
+echo "Workflow:   boundary=${BOUNDARY_THRESHOLD:-off}   reranker=${RERANKER_MODEL:-none}"
 echo "========================================="
 
 module purge
@@ -105,6 +115,8 @@ CONV_ARG=();     [ -n "$CONV_MODEL" ]   && CONV_ARG=(--convulsive-model "$CONV_M
 META_ARG=();     [ -n "$METADATA_CSV" ] && META_ARG=(--metadata-csv "$METADATA_CSV")
 PATH_ARG=();     [ -n "$PATH_INCLUDE" ] && PATH_ARG=(--path-include "$PATH_INCLUDE")
 OVERWRITE_ARG=(); [ "$OVERWRITE" = "1" ] && OVERWRITE_ARG=(--overwrite)
+BND_ARG=();      [ -n "$BOUNDARY_THRESHOLD" ] && BND_ARG=(--boundary-threshold "$BOUNDARY_THRESHOLD")
+RERANK_ARG=();   [ -n "$RERANKER_MODEL" ]     && RERANK_ARG=(--reranker-model "$RERANKER_MODEL")
 
 python scripts/lunarc/detect_batch.py \
     --edf-dir "$EDF_DIR" \
@@ -116,7 +128,8 @@ python scripts/lunarc/detect_batch.py \
     --merge-gap "$MERGE_GAP" \
     --workers "$(nproc)" \
     --tmpdir "${SNIC_TMP:-/tmp}" \
-    "${CONV_ARG[@]}" "${META_ARG[@]}" "${PATH_ARG[@]}" "${OVERWRITE_ARG[@]}"
+    "${CONV_ARG[@]}" "${META_ARG[@]}" "${PATH_ARG[@]}" "${OVERWRITE_ARG[@]}" \
+    "${BND_ARG[@]}" "${RERANK_ARG[@]}"
 
 echo "========================================="
 echo "Detection finished at $(date)"

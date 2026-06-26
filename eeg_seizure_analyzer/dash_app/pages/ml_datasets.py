@@ -26,6 +26,23 @@ from eeg_seizure_analyzer.io.channel_ids import load_channel_ids
 # ── Layout ───────────────────────────────────────────────────────────
 
 
+def _param_label(text: str, tip: str | None = None,
+                 font_size: str = "0.78rem") -> html.Label:
+    """A muted field label with an optional ``(?)`` hover tooltip.
+
+    Matches the convention used by ``components.param_control`` (native HTML
+    ``title`` on a help-cursor span) so the explanation appears on hover.
+    """
+    children = [text]
+    if tip:
+        children.append(html.Span(
+            " (?)", title=tip,
+            style={"cursor": "help", "opacity": "0.5"},
+        ))
+    return html.Label(children,
+                      style={"fontSize": font_size, "color": "var(--ned-text-muted)"})
+
+
 def layout(sid: str | None) -> html.Div:
     """Return the ML dataset builder layout."""
     state = server_state.get_session(sid)
@@ -77,8 +94,11 @@ def layout(sid: str | None) -> html.Div:
             ),
 
             # ── Annotation type ──────────────────────────────────
-            html.Label("Annotation type",
-                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
+            _param_label(
+                "Annotation type",
+                "Which sidecar labels to train on: Seizure events (for U-Net, "
+                "Convulsive, Re-ranker) or Interictal Spikes (their own model).",
+                font_size="0.82rem"),
             dbc.RadioItems(
                 id="ml-type-radio",
                 options=[
@@ -150,9 +170,12 @@ def layout(sid: str | None) -> html.Div:
                     # Model name + architecture
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Model name",
-                                       style={"fontSize": "0.82rem",
-                                              "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Model name",
+                                "Folder name the trained model is saved under. "
+                                "Pick something recognisable, e.g. study1_v1. "
+                                "Reusing a name overwrites that model.",
+                                font_size="0.82rem"),
                             dbc.Input(
                                 id="ml-model-name",
                                 placeholder="e.g. study1_v1",
@@ -161,9 +184,15 @@ def layout(sid: str | None) -> html.Div:
                             ),
                         ], width=4),
                         dbc.Col([
-                            html.Label("Architecture",
-                                       style={"fontSize": "0.82rem",
-                                              "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Architecture",
+                                "What to train. U-Net = the seizure detector "
+                                "(finds candidate events). Convulsive Classifier "
+                                "= Stage-2 model labelling each event convulsive "
+                                "vs non-convulsive. Event Re-ranker = tabular layer "
+                                "that re-scores confidence of candidates a detector "
+                                "already found (filters false positives).",
+                                font_size="0.82rem"),
                             dbc.RadioItems(
                                 id="ml-architecture",
                                 options=[
@@ -174,6 +203,14 @@ def layout(sid: str | None) -> html.Div:
                                     # not user-selectable here.
                                     {"label": "Convulsive Classifier",
                                      "value": "convulsive"},
+                                    # Event Re-ranker removed from the UI 2026-06-26:
+                                    # human spot-check (out-of-sample wk4-6) showed it
+                                    # does NOT generalise as a precision filter — it
+                                    # confidently dropped real seizures (94% of its
+                                    # rejects were real). Training code/CLI retained
+                                    # (could be retrained with hard negatives), just
+                                    # not user-selectable. Detection uses U-Net +
+                                    # hysteresis boundaries instead.
                                 ],
                                 value="unet",
                                 inline=True,
@@ -189,9 +226,12 @@ def layout(sid: str | None) -> html.Div:
                         children=[
                             dbc.Row([
                                 dbc.Col([
-                                    html.Label("Encoder LR",
-                                               style={"fontSize": "0.78rem",
-                                                      "color": "var(--ned-text-muted)"}),
+                                    _param_label(
+                                        "Encoder LR",
+                                        "Learning rate for the pre-trained BENDR "
+                                        "encoder, kept much smaller than the head "
+                                        "LR so fine-tuning doesn't wipe pre-trained "
+                                        "features."),
                                     dbc.Input(
                                         id="ml-encoder-lr", type="text",
                                         value="0.00001",
@@ -199,9 +239,12 @@ def layout(sid: str | None) -> html.Div:
                                     ),
                                 ], width=2),
                                 dbc.Col([
-                                    html.Label("Freeze encoder (epochs)",
-                                               style={"fontSize": "0.78rem",
-                                                      "color": "var(--ned-text-muted)"}),
+                                    _param_label(
+                                        "Freeze encoder (epochs)",
+                                        "Train only the decoder head for this many "
+                                        "epochs before unfreezing the encoder. Lets "
+                                        "the head settle first so early gradients "
+                                        "don't corrupt pre-trained weights."),
                                     dbc.Input(
                                         id="ml-freeze-epochs", type="text",
                                         value="5",
@@ -209,9 +252,12 @@ def layout(sid: str | None) -> html.Div:
                                     ),
                                 ], width=2),
                                 dbc.Col([
-                                    html.Label("Pre-trained weights",
-                                               style={"fontSize": "0.78rem",
-                                                      "color": "var(--ned-text-muted)"}),
+                                    _param_label(
+                                        "Pre-trained weights",
+                                        "Self-supervised BENDR checkpoint (.pt) to "
+                                        "start from, found in "
+                                        "~/.eeg_seizure_analyzer/pretrained/. None = "
+                                        "train from scratch."),
                                     dcc.Dropdown(
                                         id="ml-pretrained-weights",
                                         options=[],
@@ -236,56 +282,90 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
-                    # Config row
+                    # Config row — gradient-training hyperparameters. Hidden for
+                    # the Event Re-ranker (tabular fit, no epochs/batch/LR/etc.).
+                    html.Div(id="ml-train-hyperparams", children=[
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Epochs",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Epochs",
+                                "Maximum passes over the training set. Training can "
+                                "stop earlier once validation stops improving "
+                                "(see Patience)."),
                             dbc.Input(id="ml-epochs", type="text",
                                       value="50",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Batch size",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Batch size",
+                                "Number of windows per gradient step. Larger is "
+                                "faster and steadier but uses more memory — lower it "
+                                "if you hit out-of-memory errors."),
                             dbc.Input(id="ml-batch-size", type="text",
                                       value="8",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Learning rate",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Learning rate",
+                                "Step size for weight updates. Too high diverges, too "
+                                "low trains slowly. 1e-3 is a sane default for the "
+                                "U-Net."),
                             dbc.Input(id="ml-lr", type="text",
                                       value="0.001",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Patience",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Patience",
+                                "Early stopping: halt if validation loss hasn't "
+                                "improved for this many epochs. The best checkpoint "
+                                "is kept, not the last."),
                             dbc.Input(id="ml-patience", type="text",
                                       value="10",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Pos weight",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Pos weight",
+                                "Multiplier on the positive (seizure) class in the "
+                                "loss, to counter class imbalance. Higher = more "
+                                "sensitive but more false positives."),
                             dbc.Input(id="ml-pos-weight", type="text",
                                       value="5.0",
                                       className="form-control", size="sm"),
                         ], width=2),
                         dbc.Col([
-                            html.Label("Neg/Pos ratio",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Neg/Pos ratio",
+                                "Background (negative) windows sampled per positive "
+                                "window when building the training set. Higher = more "
+                                "negatives = fewer false positives, but can dilute "
+                                "the seizure signal."),
                             dbc.Input(id="ml-neg-ratio", type="text",
                                       value="2.0",
                                       className="form-control", size="sm"),
                         ], width=2),
                     ], className="g-2 mb-3"),
+                    ]),  # /ml-train-hyperparams
+
+                    # Note shown in place of the hyperparameters for the re-ranker.
+                    html.Div(
+                        id="ml-reranker-note",
+                        children="",
+                        style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)",
+                               "marginBottom": "12px"},
+                    ),
 
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Exclude animal IDs (comma/space-separated)",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                            _param_label(
+                                "Exclude animal IDs (comma/space-separated)",
+                                "Animal IDs to leave out of training entirely, so "
+                                "they stay an unseen test set. Splits are per-animal, "
+                                "so excluding here guarantees no leakage from that "
+                                "animal into the model."),
                             dbc.Input(id="ml-exclude-animals", type="text",
                                       value="", placeholder="e.g. 355676",
                                       className="form-control", size="sm"),
@@ -847,26 +927,44 @@ def _render_epochs(history: list, best_epoch: int = 0):
     ])
 
 
+def _import_train_fn(dataset_def, train_config):
+    """Resolve the training entrypoint for the chosen dataset/architecture.
+
+    Interictal-spike datasets train through their own pipeline; convulsive /
+    seizure U-Net models share train.py; the re-ranker is a tabular sklearn fit.
+    All honour the same progress-dict + return contract. Kept separate so the
+    import (which can fail, e.g. the re-ranker needs scikit-learn/joblib) runs
+    inside the worker's try/except and surfaces as a visible error.
+    """
+    if dataset_def.get("type") == "spike":
+        from eeg_seizure_analyzer.ml.spike_train import train_spike_model as fn
+    elif train_config.architecture == "convulsive_classifier":
+        from eeg_seizure_analyzer.ml.train_convulsive import train_convulsive_model as fn
+    elif train_config.architecture == "reranker":
+        from eeg_seizure_analyzer.ml.train_reranker import train_reranker_model as fn
+    else:
+        from eeg_seizure_analyzer.ml.train import train_model as fn
+    return fn
+
+
 def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
     """Background thread: run training and write progress after each epoch."""
-    # Interictal-spike datasets train through their own pipeline (1-class masks,
-    # 4s windows, spike-appropriate metrics). Convulsive / seizure U-Net models
-    # share train.py. All three honour the same progress-dict + return contract,
-    # so the rest of this worker is identical.
-    if dataset_def.get("type") == "spike":
-        from eeg_seizure_analyzer.ml.spike_train import (
-            train_spike_model as train_fn,
-        )
-    elif train_config.architecture == "convulsive_classifier":
-        from eeg_seizure_analyzer.ml.train_convulsive import (
-            train_convulsive_model as train_fn,
-        )
-    else:
-        from eeg_seizure_analyzer.ml.train import train_model as train_fn
-
     history: list = []  # accumulate so the UI can show every epoch live
 
     def _on_epoch(info):
+        # The re-ranker has no epochs: it emits build-stage dicts (no "epoch"
+        # key) while reading EDFs, then one final epoch=1 dict. Surface the
+        # build progress as a status line and skip the history append for it.
+        if "epoch" not in info:
+            _write_train_progress(sid, {
+                "status": "building_dataset",
+                "epoch": 0,
+                "total_epochs": getattr(train_config, "epochs", 0),
+                "files_done": info.get("files_done"),
+                "n_files": info.get("n_files"),
+                "events": info.get("events"),
+            })
+            return
         history.append(info)
         _write_train_progress(sid, {
             "status": "training",
@@ -887,6 +985,11 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
             "epoch": 0,
             "total_epochs": train_config.epochs,
         })
+
+        # Import inside the guard: a missing optional dep (e.g. scikit-learn /
+        # joblib for the re-ranker) raises here and becomes a visible "error"
+        # status instead of silently killing this thread and freezing the UI.
+        train_fn = _import_train_fn(dataset_def, train_config)
 
         result = train_fn(
             dataset_def=dataset_def,
@@ -921,21 +1024,38 @@ def _train_worker(sid, dataset_def, dataset_config, train_config, model_name):
 @callback(
     Output("ml-bendr-train-params", "style"),
     Output("ml-pretrained-weights", "options"),
+    Output("ml-train-hyperparams", "style"),
+    Output("ml-reranker-note", "children"),
     Input("ml-architecture", "value"),
     prevent_initial_call=True,
 )
-def toggle_bendr_train_params(architecture):
-    """Show/hide BENDR-specific training params and populate weights dropdown."""
+def toggle_arch_train_params(architecture):
+    """Show/hide architecture-specific training controls.
+
+    - BENDR: reveal the pre-trained-weights / encoder-LR / freeze panel.
+    - Re-ranker: hide the gradient-training hyperparameters entirely (it's a
+      tabular fit with no epochs/batch/LR/patience/pos-weight/neg-ratio) and
+      explain what it does instead. Exclude-animals stays visible — it's honoured.
+    """
+    options = []
     if architecture == "bendr":
-        # Scan for pre-trained weights files
         from pathlib import Path
         pretrained_dir = Path.home() / ".eeg_seizure_analyzer" / "pretrained"
-        options = []
         if pretrained_dir.exists():
             for f in sorted(pretrained_dir.glob("*.pt")):
                 options.append({"label": f.stem, "value": str(f)})
-        return {"display": "block"}, options
-    return {"display": "none"}, []
+    bendr_style = {"display": "block"} if architecture == "bendr" else {"display": "none"}
+
+    if architecture == "reranker":
+        hp_style = {"display": "none"}
+        note = ("Event Re-ranker has no epochs/batch/learning rate — it fits a "
+                "tabular model on every confirmed & rejected seizure candidate "
+                "(per-animal cross-validated). Use “Exclude animal IDs” to hold "
+                "animals out of the fit.")
+    else:
+        hp_style = {"display": "block"}
+        note = ""
+    return bendr_style, options, hp_style, note
 
 
 @callback(
@@ -1133,18 +1253,43 @@ def poll_training(n_intervals, is_running, sid):
     status = info.get("status", "")
 
     if status == "building_dataset":
-        bar = html.Div([
-            dbc.Progress(
-                value=100, striped=True, animated=True,
-                color="info",
-                style={"height": "24px", "marginBottom": "8px"},
-            ),
-            html.Div(
-                "📦 Building dataset (loading EDF files, extracting windows)...",
-                style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
-                       "textAlign": "center"},
-            ),
-        ])
+        # The re-ranker reads every EDF and extracts features per event before
+        # any "training" — slow (minutes). Surface the per-file counter it emits
+        # so the bar visibly advances instead of looking hung.
+        done = info.get("files_done")
+        total_f = info.get("n_files")
+        events = info.get("events")
+        if done is not None and total_f:
+            pct = int(100 * done / total_f) if total_f > 0 else 0
+            detail = (f"📦 Reading recordings & extracting features — "
+                      f"file {done}/{total_f}"
+                      + (f" · {events} events so far" if events else ""))
+            bar = html.Div([
+                dbc.Progress(
+                    value=pct, striped=True, animated=True, color="info",
+                    label=f"{done}/{total_f}",
+                    style={"height": "24px", "marginBottom": "8px"},
+                ),
+                html.Div(
+                    detail,
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
+                           "textAlign": "center"},
+                ),
+            ])
+        else:
+            bar = html.Div([
+                dbc.Progress(
+                    value=100, striped=True, animated=True,
+                    color="info",
+                    style={"height": "24px", "marginBottom": "8px"},
+                ),
+                html.Div(
+                    "📦 Building dataset (loading EDF files, extracting "
+                    "features)...",
+                    style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
+                           "textAlign": "center"},
+                ),
+            ])
         return bar, no_update, no_update, no_update, no_update, ""
 
     if status == "training":
@@ -1191,6 +1336,60 @@ def poll_training(n_intervals, is_running, sid):
         was_stopped = info.get("stopped", False)
         title = ("⏹ Training Stopped (best model kept)" if was_stopped
                  else "✅ Training Complete")
+
+        # The re-ranker reports retrieval metrics (ROC-AUC / average precision /
+        # false-positives removed at a recall target), not the U-Net's per-sample
+        # / per-event F1. Detect it by its signature key and render its own panel.
+        if "roc_auc" in best_metrics:
+            def _pct(x):
+                return f"{x:.1%}" if isinstance(x, (int, float)) else "—"
+
+            def _f3(x):
+                return f"{x:.3f}" if isinstance(x, (int, float)) else "—"
+            m = best_metrics
+            results = html.Div([
+                html.Hr(style={"borderColor": "#2ea043", "margin": "16px 0"}),
+                html.H5(title,
+                        style={"color": "var(--ned-success)", "marginBottom": "12px"}),
+                dbc.Row([
+                    dbc.Col(metric_card("Model", info.get("model_name", "")), width=3),
+                    dbc.Col(metric_card("ROC-AUC", _f3(m.get("roc_auc")),
+                                        accent=True), width=2),
+                    dbc.Col(metric_card("Avg precision", _f3(m.get("avg_precision")),
+                                        accent=True), width=3),
+                    dbc.Col(metric_card("Events", f"{m.get('n_events', 0):,}"), width=2),
+                    dbc.Col(metric_card("Animals", str(m.get("n_animals", 0))), width=2),
+                ], className="g-2 mb-2"),
+                dbc.Row([
+                    dbc.Col(metric_card("Real / False",
+                                        f"{m.get('n_pos', 0)} / {m.get('n_neg', 0)}"),
+                            width=3),
+                    dbc.Col(metric_card("FP removed @95% recall",
+                                        _pct(m.get("fp_removed_at_recall_95"))), width=3),
+                    dbc.Col(metric_card("FP removed @90% recall",
+                                        _pct(m.get("fp_removed_at_recall_90"))), width=3),
+                    dbc.Col(metric_card("Threshold @90%",
+                                        _f3(m.get("threshold_at_recall_90"))), width=3),
+                ], className="g-2 mb-3"),
+                html.Div(
+                    "Per-animal cross-validated. Apply it in the Seizures tab "
+                    "(“Re-rank events with a trained model”) — it replaces each "
+                    "candidate's confidence with this model's P(real).",
+                    style={"fontSize": "0.8rem", "color": "var(--ned-text-muted)"}),
+                html.Div(
+                    f"Model saved to: {model_path}",
+                    style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
+                           "marginTop": "6px"}),
+            ])
+            done_bar = html.Div([dbc.Progress(
+                value=100, color="success", label="Complete",
+                style={"height": "24px", "marginBottom": "8px"})])
+            try:
+                _progress_path(sid).unlink()
+            except Exception:
+                pass
+            _clear_stop(sid)
+            return done_bar, True, False, False, results, ""
 
         # Build results summary
         results = html.Div([

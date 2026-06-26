@@ -647,6 +647,11 @@ def layout(sid: str | None) -> html.Div:
                 style={"display": "none"},
             ),
 
+            # ── Event re-ranker (post-processing, detector-agnostic) ──
+            # A trained tabular model re-scores every candidate's confidence
+            # from raw-signal features. Applies on top of ANY detector.
+            _reranker_control(state),
+
             # Action buttons
             html.Div(
                 style={"display": "flex", "gap": "12px", "marginBottom": "20px",
@@ -1683,6 +1688,99 @@ def _convulsive_dropdown(dropdown_id: str, default: str) -> html.Div:
     ], style={"marginBottom": "12px"})
 
 
+def _reranker_model_options() -> list[dict]:
+    """Dropdown options for trained event re-rankers (Stage-3 precision layer)."""
+    try:
+        from eeg_seizure_analyzer.ml.train import list_models
+        models = [m for m in list_models()
+                  if m.get("architecture") == "reranker"]
+    except Exception:
+        models = []
+    opts = []
+    for m in models:
+        # list_models surfaces avg_precision under the generic best_event_f1 key
+        # (the re-ranker aliases AP→event_f1 so the listing renders a score).
+        ap = m.get("best_event_f1")
+        label = f"{m['name']} — AP: {ap:.2f}" if ap else m["name"]
+        opts.append({"label": label, "value": m["name"]})
+    return opts
+
+
+def _reranker_control(state) -> html.Div:
+    """Hidden placeholder for the (retired) post-detection re-ranker.
+
+    Removed from the UI 2026-06-26: a human spot-check (out-of-sample wk4-6)
+    showed the re-ranker does NOT generalise as a precision filter — at the 0.5
+    cut it confidently dropped real seizures (94% of its rejects were real),
+    while the lower-threshold + hysteresis detection alone gives ~98%-precision
+    candidates. Detection no longer gates on it. The components are kept here
+    (hidden, toggle off) so ``run_detection``'s States still resolve and the
+    apply path (train_reranker.apply_reranker) stays available if a future
+    model, retrained with hard negatives, earns its place back.
+    """
+    return html.Div(
+        style={"display": "none"},
+        children=[
+            dbc.Checkbox(id="sz-reranker-enabled", value=False),
+            dcc.Dropdown(id="sz-reranker-model", options=[], value=None),
+        ],
+    )
+
+
+def _read_model_metadata(model_name: str) -> dict:
+    """Load a trained model's metadata.json (empty dict if unavailable)."""
+    if not model_name:
+        return {}
+    import json
+    from eeg_seizure_analyzer.ml.train import MODELS_DIR
+    try:
+        with open(MODELS_DIR / model_name / "metadata.json") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _suggested_thresholds(unet_model: str, convmodel: str = ""):
+    """Optimal seizure + convulsive thresholds for a model, from training.
+
+    Training records the threshold that maximised event-F1 on validation
+    (``best_threshold`` for the seizure channel, ``conv_best_threshold`` for the
+    U-Net's convulsive channel). When a standalone convulsive classifier is
+    chosen instead, its own ``best_threshold`` governs the convulsive call.
+
+    Returns ``(seiz_thr, conv_thr, info_children)`` — thresholds are None when
+    absent; info_children is a list of Dash nodes for the model-info panel.
+    """
+    bm = _read_model_metadata(unet_model).get("best_metrics") or {}
+    seiz = bm.get("best_threshold")
+    seiz_f1 = bm.get("best_event_f1") or bm.get("event_f1")
+    if convmodel:
+        cbm = _read_model_metadata(convmodel).get("best_metrics") or {}
+        conv = cbm.get("best_threshold")
+        conv_f1 = cbm.get("best_event_f1") or cbm.get("event_f1")
+        conv_src = f"classifier “{convmodel}”"
+    else:
+        conv = bm.get("conv_best_threshold")
+        conv_f1 = bm.get("conv_best_event_f1")
+        conv_src = "U-Net convulsive channel"
+
+    if seiz is None and conv is None:
+        return seiz, conv, []
+    rows = [html.Div("Suggested thresholds (training optimum):",
+                     style={"fontWeight": "600", "marginBottom": "2px"})]
+    if seiz is not None:
+        rows.append(html.Div(
+            f"• Seizure: {seiz:.2f}"
+            + (f" — val event F1 {seiz_f1:.2f}" if seiz_f1 else "")))
+    if conv is not None:
+        rows.append(html.Div(
+            f"• Convulsive: {conv:.2f} ({conv_src})"
+            + (f" — val event F1 {conv_f1:.2f}" if conv_f1 else "")))
+    rows.append(html.Div("Sliders are set to these — adjust if needed.",
+                         style={"opacity": "0.75", "marginTop": "2px"}))
+    return seiz, conv, rows
+
+
 def _unet_params(state) -> html.Div:
     """Build U-Net (ML) parameter controls: model selector + inference params."""
     try:
@@ -1709,6 +1807,20 @@ def _unet_params(state) -> html.Div:
 
     # Persisted slider values
     unet_p = state.extra.get("sz_unet_params", {})
+
+    # Default the thresholds to the chosen model's training optimum (the old
+    # hard 0.5 was a guess). A persisted user value still wins; otherwise fall
+    # back to the optimum, then 0.5. The info panel always shows the optimum.
+    _convmodel = state.extra.get("sz_unet_convmodel", "")
+    seiz_opt, conv_opt, info_children = _suggested_thresholds(default_model, _convmodel)
+    seiz_default = unet_p.get("threshold",
+                              seiz_opt if seiz_opt is not None else 0.5)
+    conv_default = unet_p.get("convulsive_threshold",
+                              conv_opt if conv_opt is not None else 0.5)
+    # Boundary (hysteresis) threshold defaults to roughly half the detection
+    # threshold — comfortably below it so onset/offset ramps get captured.
+    bnd_default = unet_p.get("boundary_threshold",
+                             round((seiz_default or 0.5) * 0.5, 2))
 
     return html.Div([
         dbc.Row([
@@ -1738,15 +1850,29 @@ def _unet_params(state) -> html.Div:
                         param_control(
                             "Threshold", "sz-unet-threshold",
                             0.1, 0.9, 0.05,
-                            unet_p.get("threshold", 0.5),
-                            "Probability threshold. Lower = more sensitive.",
+                            seiz_default,
+                            "Detection threshold — an event's core must exceed "
+                            "it. Lower = more sensitive. Defaults to the model's "
+                            "training optimum.",
+                        ),
+                        param_control(
+                            "Boundary threshold (hysteresis)",
+                            "sz-unet-bnd-threshold",
+                            0.05, 0.9, 0.05,
+                            bnd_default,
+                            "Lower threshold that grows each event's onset/offset "
+                            "outward along the probability curve, capturing the "
+                            "seizure ramp-up/decay so boundaries aren't clipped "
+                            "short. Set below the detection threshold; equal to "
+                            "it (or higher) disables growing.",
                         ),
                         param_control(
                             "Convulsive threshold", "sz-unet-conv-threshold",
                             0.1, 0.9, 0.05,
-                            unet_p.get("convulsive_threshold", 0.5),
+                            conv_default,
                             "Threshold on the convulsive channel (ch1) for "
-                            "labelling an event convulsive.",
+                            "labelling an event convulsive. Defaults to the "
+                            "model's training optimum.",
                         ),
                         param_control(
                             "Min duration (s)", "sz-unet-min-dur",
@@ -1779,6 +1905,7 @@ def _unet_params(state) -> html.Div:
                     html.Hr(style={"margin": "12px 0", "borderColor": "var(--ned-border)"}),
                     html.Div(
                         id="sz-unet-model-info",
+                        children=info_children,
                         style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
                     ),
                 ], style={"padding": "12px", "border": "1px solid var(--ned-border)",
@@ -1786,6 +1913,31 @@ def _unet_params(state) -> html.Div:
             ], width=6),
         ], className="g-3 mb-3"),
     ])
+
+
+@callback(
+    Output({"type": "param-slider", "key": "sz-unet-threshold"}, "value",
+           allow_duplicate=True),
+    Output({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value",
+           allow_duplicate=True),
+    Output("sz-unet-model-info", "children"),
+    Input("sz-unet-model", "value"),
+    Input("sz-unet-convmodel", "value"),
+    prevent_initial_call=True,
+)
+def suggest_unet_thresholds(unet_model, convmodel):
+    """When the U-Net model (or its convulsive classifier) changes, set the
+    threshold sliders to that model's training optimum and explain it.
+
+    The clientside MATCH callback then propagates the slider value to its input
+    + display, so only the slider value needs setting here.
+    """
+    seiz, conv, info = _suggested_thresholds(unet_model, convmodel)
+    if not info:
+        return no_update, no_update, []
+    return (seiz if seiz is not None else no_update,
+            conv if conv is not None else no_update,
+            info)
 
 
 # ── Collapse toggle callbacks ─────────────────────────────────────────
@@ -2144,9 +2296,13 @@ def auto_save_sz_extras(*args):
     State("sz-unet-model", "value"),
     State("sz-unet-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-bnd-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
+    # ── Event re-ranker (post-processing) ──
+    State("sz-reranker-enabled", "value"),
+    State("sz-reranker-model", "value"),
     # Session
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -2195,8 +2351,10 @@ def run_detection(
     bendr_model, bendr_convmodel, bendr_threshold, bendr_conv_threshold,
     bendr_min_dur, bendr_merge_gap,
     # U-Net
-    unet_model, unet_convmodel, unet_threshold, unet_conv_threshold,
-    unet_min_dur, unet_merge_gap,
+    unet_model, unet_convmodel, unet_threshold, unet_bnd_threshold,
+    unet_conv_threshold, unet_min_dur, unet_merge_gap,
+    # Event re-ranker
+    reranker_enabled, reranker_model,
     sid,
 ):
     """Run seizure detection (multi-method), clear results, or apply filters."""
@@ -2425,6 +2583,7 @@ def run_detection(
                 _ml_thr, _ml_convthr, _ml_mindur, _ml_merge = (
                     bendr_threshold, bendr_conv_threshold,
                     bendr_min_dur, bendr_merge_gap)
+                _ml_bnd = None  # no hysteresis control in the (shelved) BENDR panel
                 _model_key, _params_key = "sz_bendr_model", "sz_bendr_params"
                 _convmodel_key = "sz_bendr_convmodel"
             else:
@@ -2433,6 +2592,7 @@ def run_detection(
                 _ml_thr, _ml_convthr, _ml_mindur, _ml_merge = (
                     unet_threshold, unet_conv_threshold,
                     unet_min_dur, unet_merge_gap)
+                _ml_bnd = unet_bnd_threshold
                 _model_key, _params_key = "sz_unet_model", "sz_unet_params"
                 _convmodel_key = "sz_unet_convmodel"
 
@@ -2456,12 +2616,18 @@ def run_detection(
             _convthr = float(_ml_convthr or 0.5)
             _mindur = float(_ml_mindur or 3.0)
             _merge = float(_ml_merge or 2.0)
+            # Hysteresis boundary threshold: only meaningful below the detection
+            # threshold. If unset or >= detection, pass None (no growing).
+            _bnd = float(_ml_bnd) if _ml_bnd is not None else None
+            if _bnd is not None and _bnd >= _thr:
+                _bnd = None
 
             # Persist params for this method
             state.extra[_model_key] = _ml_model
             state.extra[_convmodel_key] = _ml_convmodel or ""
             state.extra[_params_key] = {
                 "threshold": _thr,
+                "boundary_threshold": (_ml_bnd if _ml_bnd is not None else _thr),
                 "convulsive_threshold": _convthr,
                 "min_duration_sec": _mindur,
                 "merge_gap_sec": _merge,
@@ -2472,6 +2638,7 @@ def run_detection(
                 model_name=_ml_model,
                 channels=selected_channels,
                 threshold=_thr,
+                boundary_threshold=_bnd,
                 convulsive_threshold=_convthr,
                 min_duration_sec=_mindur,
                 merge_gap_sec=_merge,
@@ -2666,6 +2833,21 @@ def run_detection(
                 event.confidence = compute_confidence_score(qm)
             except Exception:
                 pass  # keep pass-1 values
+
+        # ── Pass 3 (optional): learned re-ranker ───────────────────────
+        # Replace the heuristic confidence with a trained model's P(real),
+        # computed from the same raw-signal features used at training time.
+        # Detector-agnostic, so it applies to whatever method produced the
+        # candidates. Original heuristic confidence is preserved under
+        # quality_metrics['heuristic_confidence'].
+        if reranker_enabled and reranker_model and seizures:
+            try:
+                from eeg_seizure_analyzer.ml.train_reranker import apply_reranker
+                apply_reranker(seizures, rec, reranker_model, all_events=seizures)
+                state.extra["sz_reranker_model"] = reranker_model
+            except Exception:
+                import traceback
+                traceback.print_exc()  # keep heuristic confidence on failure
 
         # Assign stable event IDs (1-based, sorted by channel then onset)
         seizures.sort(key=lambda e: (e.channel, e.onset_sec))
@@ -3737,6 +3919,11 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
         ml_convthr = float(sz_params.get("ml_convulsive_threshold", 0.5))
         ml_mindur = float(sz_params.get("ml_min_duration_sec", 3.0))
         ml_merge = float(sz_params.get("ml_merge_gap_sec", 2.0))
+        # Hysteresis boundary threshold (U-Net only); None / >= detection = off.
+        ml_bnd = sz_params.get("ml_boundary_threshold")
+        ml_bnd = float(ml_bnd) if ml_bnd is not None else None
+        if ml_bnd is not None and ml_bnd >= ml_thr:
+            ml_bnd = None
         detector_name = "BENDR" if method == "bendr" else "U-Net"
     else:
         detector, params, detector_name, (bp_low, bp_high) = (
@@ -3807,6 +3994,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
                 seizures = predict_seizures(
                     edf_path=edf_path, model_name=ml_model,
                     channels=selected_channels, threshold=ml_thr,
+                    boundary_threshold=ml_bnd,
                     convulsive_threshold=ml_convthr,
                     min_duration_sec=ml_mindur, merge_gap_sec=ml_merge,
                     convulsive_model_name=ml_convmodel,
@@ -3943,6 +4131,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     State("sz-unet-model", "value"),
     State("sz-unet-convmodel", "value"),
     State({"type": "param-slider", "key": "sz-unet-threshold"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-bnd-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
@@ -3951,8 +4140,8 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
 )
 def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
                      bendr_convthr, bendr_mindur, bendr_merge, unet_model,
-                     unet_convmodel, unet_thr, unet_convthr, unet_mindur,
-                     unet_merge, sid):
+                     unet_convmodel, unet_thr, unet_bnd, unet_convthr,
+                     unet_mindur, unet_merge, sid):
     """Launch the background detection thread and start polling."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -3986,10 +4175,12 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
             ml_model, ml_thr, ml_convthr, ml_mindur, ml_merge = (
                 bendr_model, bendr_thr, bendr_convthr, bendr_mindur, bendr_merge)
             ml_convmodel = bendr_convmodel
+            ml_bnd = None  # no hysteresis control in the (shelved) BENDR panel
         else:
             ml_model, ml_thr, ml_convthr, ml_mindur, ml_merge = (
                 unet_model, unet_thr, unet_convthr, unet_mindur, unet_merge)
             ml_convmodel = unet_convmodel
+            ml_bnd = unet_bnd
         if not ml_model:
             label = "BENDR" if method == "bendr" else "U-Net"
             return (
@@ -4001,6 +4192,8 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
         sz_params["ml_model"] = ml_model
         sz_params["ml_convmodel"] = ml_convmodel or ""
         sz_params["ml_threshold"] = float(ml_thr or 0.5)
+        sz_params["ml_boundary_threshold"] = (
+            float(ml_bnd) if ml_bnd is not None else None)
         sz_params["ml_convulsive_threshold"] = float(ml_convthr or 0.5)
         sz_params["ml_min_duration_sec"] = float(ml_mindur or 3.0)
         sz_params["ml_merge_gap_sec"] = float(ml_merge or 2.0)
