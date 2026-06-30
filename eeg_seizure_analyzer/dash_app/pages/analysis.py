@@ -9,16 +9,13 @@ from __future__ import annotations
 
 import json
 import os
-import platform
-import subprocess
-import sys
 import threading
 from pathlib import Path
 
 from dash import html, dcc, callback, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import alert, metric_card, collapsible_section
 from eeg_seizure_analyzer.ml.train import list_models, MODELS_DIR
 from eeg_seizure_analyzer.ml.spike_train import list_spike_models
@@ -31,111 +28,21 @@ from eeg_seizure_analyzer.analysis import ClassificationParams
 
 def _browse_folder(title: str = "Select folder") -> str | None:
     """Native folder picker."""
-    if platform.system() == "Darwin":
-        try:
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'POSIX path of (choose folder with prompt "{title}")'],
-                capture_output=True, text=True, timeout=120,
-            )
-            folder = r.stdout.strip().rstrip("/")
-            return folder if folder else None
-        except Exception:
-            pass
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk()", "root.withdraw()",
-                "root.attributes('-topmost', True)", "root.update()",
-                f'folder = filedialog.askdirectory(title="{title}")',
-                "root.destroy()", "print(folder or '')",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        folder = r.stdout.strip()
-        return folder if folder else None
-    except Exception:
-        return None
+    return file_dialogs.pick_folder(title)
 
 
 def _browse_file(title: str = "Select EDF file",
                  file_types: tuple[str, ...] = ("edf",)) -> str | None:
     """Native file picker. ``file_types`` is the list of allowed extensions
     (without the dot); an empty tuple allows any file."""
-    exts = [e.lstrip(".") for e in (file_types or ())]
-    if platform.system() == "Darwin":
-        try:
-            of_type = (f' of type {{{", ".join(chr(34)+e+chr(34) for e in exts)}}}'
-                       if exts else "")
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'POSIX path of (choose file with prompt "{title}"{of_type})'],
-                capture_output=True, text=True, timeout=120,
-            )
-            path = r.stdout.strip()
-            return path if path else None
-        except Exception:
-            pass
-    try:
-        if exts:
-            label = "/".join(e.upper() for e in exts) + " files"
-            pattern = " ".join(f"*.{e}" for e in exts)
-            filetypes = [(label, pattern), ("All files", "*.*")]
-        else:
-            filetypes = [("All files", "*.*")]
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk()", "root.withdraw()",
-                "root.attributes('-topmost', True)", "root.update()",
-                'path = filedialog.askopenfilename(',
-                f'    title="{title}",',
-                f'    filetypes={filetypes!r},',
-                ')',
-                "root.destroy()", "print(path or '')",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        path = r.stdout.strip()
-        return path if path else None
-    except Exception:
-        return None
+    return file_dialogs.pick_file(title, file_types)
 
 
 def _save_file(default_name: str, title: str = "Save file") -> str | None:
     """Native 'Save as' dialog (the in-window webview can't do browser
     downloads, so templates are written to a path the user picks). Returns the
     chosen path or None if cancelled."""
-    if platform.system() == "Darwin":
-        try:
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'POSIX path of (choose file name with prompt "{title}" '
-                 f'default name "{default_name}")'],
-                capture_output=True, text=True, timeout=120,
-            )
-            return r.stdout.strip() or None
-        except Exception:
-            pass
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk(); root.withdraw()",
-                "root.attributes('-topmost', True); root.update()",
-                f'p = filedialog.asksaveasfilename(title="{title}", '
-                f'initialfile="{default_name}", defaultextension=".csv")',
-                "root.destroy(); print(p or '')",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        return r.stdout.strip() or None
-    except Exception:
-        return None
+    return file_dialogs.save_file(default_name, title)
 
 
 def _model_options(model_type: str = "seizure") -> list[dict]:

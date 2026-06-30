@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
-import subprocess
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -14,7 +11,7 @@ from dash import html, dcc, callback, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 
-from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import (
     metric_card,
     alert,
@@ -39,95 +36,22 @@ from eeg_seizure_analyzer.io.channel_ids import (
 
 def _browse_folder(title: str = "Select folder") -> str | None:
     """Open a native folder picker. Returns path or None."""
-    if platform.system() == "Darwin":
-        try:
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'POSIX path of (choose folder with prompt "{title}")'],
-                capture_output=True, text=True, timeout=120,
-            )
-            folder = r.stdout.strip().rstrip("/")
-            return folder if folder else None
-        except Exception:
-            pass  # fall through to tkinter
-
-    # tkinter fallback (Linux / Windows / macOS fallback)
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk()",
-                "root.withdraw()",
-                "root.attributes('-topmost', True)",
-                "root.update()",
-                f'folder = filedialog.askdirectory(title="{title}")',
-                "root.destroy()",
-                "print(folder or '')",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        folder = r.stdout.strip()
-        return folder if folder else None
-    except Exception:
-        return None
+    return file_dialogs.pick_folder(title)
 
 
 def _browse_file(title: str = "Select file",
                  filetypes: str = "EDF files|*.edf") -> str | None:
-    """Open a native file picker. Returns path or None."""
-    if platform.system() == "Darwin":
-        try:
-            # Build AppleScript file type filter
-            # filetypes format: "EDF files|*.edf,ADICHT|*.adicht"
-            exts = []
-            for part in filetypes.split(","):
-                if "|" in part:
-                    ext = part.split("|")[1].replace("*.", "").strip()
-                    exts.append(f'"{ext}"')
-            type_clause = ""
-            if exts:
-                type_clause = f" of type {{{', '.join(exts)}}}"
-            script = (
-                f'POSIX path of (choose file with prompt "{title}"'
-                f"{type_clause})"
-            )
-            r = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=120,
-            )
-            path = r.stdout.strip()
-            return path if path else None
-        except Exception:
-            pass  # fall through to tkinter
+    """Open a native file picker. Returns path or None.
 
-    # tkinter fallback
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk()",
-                "root.withdraw()",
-                "root.attributes('-topmost', True)",
-                "root.update()",
-                "path = filedialog.askopenfilename(",
-                f'    title="{title}",',
-                "    filetypes=[",
-                '        ("EDF files", "*.edf"),',
-                '        ("ADICHT files", "*.adicht"),',
-                '        ("All supported", "*.edf *.adicht"),',
-                "    ],",
-                ")",
-                "root.destroy()",
-                "print(path)",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        path = r.stdout.strip()
-        return path if path else None
-    except Exception:
-        return None
+    *filetypes* keeps the legacy ``"Label|*.edf,Label2|*.adicht"`` form; the
+    extensions are parsed out of it for the native dialog filter."""
+    exts = []
+    for part in filetypes.split(","):
+        if "|" in part:
+            ext = part.split("|", 1)[1].replace("*.", "").strip()
+            if ext:
+                exts.append(ext)
+    return file_dialogs.pick_file(title, exts)
 
 
 def layout(sid: str | None) -> html.Div:

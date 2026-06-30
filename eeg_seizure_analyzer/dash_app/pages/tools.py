@@ -11,7 +11,7 @@ import threading
 from dash import html, dcc, callback, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import alert, metric_card
 
 
@@ -132,29 +132,7 @@ def browse_folder(n_clicks, current_folder, current_output):
         return no_update, no_update
 
     try:
-        import sys
-
-        # Run tkinter dialog in a separate process to avoid blocking Dash
-        script = """
-import tkinter as tk
-from tkinter import filedialog
-import sys
-root = tk.Tk()
-root.withdraw()
-try:
-    root.attributes("-topmost", True)
-except Exception:
-    pass
-root.update()
-folder = filedialog.askdirectory(title="Select video folder")
-root.destroy()
-print(folder or "")
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=60,
-        )
-        folder = result.stdout.strip()
+        folder = file_dialogs.pick_folder("Select video folder")
 
         if not folder:
             return no_update, no_update
