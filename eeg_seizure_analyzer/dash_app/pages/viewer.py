@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import platform
-import subprocess
-import sys
 
 import numpy as np
 import plotly.graph_objects as go
@@ -12,7 +9,7 @@ from plotly.subplots import make_subplots
 from dash import html, dcc, callback, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     no_recording_placeholder,
@@ -141,34 +138,8 @@ def _filter_spikes_for_viewer(spikes, fv):
 def _save_svg_dialog(default_name: str = "eeg_view.svg") -> str | None:
     """Native 'Save as' dialog for the SVG export (the in-window webview
     can't do browser downloads). Returns the chosen path, or None."""
-    title = "Export current view as SVG"
-    if platform.system() == "Darwin":
-        try:
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'POSIX path of (choose file name with prompt "{title}" '
-                 f'default name "{default_name}")'],
-                capture_output=True, text=True, timeout=120,
-            )
-            return r.stdout.strip() or None
-        except Exception:
-            pass
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk(); root.withdraw()",
-                "root.attributes('-topmost', True); root.update()",
-                f'p = filedialog.asksaveasfilename(title="{title}", '
-                f'initialfile="{default_name}", defaultextension=".svg")',
-                "root.destroy(); print(p or '')",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        return r.stdout.strip() or None
-    except Exception:
-        return None
+    return file_dialogs.save_file(
+        default_name, "Export current view as SVG", default_ext=".svg")
 
 
 def _export_view_svg(state, path: str) -> None:

@@ -10,7 +10,7 @@ from pathlib import Path
 from dash import html, dcc, callback, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 
-from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import alert
 
 
@@ -23,49 +23,7 @@ _IS_WINDOWS = sys.platform == "win32"
 
 def _browse_files() -> list[str]:
     """Open a native file picker for .adicht files."""
-    import subprocess as _sp
-
-    if sys.platform == "darwin":
-        script = (
-            'set theFiles to choose file of type {"adicht"} '
-            'with prompt "Select ADICHT files" with multiple selections allowed\n'
-            "set output to \"\"\n"
-            "repeat with f in theFiles\n"
-            '    set output to output & POSIX path of f & "\\n"\n'
-            "end repeat\n"
-            "return output"
-        )
-        result = _sp.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=120,
-        )
-        paths = [p for p in result.stdout.strip().split("\n") if p]
-        return paths
-
-    # Windows / Linux: tkinter
-    script = """
-import tkinter as tk
-from tkinter import filedialog
-root = tk.Tk()
-root.withdraw()
-try:
-    root.attributes("-topmost", True)
-except Exception:
-    pass
-root.update()
-files = filedialog.askopenfilenames(
-    title="Select ADICHT files",
-    filetypes=[("ADICHT files", "*.adicht"), ("All files", "*.*")],
-)
-root.destroy()
-for f in files:
-    print(f)
-"""
-    result = _sp.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=120,
-    )
-    return [p for p in result.stdout.strip().split("\n") if p]
+    return file_dialogs.pick_files("Select ADICHT files", ("adicht",))
 
 
 # ── Layout ──────────────────────────────────────────────────────────

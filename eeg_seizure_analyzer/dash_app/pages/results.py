@@ -9,9 +9,6 @@ spectrogram (power over time), and all measured/computed parameters.
 from __future__ import annotations
 
 import os
-import platform
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +20,7 @@ from dash import html, dcc, callback, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 
-from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
@@ -70,33 +67,7 @@ def _save_results_state(project: str, state: dict) -> None:
 def _save_file(default_name: str, title: str = "Save file") -> str | None:
     """Native 'Save as' dialog (the in-window webview can't do browser
     downloads). Returns the chosen path, or None if cancelled."""
-    if platform.system() == "Darwin":
-        try:
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'POSIX path of (choose file name with prompt "{title}" '
-                 f'default name "{default_name}")'],
-                capture_output=True, text=True, timeout=120,
-            )
-            return r.stdout.strip() or None
-        except Exception:
-            pass
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c", "\n".join([
-                "import tkinter as tk",
-                "from tkinter import filedialog",
-                "root = tk.Tk(); root.withdraw()",
-                "root.attributes('-topmost', True); root.update()",
-                f'p = filedialog.asksaveasfilename(title="{title}", '
-                f'initialfile="{default_name}", defaultextension=".csv")',
-                "root.destroy(); print(p or '')",
-            ])],
-            capture_output=True, text=True, timeout=120,
-        )
-        return r.stdout.strip() or None
-    except Exception:
-        return None
+    return file_dialogs.save_file(default_name, title)
 
 
 # ── Layout ─────────────────────────────────────────────────────────────
