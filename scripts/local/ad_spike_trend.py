@@ -87,6 +87,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--by-day", action="store_true", help="also print daily rates")
+    ap.add_argument("--csv-outdir", help="also write Prism-ready CSVs here: "
+                    "animals as rows, weeks/days as columns")
     args = ap.parse_args()
 
     if not os.path.exists(args.db):
@@ -157,6 +159,36 @@ def main() -> int:
             row = "".join(f"{_rate(da_sp.get((w, d, a), 0), da_h.get((w, d, a), 0)):>11.1f}"
                           for a in animals)
             print(f"  {d:<10}{row}")
+
+    if args.csv_outdir:
+        import csv
+        os.makedirs(args.csv_outdir, exist_ok=True)
+
+        # One row per animal, one column per week — the layout Prism wants for a
+        # grouped/repeated-measures plot (each animal is a matched subject).
+        p = os.path.join(args.csv_outdir, "spike_rate_by_week.csv")
+        with open(p, "w", newline="") as f:
+            w_ = csv.writer(f)
+            w_.writerow(["animal"] + weeks)
+            for a in animals:
+                w_.writerow([a] + [f"{_rate(wa_sp.get((w, a), 0), wa_h.get((w, a), 0)):.3f}"
+                                   for w in weeks])
+        # Same shape by day, for a time-course plot.
+        p2 = os.path.join(args.csv_outdir, "spike_rate_by_day.csv")
+        with open(p2, "w", newline="") as f:
+            w_ = csv.writer(f)
+            w_.writerow(["day", "day_number"] + [f"animal_{a}" for a in animals])
+            for i, (w, d) in enumerate(days, start=1):
+                w_.writerow([d, i] + [f"{_rate(da_sp.get((w, d, a), 0), da_h.get((w, d, a), 0)):.3f}"
+                                      for a in animals])
+        # Denominators, so the rates can be audited or re-derived.
+        p3 = os.path.join(args.csv_outdir, "recording_hours_by_week.csv")
+        with open(p3, "w", newline="") as f:
+            w_ = csv.writer(f)
+            w_.writerow(["animal"] + weeks)
+            for a in animals:
+                w_.writerow([a] + [f"{wa_h.get((w, a), 0):.2f}" for w in weeks])
+        print(f"\nWrote {p}\n      {p2}\n      {p3}")
     print()
     return 0
 
