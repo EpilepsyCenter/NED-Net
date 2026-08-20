@@ -23,10 +23,10 @@
 # 'Week[123]-' for the first 3 weeks, or a day pattern to thin the timeline.
 # ============================================================
 
+# NOTE: --exclusive and -t are NOT set here; phase 1 passes them on the sbatch
+# command line (which overrides #SBATCH) so JOB_CPUS / JOB_TIME can change them.
 #SBATCH -p lu48
 #SBATCH -N 1
-#SBATCH --exclusive
-#SBATCH -t 1-00:00:00
 #SBATCH -J ned_spikes
 #SBATCH -o logs/ned_spikes_%j.out
 #SBATCH -e logs/ned_spikes_%j.err
@@ -59,6 +59,13 @@
 : "${MIN_SNR:=10}"              # local SNR >=
 : "${MIN_XBL:=15}"              # amplitude / baseline >=
 : "${OVERWRITE:=0}"              # 1 = re-detect files already in the DB
+# ---- Scheduling ----
+# JOB_CPUS blank = --exclusive (a whole node, fastest but queues behind every
+# other job until one drains completely). Set it to a core count to take a slice
+# of an already-partly-used node instead: slower, but it can start immediately
+# when `sinfo -p lu48` shows nodes in 'mix' and none 'idle'.
+: "${JOB_CPUS=}"
+: "${JOB_TIME:=1-00:00:00}"      # shorter requests backfill into gaps more easily
 
 # ============================================================
 # Phase 1: not under SLURM -> prompt, then submit this script.
@@ -83,6 +90,8 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask MIN_CONF     "Min confidence (post-filter; 0 = off)"
     ask MIN_SNR      "Min local SNR (post-filter; 0 = off)"
     ask MIN_XBL      "Min amplitude x baseline (post-filter; 0 = off)"
+    ask JOB_CPUS     "Cores (blank = whole exclusive node; a number starts sooner)"
+    ask JOB_TIME     "Walltime"
     read -r -p "Re-detect files already in the DB? (y/N): " ow
     [ "$ow" = "y" ] || [ "$ow" = "Y" ] && OVERWRITE=1
     echo "-------------------------------------------------------------"
@@ -107,7 +116,16 @@ if [ -z "$SLURM_JOB_ID" ]; then
     export EDF_DIR DB_PATH METADATA_CSV PATH_INCLUDE ZSCORE BANDPASS_LOW \
            BANDPASS_HIGH PROMINENCE REFRACTORY ISO_WINDOW ISO_MAX MIN_CONF \
            MIN_SNR MIN_XBL OVERWRITE
-    sbatch --export=ALL "$0"
+    # Command-line sbatch flags beat the #SBATCH directives in the file body.
+    SB_ARGS=(-t "$JOB_TIME")
+    if [ -n "$JOB_CPUS" ]; then
+        SB_ARGS+=(-n 1 -c "$JOB_CPUS")
+        echo "            sbatch: -c $JOB_CPUS -t $JOB_TIME (shared node)"
+    else
+        SB_ARGS+=(--exclusive)
+        echo "            sbatch: --exclusive -t $JOB_TIME (whole node)"
+    fi
+    sbatch --export=ALL "${SB_ARGS[@]}" "$0"
     exit $?
 fi
 
@@ -116,7 +134,10 @@ fi
 # ============================================================
 echo "========================================="
 echo "Job ID:     $SLURM_JOB_ID"
-echo "Node:       $(hostname)   cores=$(nproc)"
+# On a shared (non-exclusive) allocation nproc can report the node's full core
+# count rather than the slice we were granted, which would oversubscribe it.
+WORKERS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
+echo "Node:       $(hostname)   cores=$(nproc)   workers=$WORKERS"
 echo "Start time: $(date)"
 echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
@@ -151,7 +172,7 @@ python scripts/lunarc/detect_spikes_batch.py \
     --min-confidence "$MIN_CONF" \
     --min-local-snr "$MIN_SNR" \
     --min-xbaseline "$MIN_XBL" \
-    --workers "$(nproc)" \
+    --workers "$WORKERS" \
     --tmpdir "${SNIC_TMP:-/tmp}" \
     "${META_ARG[@]}" "${PATH_ARG[@]}" "${OVERWRITE_ARG[@]}"
 
