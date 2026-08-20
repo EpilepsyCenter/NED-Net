@@ -246,11 +246,16 @@ def envelope(y, n_bins: int):
     return xs, ys
 
 
-def _pack(panels):
-    """panels -> flat npz-able dict (npz cannot hold a list of dicts)."""
+def _pack(panels, win_rows=None):
+    """panels -> flat npz-able dict (npz cannot hold a list of dicts).
+
+    win_rows travels with it: without them a cached re-render writes a
+    windows.csv missing the file/offset/target columns the legend needs.
+    """
     import json
     out = {"meta": json.dumps([{k: v for k, v in p.items()
-                                if k not in ("long", "zoom")} for p in panels])}
+                                if k not in ("long", "zoom")} for p in panels]),
+           "win_rows": json.dumps(win_rows or [])}
     for i, p in enumerate(panels):
         out[f"long{i}"] = p["long"]
         if p["zoom"] is not None:
@@ -267,8 +272,10 @@ def _unpack(z):
         m["long"] = z[f"long{i}"]
         m["zoom"] = z[f"zoom{i}"] if f"zoom{i}" in z else None
         panels.append(m)
-    win_rows = [{"week": p["week"], "spikes_in_window": p["n"],
-                 "window_rate_per_h": p["rate"]} for p in panels]
+    win_rows = json.loads(str(z["win_rows"])) if "win_rows" in z else []
+    if not win_rows:   # cache predates win_rows being stored
+        win_rows = [{"week": p["week"], "spikes_in_window": p["n"],
+                     "window_rate_per_h": p["rate"]} for p in panels]
     return panels, win_rows
 
 
@@ -402,7 +409,7 @@ def main() -> int:
         print("No panels built.", file=sys.stderr)
         return 1
     if args.cache:
-        np.savez_compressed(cache_path, **_pack(panels))
+        np.savez_compressed(cache_path, **_pack(panels, win_rows))
         print(f"  cached extracted windows -> {cache_path}")
 
     # One y-scale for every row, or the comparison between weeks is meaningless.
