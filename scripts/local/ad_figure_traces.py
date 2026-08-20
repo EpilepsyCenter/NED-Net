@@ -109,6 +109,22 @@ def pick_window(events: dict, target_rate: float, week: str,
 _CACHE: dict[tuple[str, int], tuple[float, "object"]] = {}
 
 
+def uv_scale(path: str) -> float:
+    """Factor converting this EDF's physical units to µV.
+
+    These recordings declare 'mV' in the header and read_edf returns the
+    physical units unchanged, so values come back 1000x smaller than the µV
+    that EEG scale bars are conventionally drawn in.
+    """
+    with open(path, "rb") as f:
+        head = f.read(256)
+        ns = int(head[252:256].decode("ascii", "replace").strip())
+        f.read(16 * ns)      # labels
+        f.read(80 * ns)      # transducer
+        dim = f.read(8).decode("ascii", "replace").strip().lower()
+    return {"mv": 1000.0, "uv": 1.0, "µv": 1.0, "v": 1e6}.get(dim, 1.0)
+
+
 def load_channel(path: str, ch: int):
     """-> (fs, whole bandpassed channel), cached.
 
@@ -124,9 +140,8 @@ def load_channel(path: str, ch: int):
         rec = read_edf(path, channels=[ch])
         # Filter the whole record then slice: filtering a short slice would ring
         # at the edges of exactly the window we are about to plot.
-        _CACHE[key] = (rec.fs,
-                       bandpass_filter(rec.get_channel_data(0), rec.fs,
-                                       BP_LOW, BP_HIGH))
+        filt = bandpass_filter(rec.get_channel_data(0), rec.fs, BP_LOW, BP_HIGH)
+        _CACHE[key] = (rec.fs, filt * uv_scale(path))
     return _CACHE[key]
 
 

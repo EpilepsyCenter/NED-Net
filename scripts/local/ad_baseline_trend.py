@@ -57,19 +57,37 @@ def pick_files(root: str, indices: list[int]) -> list[tuple[str, str, int, str]]
     return sorted(out, key=lambda t: (t[2], t[3]))
 
 
+def uv_scale(path: str) -> float:
+    """Factor converting this EDF's physical units to µV.
+
+    These recordings declare 'mV' in the header and read_edf returns the
+    physical units unchanged, so values come back 1000x smaller than the µV
+    that EEG is conventionally reported in.
+    """
+    with open(path, "rb") as f:
+        head = f.read(256)
+        ns = int(head[252:256].decode("ascii", "replace").strip())
+        f.read(16 * ns)      # labels
+        f.read(80 * ns)      # transducer
+        dim = f.read(8).decode("ascii", "replace").strip().lower()
+    return {"mv": 1000.0, "uv": 1.0, "µv": 1.0, "v": 1e6}.get(dim, 1.0)
+
+
 def measure(path: str) -> dict[int, tuple[float, float]]:
-    """-> {channel: (baseline_mean, baseline_std)} for the mapped channels."""
+    """-> {channel: (baseline_mean_uv, baseline_std_uv)} for mapped channels."""
     from eeg_seizure_analyzer.io.edf_reader import read_edf
     from eeg_seizure_analyzer.processing.features import compute_zscore_baseline
     from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 
+    k = uv_scale(path)
     rec = read_edf(path, channels=sorted(CHANNELS))
     out = {}
     for pos, ch in enumerate(sorted(CHANNELS)):
         data = rec.get_channel_data(pos)
         filt = bandpass_filter(data, rec.fs, BP_LOW, BP_HIGH)
-        out[ch] = compute_zscore_baseline(
+        mean, std = compute_zscore_baseline(
             filt, rec.fs, window_sec=BL_WINDOW_SEC, percentile=BL_PERCENTILE)
+        out[ch] = (mean * k, std * k)
     return out
 
 
