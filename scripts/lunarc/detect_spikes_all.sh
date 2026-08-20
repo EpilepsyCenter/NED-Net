@@ -51,6 +51,10 @@
 : "${BANDPASS_LOW:=3.0}"
 : "${BANDPASS_HIGH:=50.0}"
 : "${PROMINENCE:=6.0}"           # prominence x baseline
+# Absolute amplitude floor, in the EDF's OWN physical units. The KAHA/AD files
+# are in mV, so 0.15 there means 150 uV — despite the "uv" in the flag name.
+# 0 = disabled (threshold is then purely baseline-relative).
+: "${MIN_AMPLITUDE:=0}"
 : "${REFRACTORY:=750}"           # refractory period (ms)
 : "${ISO_WINDOW:=2.0}"            # burst-rejection window (s)
 : "${ISO_MAX:=1}"                 # max neighbours before a spike is rejected
@@ -85,6 +89,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask BANDPASS_LOW "Bandpass low (Hz)"
     ask BANDPASS_HIGH "Bandpass high (Hz)"
     ask PROMINENCE   "Prominence x baseline"
+    ask MIN_AMPLITUDE "Absolute amplitude floor in the EDF's units (mV for AD; 0 = off)"
     ask REFRACTORY   "Refractory (ms)"
     ask ISO_MAX      "Isolation max neighbours (burst rejection)"
     ask MIN_CONF     "Min confidence (post-filter; 0 = off)"
@@ -98,7 +103,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Submitting: edf=$EDF_DIR"
     echo "            db=$DB_PATH"
     echo "            meta=${METADATA_CSV:-none}  path_include=${PATH_INCLUDE:-all}"
-    echo "            z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE refr=$REFRACTORY iso_max=$ISO_MAX overwrite=$OVERWRITE"
+    echo "            z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE abs_floor=$MIN_AMPLITUDE refr=$REFRACTORY iso_max=$ISO_MAX overwrite=$OVERWRITE"
     echo "            filters: conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL"
     # Sanity-check the path filter here rather than discovering on the compute
     # node that the job had nothing to do (a wrong-cohort PATH_INCLUDE matches
@@ -114,8 +119,8 @@ if [ -z "$SLURM_JOB_ID" ]; then
         echo "            path filter matches $n_match EDFs"
     fi
     export EDF_DIR DB_PATH METADATA_CSV PATH_INCLUDE ZSCORE BANDPASS_LOW \
-           BANDPASS_HIGH PROMINENCE REFRACTORY ISO_WINDOW ISO_MAX MIN_CONF \
-           MIN_SNR MIN_XBL OVERWRITE
+           BANDPASS_HIGH PROMINENCE MIN_AMPLITUDE REFRACTORY ISO_WINDOW ISO_MAX \
+           MIN_CONF MIN_SNR MIN_XBL OVERWRITE
     # Command-line sbatch flags beat the #SBATCH directives in the file body.
     SB_ARGS=(-t "$JOB_TIME")
     if [ -n "$JOB_CPUS" ]; then
@@ -142,7 +147,7 @@ echo "Start time: $(date)"
 echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
 echo "Meta:       ${METADATA_CSV:-none}   path_include=${PATH_INCLUDE:-all}"
-echo "Detector:   z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE refr=${REFRACTORY}ms iso=$ISO_MAX/$ISO_WINDOW"
+echo "Detector:   z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE abs_floor=$MIN_AMPLITUDE refr=${REFRACTORY}ms iso=$ISO_MAX/$ISO_WINDOW"
 echo "Filters:    conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL  (0 = off)"
 echo "========================================="
 
@@ -166,6 +171,7 @@ python scripts/lunarc/detect_spikes_batch.py \
     --bandpass-low "$BANDPASS_LOW" \
     --bandpass-high "$BANDPASS_HIGH" \
     --prominence "$PROMINENCE" \
+    --min-amplitude-uv "$MIN_AMPLITUDE" \
     --refractory-ms "$REFRACTORY" \
     --isolation-window-sec "$ISO_WINDOW" \
     --isolation-max-neighbours "$ISO_MAX" \
