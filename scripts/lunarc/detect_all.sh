@@ -22,10 +22,10 @@
 # to an EDF take precedence over the CSV.
 # ============================================================
 
+# NOTE: --exclusive and -t are NOT set here; phase 1 passes them on the sbatch
+# command line (which overrides #SBATCH) so JOB_CPUS / JOB_TIME can change them.
 #SBATCH -p lu48
 #SBATCH -N 1
-#SBATCH --exclusive
-#SBATCH -t 1-00:00:00
 #SBATCH -J ned_detect
 #SBATCH -o logs/ned_detect_%j.out
 #SBATCH -e logs/ned_detect_%j.err
@@ -43,8 +43,13 @@
 : "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/lunarc_detect_wk1-6_final.db}"
 : "${MODEL:=UNetv2_20260615}"
 : "${CONV_MODEL:=Convulsive_v4LUNARC_20260616}"   # blank = use detector ch1 instead of cascade
-: "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"   # full SV2A run, 1893 EDFs
-: "${PATH_INCLUDE:=Week[123456]-}"   # all 6 weeks (WeekN-DayNN subfolders); blank = all incl. stray Week7
+# These two are legitimately blank-able ("no metadata CSV" / "all files"), so
+# they use the no-colon `=` form: it defaults only when the var is UNSET, and an
+# exported empty string from a wrapper survives. With `:=` an empty export is
+# treated as unset and silently re-defaulted — in phase 1 and, via --export=ALL,
+# again in phase 2 under SLURM.
+: "${METADATA_CSV=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"   # full SV2A run, 1893 EDFs
+: "${PATH_INCLUDE=Week[123456]-}"   # all 6 weeks (WeekN-DayNN subfolders); blank = all incl. stray Week7
 : "${THRESHOLD:=0.5}"             # detection core. Lower = more sensitive
 : "${BOUNDARY_THRESHOLD:=0.1}"    # hysteresis: grow onset/offset out to this (matches hand-drawn boundaries). blank/>=THRESHOLD = off
 : "${RERANKER_MODEL:=}"           # SHELVED — leave blank. (Didn't generalise as a filter.)
@@ -52,6 +57,13 @@
 : "${MIN_DURATION:=5}"
 : "${MERGE_GAP:=2}"
 : "${OVERWRITE:=0}"               # 1 = re-detect files already in the DB
+# ---- Scheduling ----
+# JOB_CPUS blank = --exclusive (a whole node, fastest but queues behind every
+# other job until one drains completely). Set it to a core count to take a slice
+# of an already-partly-used node instead: slower, but it can start immediately
+# when `sinfo -p lu48` shows nodes in 'mix' and none 'idle'.
+: "${JOB_CPUS=}"
+: "${JOB_TIME:=1-00:00:00}"       # shorter requests backfill into gaps more easily
 
 # ============================================================
 # Phase 1: not under SLURM -> prompt, then submit this script.
@@ -73,6 +85,8 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask BOUNDARY_THRESHOLD "Boundary (hysteresis) threshold (blank/>=det = off)"
     ask RERANKER_MODEL "Event re-ranker model (blank = none)"
     ask CONV_THRESHOLD "Convulsive threshold"
+    ask JOB_CPUS       "Cores (blank = whole exclusive node; a number starts sooner)"
+    ask JOB_TIME       "Walltime"
     read -r -p "Re-detect files already in the DB? (y/N): " ow
     [ "$ow" = "y" ] || [ "$ow" = "Y" ] && OVERWRITE=1
     echo "-------------------------------------------------------------"
@@ -82,9 +96,29 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            path_include=${PATH_INCLUDE:-all}"
     echo "            thr=$THRESHOLD boundary=${BOUNDARY_THRESHOLD:-off} reranker=${RERANKER_MODEL:-none}"
     echo "            conv_thr=$CONV_THRESHOLD overwrite=$OVERWRITE"
+    # Catch a wrong-cohort filter here rather than on the compute node: a
+    # PATH_INCLUDE matching nothing queues a job that exits immediately.
+    if [ -n "$PATH_INCLUDE" ]; then
+        n_match=$(find "$EDF_DIR" -type f -iname '*.edf' 2>/dev/null | grep -Ec "$PATH_INCLUDE" || true)
+        if [ "${n_match:-0}" -eq 0 ]; then
+            echo "!! PATH_INCLUDE '$PATH_INCLUDE' matches 0 EDFs under $EDF_DIR — not submitting."
+            echo "   Leave it blank to detect every file."
+            exit 1
+        fi
+        echo "            path filter matches $n_match EDFs"
+    fi
     export EDF_DIR DB_PATH MODEL CONV_MODEL METADATA_CSV PATH_INCLUDE THRESHOLD \
            BOUNDARY_THRESHOLD RERANKER_MODEL CONV_THRESHOLD MIN_DURATION MERGE_GAP OVERWRITE
-    sbatch --export=ALL "$0"
+    # Command-line sbatch flags beat the #SBATCH directives in the file body.
+    SB_ARGS=(-t "$JOB_TIME")
+    if [ -n "$JOB_CPUS" ]; then
+        SB_ARGS+=(-n 1 -c "$JOB_CPUS")
+        echo "            sbatch: -c $JOB_CPUS -t $JOB_TIME (shared node)"
+    else
+        SB_ARGS+=(--exclusive)
+        echo "            sbatch: --exclusive -t $JOB_TIME (whole node)"
+    fi
+    sbatch --export=ALL "${SB_ARGS[@]}" "$0"
     exit $?
 fi
 
@@ -93,7 +127,10 @@ fi
 # ============================================================
 echo "========================================="
 echo "Job ID:     $SLURM_JOB_ID"
-echo "Node:       $(hostname)   cores=$(nproc)"
+# On a shared (non-exclusive) allocation nproc can report the node's full core
+# count rather than the slice we were granted, which would oversubscribe it.
+WORKERS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
+echo "Node:       $(hostname)   cores=$(nproc)   workers=$WORKERS"
 echo "Start time: $(date)"
 echo "EDF dir:    $EDF_DIR"
 echo "DB:         $DB_PATH"
@@ -126,7 +163,7 @@ python scripts/lunarc/detect_batch.py \
     --conv-threshold "$CONV_THRESHOLD" \
     --min-duration "$MIN_DURATION" \
     --merge-gap "$MERGE_GAP" \
-    --workers "$(nproc)" \
+    --workers "$WORKERS" \
     --tmpdir "${SNIC_TMP:-/tmp}" \
     "${CONV_ARG[@]}" "${META_ARG[@]}" "${PATH_ARG[@]}" "${OVERWRITE_ARG[@]}" \
     "${BND_ARG[@]}" "${RERANK_ARG[@]}"
