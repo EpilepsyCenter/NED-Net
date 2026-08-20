@@ -40,12 +40,12 @@ import os
 
 N_CH = 8
 
-# code channel index -> animal ID. Defaults follow the MATLAB output folder
-# names (Animal_Ch1 etc.) so the two analyses can be compared row for row.
-DEFAULT_ANIMALS = {0: "Animal_Ch1", 3: "Animal_Ch4", 5: "Animal_Ch6", 6: "Animal_Ch7"}
-# code channel index -> genotype/group. Blank until confirmed: the recordings
-# carry no genotype anywhere, and guessing one would silently mislabel the stats.
-DEFAULT_GROUPS: dict[int, str] = {}
+# code channel index -> animal ID, numbered 1-4 in channel order per Marco:
+#   Ch1 -> 1, Ch4 -> 2, Ch6 -> 3, Ch7 -> 4   (MATLAB called these Animal_Ch1 etc.)
+DEFAULT_ANIMALS = {0: "1", 3: "2", 5: "3", 6: "4"}
+# All four are 5xFAD — they serve as the control animals for the paper, so there
+# is no second genotype arm here.
+DEFAULT_GROUPS = {0: "5xFAD", 3: "5xFAD", 5: "5xFAD", 6: "5xFAD"}
 DEFAULT_COHORT = "AD_5xFAD"
 
 
