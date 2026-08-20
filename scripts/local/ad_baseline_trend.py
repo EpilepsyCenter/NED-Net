@@ -119,8 +119,10 @@ def main() -> int:
                          "file": os.path.basename(path)})
             per_week[(week, animal)].append(mean)
             per_day[animal].append((day_n, mean))
+        # flush: these files stream off the share at ~1 MB/s, so without it the
+        # block-buffered output shows nothing at all until the sweep ends.
         print(f"  {day}: " + "  ".join(
-            f"a{CHANNELS[c]}={res[c][0]:.1f}uV" for c in sorted(res)))
+            f"a{CHANNELS[c]}={res[c][0]:.1f}uV" for c in sorted(res)), flush=True)
 
     with open(args.out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
