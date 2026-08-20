@@ -38,8 +38,13 @@
 # ---- Defaults (used if the var isn't already set / left blank) ----
 : "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/edf_data}"
 : "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/sv2a_spikes.db}"
-: "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"  # full SV2A run
-: "${PATH_INCLUDE:=Week[123]-}"   # only first 3 weeks; blank = all files
+# These two are legitimately blank-able ("no metadata CSV" / "all files"), so
+# they use the no-colon `=` form: it defaults only when the var is UNSET, and an
+# exported empty string from a wrapper survives. With `:=` an empty export is
+# treated as unset and silently re-defaulted — in both phase 1 and, via
+# --export=ALL, again in phase 2 under SLURM.
+: "${METADATA_CSV=$HOME/NED-Net/scripts/lunarc/batch_metadata.csv}"  # full SV2A run
+: "${PATH_INCLUDE=Week[123]-}"   # only first 3 weeks; blank = all files
 # Detector defaults mirror the Spikes-tab GUI (_sp_params_from_dict); Marco
 # runs z=4-5 (GUI default is 7).
 : "${ZSCORE:=4.0}"                # amplitude threshold = mean + z*std
@@ -86,6 +91,19 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            meta=${METADATA_CSV:-none}  path_include=${PATH_INCLUDE:-all}"
     echo "            z=$ZSCORE bp=$BANDPASS_LOW-$BANDPASS_HIGH prom=$PROMINENCE refr=$REFRACTORY iso_max=$ISO_MAX overwrite=$OVERWRITE"
     echo "            filters: conf>=$MIN_CONF snr>=$MIN_SNR xbl>=$MIN_XBL"
+    # Sanity-check the path filter here rather than discovering on the compute
+    # node that the job had nothing to do (a wrong-cohort PATH_INCLUDE matches
+    # 0 files and the job exits after queueing). grep -E is close enough to the
+    # re.search() the batch script does.
+    if [ -n "$PATH_INCLUDE" ]; then
+        n_match=$(find "$EDF_DIR" -type f -iname '*.edf' 2>/dev/null | grep -Ec "$PATH_INCLUDE" || true)
+        if [ "${n_match:-0}" -eq 0 ]; then
+            echo "!! PATH_INCLUDE '$PATH_INCLUDE' matches 0 EDFs under $EDF_DIR — not submitting."
+            echo "   Leave it blank to detect every file."
+            exit 1
+        fi
+        echo "            path filter matches $n_match EDFs"
+    fi
     export EDF_DIR DB_PATH METADATA_CSV PATH_INCLUDE ZSCORE BANDPASS_LOW \
            BANDPASS_HIGH PROMINENCE REFRACTORY ISO_WINDOW ISO_MAX MIN_CONF \
            MIN_SNR MIN_XBL OVERWRITE
