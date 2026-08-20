@@ -167,6 +167,32 @@ def envelope(y, n_bins: int):
     return xs, ys
 
 
+def _pack(panels):
+    """panels -> flat npz-able dict (npz cannot hold a list of dicts)."""
+    import json
+    out = {"meta": json.dumps([{k: v for k, v in p.items()
+                                if k not in ("long", "zoom")} for p in panels])}
+    for i, p in enumerate(panels):
+        out[f"long{i}"] = p["long"]
+        if p["zoom"] is not None:
+            out[f"zoom{i}"] = p["zoom"]
+    return out
+
+
+def _unpack(z):
+    import json
+    meta = json.loads(str(z["meta"]))
+    panels = []
+    for i, m in enumerate(meta):
+        m = dict(m)
+        m["long"] = z[f"long{i}"]
+        m["zoom"] = z[f"zoom{i}"] if f"zoom{i}" in z else None
+        panels.append(m)
+    win_rows = [{"week": p["week"], "spikes_in_window": p["n"],
+                 "window_rate_per_h": p["rate"]} for p in panels]
+    return panels, win_rows
+
+
 def _scalebar(ax, x, y, dx, dy, xlabel, ylabel, fs=6):
     """L-shaped scale bar in data coordinates."""
     ax.plot([x, x, x + dx], [y + dy, y, y], color="black", lw=1.0,
@@ -189,6 +215,12 @@ def main() -> int:
     ap.add_argument("--step-sec", type=float, default=300.0)
     ap.add_argument("--width-mm", type=float, default=180.0,
                     help="figure width; 180 mm = full journal page width")
+    ap.add_argument("--ylim-pct", type=float, default=100.0,
+                    help="percentile of |signal| setting the long-trace y-limit; "
+                         "100 = never clip a spike, lower = fatter background "
+                         "band but truncated peaks")
+    ap.add_argument("--no-cache", dest="cache", action="store_false",
+                    help="ignore/refresh the cached extracted windows")
     args = ap.parse_args()
 
     import matplotlib
@@ -215,10 +247,18 @@ def main() -> int:
     print(f"animal {args.animal} (code ch{ch})   cohort targets: "
           + ", ".join(f"{w}={targets[w]:.1f}/h" for w in weeks) + "\n")
 
+    # Extraction reads ~170 MB per week off a ~1 MB/s share, so cache the
+    # extracted windows: re-rendering with different styling is then instant.
+    cache_path = os.path.join(args.outdir,
+                              f"_traces_a{args.animal}_{int(args.long_sec)}s.npz")
+    panels, win_rows = [], []
+    if args.cache and os.path.exists(cache_path):
+        panels, win_rows = _unpack(np.load(cache_path, allow_pickle=True))
+        print(f"  loaded cached windows from {cache_path}")
+
     # ---- Collect the data for every panel before drawing, so the shared
     # y-scale can be computed across all of them. ----
-    panels, win_rows = [], []
-    for week in weeks:
+    for week in [] if panels else weeks:
         pick = pick_window(events, targets[week], week, args.long_sec,
                            args.step_sec)
         if not pick:
@@ -259,56 +299,71 @@ def main() -> int:
     if not panels:
         print("No panels built.", file=sys.stderr)
         return 1
+    if args.cache:
+        np.savez_compressed(cache_path, **_pack(panels))
+        print(f"  cached extracted windows -> {cache_path}")
 
     # One y-scale for every row, or the comparison between weeks is meaningless.
-    # 99.8th percentile, so a single artefact does not flatten the traces.
-    ylim = max(np.percentile(np.abs(p["long"]), 99.8) for p in panels) * 1.6
+    # Default 100th percentile: a truncated spike reads as an artefact in print,
+    # so nothing is clipped even though it costs a thinner background band.
+    ylim = max(np.percentile(np.abs(p["long"]), args.ylim_pct)
+               for p in panels) * 1.04
     zlim = max(np.percentile(np.abs(p["zoom"]), 99.9) for p in panels
                if p["zoom"] is not None) * 1.25
 
     mm = 1 / 25.4
-    fig = plt.figure(figsize=(args.width_mm * mm, 26 * len(panels) * mm))
-    gs = GridSpec(len(panels), 2, width_ratios=[3.4, 1], figure=fig,
-                  hspace=0.55, wspace=0.12,
-                  left=0.06, right=0.99, top=0.95, bottom=0.06)
+    n_rows = len(panels)
+    fig = plt.figure(figsize=(args.width_mm * mm, 30 * n_rows * mm))
+    # Two sub-rows per week: a thin raster row carrying the spike ticks, then
+    # the trace. Ticks inside the trace band would be invisible against it.
+    gs = GridSpec(n_rows * 2, 2, width_ratios=[3.4, 1],
+                  height_ratios=[0.22, 1] * n_rows, figure=fig,
+                  hspace=0.0, wspace=0.14,
+                  left=0.07, right=0.99, top=0.96, bottom=0.08)
 
     for row, p in enumerate(panels):
         wk = p["week"].replace("_", " ")
-        # ---- long compressed trace ----
-        ax = fig.add_subplot(gs[row, 0])
-        n_bins = 3000
-        xs, ys = envelope(p["long"], n_bins)
-        t = xs / n_bins * (args.long_sec / 60.0)      # minutes
-        ax.plot(t, ys, lw=0.25, color="#222222")
+        x_max = args.long_sec / 60.0
+
+        # ---- spike raster + labels ----
+        at = fig.add_subplot(gs[row * 2, 0])
         for s in p["spikes"]:
-            ax.plot([s / 60.0, s / 60.0], [ylim * 0.72, ylim * 0.92],
-                    lw=0.7, color="#c1272d", solid_capstyle="butt")
-        ax.set_xlim(0, args.long_sec / 60.0)
-        ax.set_ylim(-ylim, ylim)
-        ax.axis("off")
-        ax.text(0, ylim * 0.98, f"{wk}", fontsize=8, fontweight="bold",
-                ha="left", va="top")
-        ax.text(1.0, ylim * 0.98,
+            at.plot([s / 60.0, s / 60.0], [0.05, 0.55], lw=0.8,
+                    color="#c1272d", solid_capstyle="butt")
+        at.set_xlim(0, x_max)
+        at.set_ylim(0, 1)
+        at.axis("off")
+        at.text(0, 0.72, wk, fontsize=8, fontweight="bold", ha="left", va="bottom")
+        at.text(x_max, 0.72,
                 f"{p['n']} spikes / {args.long_sec / 60:.0f} min "
                 f"({p['rate']:.1f} h$^{{-1}}$)",
-                fontsize=6.5, ha="left", va="top", color="#555555")
-        if row == len(panels) - 1:
-            _scalebar(ax, 0.2, -ylim * 0.92, 5.0, ylim * 0.5,
-                      "5 min", f"{ylim * 0.5:.0f} µV")
+                fontsize=6.5, ha="right", va="bottom", color="#555555")
 
-        # ---- zoom ----
-        az = fig.add_subplot(gs[row, 1])
+        # ---- long compressed trace ----
+        ax = fig.add_subplot(gs[row * 2 + 1, 0])
+        n_bins = 3000
+        xs, ys = envelope(p["long"], n_bins)
+        ax.plot(xs / n_bins * x_max, ys, lw=0.2, color="#333333")
+        ax.set_xlim(0, x_max)
+        ax.set_ylim(-ylim, ylim)
+        ax.axis("off")
+        if row == n_rows - 1:
+            _scalebar(ax, 0.4, -ylim * 0.95, 5.0, ylim * 0.6,
+                      "5 min", f"{ylim * 0.6:.0f} µV")
+
+        # ---- zoom, spanning both sub-rows ----
+        az = fig.add_subplot(gs[row * 2:row * 2 + 2, 1])
         if p["zoom"] is not None:
             tz = np.arange(len(p["zoom"])) / p["fs"]
-            az.plot(tz, p["zoom"], lw=0.4, color="#222222")
+            az.plot(tz, p["zoom"], lw=0.4, color="#333333")
             for s in p["zoom_spikes"]:
-                az.plot([s], [zlim * 0.82], marker="v", ms=2.5,
+                az.plot([s], [zlim * 0.88], marker="v", ms=2.5,
                         color="#c1272d", clip_on=False)
             az.set_xlim(0, args.zoom_sec)
             az.set_ylim(-zlim, zlim)
-            if row == len(panels) - 1:
-                _scalebar(az, 0.3, -zlim * 0.92, 2.0, zlim * 0.5,
-                          "2 s", f"{zlim * 0.5:.0f} µV")
+            if row == n_rows - 1:
+                _scalebar(az, 0.3, -zlim * 0.95, 2.0, zlim * 0.6,
+                          "2 s", f"{zlim * 0.6:.0f} µV")
         az.axis("off")
 
     out_pdf = os.path.join(args.outdir, args.out)
