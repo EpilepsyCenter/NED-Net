@@ -66,6 +66,38 @@ def cohort_week_rates(db: str) -> dict[str, float]:
     return {w: spikes.get(w, 0) / h for w, h in hours.items() if h}
 
 
+def animal_week_rates(db: str, animal: str) -> dict[str, float]:
+    """One animal's own mean spikes/hour per week.
+
+    For an animal whose rates sit far from the cohort mean (animal 2 runs 3.8
+    -> 21.9 against a cohort 8.2 -> 16.4), matching windows to the COHORT mean
+    would force a week-1 window several times busier than that animal's own
+    week 1 — i.e. cherry-picking. Matching its own rate keeps each panel
+    representative of the animal being shown.
+    """
+    conn = sqlite3.connect(db)
+    try:
+        hours, spikes = {}, {}
+        for path, sec in conn.execute(
+                "SELECT c.path, f.valid_sec FROM file_animals f "
+                "JOIN chunks c ON f.chunk_id = c.id WHERE f.animal_id = ?",
+                (animal,)):
+            m = _WEEK_RE.search(path)
+            if m:
+                hours[m.group(1)] = hours.get(m.group(1), 0) + (sec or 0) / 3600
+        for path, n in conn.execute(
+                "SELECT c.path, COUNT(*) FROM events e "
+                "JOIN chunks c ON e.chunk_id = c.id "
+                "WHERE e.type='interictal_spike' AND e.animal_id = ? "
+                "GROUP BY c.path", (animal,)):
+            m = _WEEK_RE.search(path)
+            if m:
+                spikes[m.group(1)] = spikes.get(m.group(1), 0) + n
+    finally:
+        conn.close()
+    return {w: spikes.get(w, 0) / h for w, h in hours.items() if h}
+
+
 def animal_events(db: str, animal: str) -> dict[str, list[tuple[float, float]]]:
     """-> {file_path: [(onset_sec, confidence)]} for one animal."""
     conn = sqlite3.connect(db)
@@ -87,8 +119,10 @@ def pick_window(events: dict, target_rate: float, week: str,
                 win_sec: float, step_sec: float):
     """Best (path, start_sec, n_spikes, rate) for one week.
 
-    "Best" = windowed rate closest to the cohort mean for that week; ties go to
-    the window with more spikes, so a panel is never an empty stretch.
+    "Best" = windowed rate closest to the target for that week; ties go to the
+    window with more spikes, so a panel is never an empty stretch. This is a
+    first pass over spike TIMES only — no signal is read, so it can range over
+    every file in the week cheaply.
     """
     best = None
     for path, evs in events.items():
@@ -103,6 +137,51 @@ def pick_window(events: dict, target_rate: float, week: str,
             if best is None or key < best[0]:
                 best = (key, path, start, len(inside), rate)
             start += step_sec
+    return best
+
+
+def _spike_amps(y, fs, times, t0):
+    """Signed peak of each spike, measured on the loaded window."""
+    import numpy as np
+    out = []
+    for t in times:
+        seg = y[max(0, int((t - t0 - 0.05) * fs)):int((t - t0 + 0.15) * fs)]
+        if len(seg):
+            out.append(float(seg[np.argmax(np.abs(seg))]))
+    return out
+
+
+def refine_window(path: str, ch: int, evs, target_rate: float, win_sec: float,
+                  step_sec: float, tol: float = 0.3):
+    """Re-pick the window WITHIN one already-loaded file, on amplitude too.
+
+    The rate-only pass can land on a window whose spikes are far bigger than
+    that animal's typical spike (animal 2's week-1 window held two ~1000 µV
+    spikes against a ~360 µV median). Under one shared y-scale that squashes
+    every other row, so among windows whose rate is still within `tol` of the
+    target, prefer the one whose largest spike is closest to the file's median
+    spike amplitude. Costs nothing extra: the whole channel is already cached.
+    """
+    import numpy as np
+    fs, full = load_channel(path, ch)
+    all_amps = np.abs(_spike_amps(full, fs, [t for t, _c in evs], 0.0))
+    if not len(all_amps):
+        return None
+    median_amp = float(np.median(all_amps))
+
+    best = None
+    start = 0.0
+    while start + win_sec <= FILE_LEN_SEC:
+        inside = [t for t, _c in evs if start <= t < start + win_sec]
+        rate = len(inside) / (win_sec / 3600.0)
+        if inside and (target_rate == 0 or
+                       abs(rate - target_rate) <= tol * max(target_rate, 1e-9)):
+            amps = np.abs(_spike_amps(full, fs, inside, 0.0))
+            if len(amps):
+                key = (abs(float(amps.max()) - median_amp), abs(rate - target_rate))
+                if best is None or key < best[0]:
+                    best = (key, start, len(inside), rate, float(amps.max()))
+        start += step_sec
     return best
 
 
@@ -219,6 +298,17 @@ def main() -> int:
                     help="percentile of |signal| setting the long-trace y-limit; "
                          "100 = never clip a spike, lower = fatter background "
                          "band but truncated peaks")
+    ap.add_argument("--target", choices=("cohort", "animal"), default="cohort",
+                    help="match each window to the cohort's mean rate for that "
+                         "week (default) or to the shown animal's own rate")
+    ap.add_argument("--per-row-scale", action="store_true",
+                    help="scale each week independently, with its own scale bar. "
+                         "Use when spike amplitude changes a lot between weeks "
+                         "(animal 2 falls 4x) and a shared scale flattens a row. "
+                         "The panel then shows RATE, not amplitude — say so in "
+                         "the legend.")
+    ap.add_argument("--no-refine", action="store_true",
+                    help="skip the amplitude-typicality refinement pass")
     ap.add_argument("--no-cache", dest="cache", action="store_false",
                     help="ignore/refresh the cached extracted windows")
     args = ap.parse_args()
@@ -241,16 +331,18 @@ def main() -> int:
     os.makedirs(args.outdir, exist_ok=True)
 
     ch = ANIMAL_TO_CH[args.animal]
-    targets = cohort_week_rates(args.db)
+    targets = (animal_week_rates(args.db, args.animal) if args.target == "animal"
+               else cohort_week_rates(args.db))
     events = animal_events(args.db, args.animal)
     weeks = sorted(targets)
-    print(f"animal {args.animal} (code ch{ch})   cohort targets: "
+    print(f"animal {args.animal} (code ch{ch})   {args.target} targets: "
           + ", ".join(f"{w}={targets[w]:.1f}/h" for w in weeks) + "\n")
 
     # Extraction reads ~170 MB per week off a ~1 MB/s share, so cache the
     # extracted windows: re-rendering with different styling is then instant.
-    cache_path = os.path.join(args.outdir,
-                              f"_traces_a{args.animal}_{int(args.long_sec)}s.npz")
+    cache_path = os.path.join(
+        args.outdir,
+        f"_traces_a{args.animal}_{args.target}_{int(args.long_sec)}s.npz")
     panels, win_rows = [], []
     if args.cache and os.path.exists(cache_path):
         panels, win_rows = _unpack(np.load(cache_path, allow_pickle=True))
@@ -270,6 +362,15 @@ def main() -> int:
         if not local:
             print(f"  !! {base} not found under {args.root} — is the share mounted?")
             continue
+        # Second pass inside the chosen file: same rate, more typical spike
+        # amplitudes. The file is loaded once and cached, so this is free.
+        if not args.no_refine:
+            ref = refine_window(local[0], ch, events[db_path], targets[week],
+                                args.long_sec, args.step_sec)
+            if ref and abs(ref[1] - start) > 1.0:
+                _k, start, n_sp, rate, pk = ref
+                print(f"  {week}: refined to +{start:.0f}s "
+                      f"(largest spike {pk:.0f} µV)", flush=True)
         print(f"  {week}: {base} +{start:.0f}s  {n_sp} spikes  "
               f"{rate:.1f}/h (target {targets[week]:.1f})", flush=True)
 
@@ -293,7 +394,8 @@ def main() -> int:
                          "file": base, "window_start_sec": round(start, 1),
                          "window_sec": args.long_sec, "spikes_in_window": n_sp,
                          "window_rate_per_h": round(rate, 2),
-                         "cohort_target_per_h": round(targets[week], 2),
+                         "target_per_h": round(targets[week], 2),
+                         "target_basis": args.target,
                          "zoom_spike_sec": None if mid is None else round(mid, 3)})
 
     if not panels:
@@ -306,24 +408,38 @@ def main() -> int:
     # One y-scale for every row, or the comparison between weeks is meaningless.
     # Default 100th percentile: a truncated spike reads as an artefact in print,
     # so nothing is clipped even though it costs a thinner background band.
-    ylim = max(np.percentile(np.abs(p["long"]), args.ylim_pct)
-               for p in panels) * 1.04
+    def _lim(arrs):
+        return max(np.percentile(np.abs(a), args.ylim_pct) for a in arrs) * 1.04
+
+    if args.per_row_scale:
+        # Each row on its own scale; the scale bar moves to every row so the
+        # reader is never misled into comparing amplitudes across weeks.
+        ylims = [_lim([p["long"]]) for p in panels]
+        zlims = [_lim([p["zoom"]]) if p["zoom"] is not None else 1.0
+                 for p in panels]
+    else:
+        ylims = [_lim([p["long"] for p in panels])] * len(panels)
+        zlims = [_lim([p["zoom"] for p in panels if p["zoom"] is not None])] * len(panels)
+    ylim, zlim = ylims[0], zlims[0]
     zlim = max(np.percentile(np.abs(p["zoom"]), 99.9) for p in panels
                if p["zoom"] is not None) * 1.25
 
     mm = 1 / 25.4
     n_rows = len(panels)
-    fig = plt.figure(figsize=(args.width_mm * mm, 30 * n_rows * mm))
+    row_mm = 34 if args.per_row_scale else 30
+    fig = plt.figure(figsize=(args.width_mm * mm, row_mm * n_rows * mm))
     # Two sub-rows per week: a thin raster row carrying the spike ticks, then
     # the trace. Ticks inside the trace band would be invisible against it.
     gs = GridSpec(n_rows * 2, 2, width_ratios=[3.4, 1],
                   height_ratios=[0.22, 1] * n_rows, figure=fig,
-                  hspace=0.0, wspace=0.14,
+                  hspace=0.30 if args.per_row_scale else 0.0, wspace=0.14,
                   left=0.07, right=0.99, top=0.96, bottom=0.08)
 
     for row, p in enumerate(panels):
         wk = p["week"].replace("_", " ")
         x_max = args.long_sec / 60.0
+        ylim, zlim = ylims[row], zlims[row]
+        show_bar = args.per_row_scale or row == n_rows - 1
 
         # ---- spike raster + labels ----
         at = fig.add_subplot(gs[row * 2, 0])
@@ -347,9 +463,12 @@ def main() -> int:
         ax.set_xlim(0, x_max)
         ax.set_ylim(-ylim, ylim)
         ax.axis("off")
-        if row == n_rows - 1:
-            _scalebar(ax, 0.4, -ylim * 0.95, 5.0, ylim * 0.6,
-                      "5 min", f"{ylim * 0.6:.0f} µV")
+        if show_bar:
+            # In per-row mode the bar must sit INSIDE the row: rows are packed
+            # tight, so a bar at the axis floor overlaps the next week's label.
+            y0 = -ylim * (0.55 if args.per_row_scale else 0.95)
+            _scalebar(ax, 0.4, y0, 5.0, ylim * 0.4,
+                      "5 min", f"{ylim * 0.4:.0f} µV")
 
         # ---- zoom, spanning both sub-rows ----
         az = fig.add_subplot(gs[row * 2:row * 2 + 2, 1])
@@ -361,9 +480,10 @@ def main() -> int:
                         color="#c1272d", clip_on=False)
             az.set_xlim(0, args.zoom_sec)
             az.set_ylim(-zlim, zlim)
-            if row == n_rows - 1:
-                _scalebar(az, 0.3, -zlim * 0.95, 2.0, zlim * 0.6,
-                          "2 s", f"{zlim * 0.6:.0f} µV")
+            if show_bar:
+                z0 = -zlim * (0.55 if args.per_row_scale else 0.95)
+                _scalebar(az, 0.3, z0, 2.0, zlim * 0.4,
+                          "2 s", f"{zlim * 0.4:.0f} µV")
         az.axis("off")
 
     out_pdf = os.path.join(args.outdir, args.out)
@@ -379,8 +499,13 @@ def main() -> int:
     print(f"\nWrote {out_pdf} ({size_kb:.0f} kB, vector)")
     print(f"      {os.path.join(args.outdir, 'windows.csv')} "
           f"(what each panel shows — for the legend)")
-    print(f"      shared y-scale +/-{ylim:.0f} µV (long), "
-          f"+/-{zlim:.0f} µV (zoom)")
+    if args.per_row_scale:
+        print("      per-row y-scale: "
+              + ", ".join(f"{p['week']}=+/-{y:.0f}" for p, y in zip(panels, ylims))
+              + " µV")
+    else:
+        print(f"      shared y-scale +/-{ylims[0]:.0f} µV (long), "
+              f"+/-{zlims[0]:.0f} µV (zoom)")
     return 0
 
 
