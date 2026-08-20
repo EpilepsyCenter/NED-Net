@@ -8,8 +8,12 @@
 # It only overrides the three things that are cohort-specific:
 #   EDF_DIR       -> ad_edf_data (NOT edf_data, which is SV2A)
 #   DB_PATH       -> a fresh, dedicated ad_spikes.db
-#   METADATA_CSV  -> blank; batch_metadata.csv is the SV2A montage and means
-#                    nothing here (no animal/group mapping exists for AD yet)
+#   METADATA_CSV  -> ad_metadata.csv, NOT the SV2A batch_metadata.csv. This is
+#                    required, not cosmetic: the detector only runs on channels
+#                    carrying an animal ID, and the AD headers are generic
+#                    ('Ch1 Biopot'...), so without it every file errors with
+#                    "No animal-ID-mapped EEG channels". Regenerate the CSV with
+#                    make_ad_metadata_csv.py if the IDs or genotypes change.
 #   PATH_INCLUDE  -> blank (all files); the SV2A default 'Week[123]-' would
 #                    match ZERO AD paths, which are 'Week_1/W1_D1/...'
 #
@@ -33,8 +37,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export EDF_DIR="${EDF_DIR:-/lunarc/nobackup/projects/lu2026-2-60/ad_edf_data}"
 export DB_PATH="${DB_PATH:-$HOME/.eeg_seizure_analyzer/projects/ad_spikes.db}"
-export METADATA_CSV=""     # no AD montage CSV — do not inherit the SV2A one
+export METADATA_CSV="${METADATA_CSV:-$HERE/ad_metadata.csv}"   # NOT the SV2A one
 export PATH_INCLUDE=""     # all files
+
+if [ ! -f "$METADATA_CSV" ]; then
+  echo "!! Missing $METADATA_CSV — every file would fail with"
+  echo "   'No animal-ID-mapped EEG channels'. Generate it with:"
+  echo "     python scripts/lunarc/make_ad_metadata_csv.py --edf-dir \"$EDF_DIR\" \\"
+  echo "         --out \"$METADATA_CSV\""
+  exit 1
+fi
 
 if [ -e "$DB_PATH" ]; then
   echo "!! $DB_PATH already exists."
