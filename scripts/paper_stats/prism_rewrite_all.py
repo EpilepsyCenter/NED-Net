@@ -223,6 +223,11 @@ def main() -> int:
         "Per week seizures":  ("weekrows", None, 0.1),
         # rows = day number in column 0; all seizures per HOUR (not per 24 h).
         "Events/animal-hour ALL DAYS":  ("dayrows", None, 0),
+        # rows = group, cols = [increase, decrease] week 1 -> week 3.
+        # Animals with no seizures in either week count as "did not increase",
+        # i.e. decrease, so the two columns still sum to n.
+        "All seizures increase/decrease":    ("incdec", "n", 0),
+        "All seizures increase/decrease %":  ("incdec", "pct", 0),
     }
 
     tmp = tempfile.mkdtemp()
@@ -314,6 +319,20 @@ def main() -> int:
                     plan[(ri, b1 + k)] = v
                 for k, v in enumerate(vs):
                     plan[(ri, b2 + k)] = v
+
+        elif kind == "incdec":
+            for ri, grp in ((0, E), (1, S)):
+                w1 = D.rate(grp, "all", weeks={1})
+                w3 = D.rate(grp, "all", weeks={3})
+                inc = sum(1 for x, y in zip(w1, w3) if y > x)
+                dec = len(grp) - inc
+                if fns == "pct":
+                    vals = [round(100.0 * inc / len(grp)),
+                            round(100.0 * dec / len(grp))]
+                else:
+                    vals = [inc, dec]
+                plan[(ri, 1)] = float(vals[0])
+                plan[(ri, 2)] = float(vals[1])
 
         elif kind == "cols2":
             for cj, vals in enumerate([fns[0](E), fns[0](S)]):
