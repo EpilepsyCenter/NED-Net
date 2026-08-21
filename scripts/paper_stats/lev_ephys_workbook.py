@@ -39,18 +39,33 @@ HDR = PatternFill("solid", fgColor="DDDDDD")
 SPEC = {
     "Frequency": dict(
         unit="instantaneous frequency (Hz)", log=True,
+        cdf_unit="inter-event interval (ms)",
+        cdf_ctrl=("Cont VC Frequency Analysis.prism",
+                  "Cont VC EGFP Freq 1-100", "Cont VC SV2A Freq 1-100"),
+        cdf_lev=("LEV2 Frequency Analysis.prism",
+                 "LEV2 EGFP 1-100 Freq", "LEV2 SV2A 1-100 Freq"),
         ctrl=("Cont VC Frequency Analysis.prism",
               "Cont VC EGFP Frequency all", "Cont VC SV2A Frequency all"),
         lev=("LEV2 Frequency Analysis.prism",
              "LEV2 EGFP Frequency All", "LEV2 SV2A Frequency All")),
     "Amplitude": dict(
         unit="amplitude (pA)", log=False,
+        cdf_unit="amplitude (pA)",
+        cdf_ctrl=("Cont VC Amplitude Analysis.prism",
+                  "Cont VC EGFP 1-100 Amp", "Cont VC SV2A 1-100"),
+        cdf_lev=("LEV2 Amplitude Analysis.prism",
+                 "LEV2 EGFP 1-100 Amp", "LEV2 SV2A 1-100 Amp"),
         ctrl=("Cont VC Amplitude Analysis.prism",
               "Cont VC EGFP Amplitude All", "Cont VC SV2A Amplitude All"),
         lev=("LEV2 Amplitude Analysis.prism",
              "LEV2 EGFP Amplitude All", "LEV2 SV2A Amplitude All")),
     "RiseTime": dict(
         unit="rise time (ms)", log=False,
+        cdf_unit="rise time (ms)",
+        cdf_ctrl=("Cont VC Rise Time Analysis.prism",
+                  "Cont VC EGFP RT 1-100", "Cont VC SV2A RT 1-100"),
+        cdf_lev=("LEV2 Rise Time Analysis.prism",
+                 "LEV2 EGFP 1-100 RT", "LEV2 SV2A 1-100 RT"),
         ctrl=("Cont VC Rise Time Analysis.prism",
               "Cont VC EGFP Rise time all", "Cont VC SV2A Rise time all"),
         lev=("LEV2 Rise Time Analysis.prism",
@@ -117,7 +132,24 @@ def main() -> int:
         }
         means = {k: np.array([c.mean() for c in v]) for k, v in cells.items()}
         meds = {k: np.array([np.median(c) for c in v]) for k, v in cells.items()}
-        pooled = {k: np.concatenate(v) for k, v in cells.items()}
+        # The cumulative panels in Figure 2 do NOT use every event: Prism pooled
+        # the first N events per cell, N = 100 where every cell had that many
+        # (control, 6x100 = 600) and 60 where one cell had only 60 (LEV,
+        # 7x60 = 420). Those tables are inter-event INTERVALS in ms, not the
+        # sorted instantaneous frequencies in the "all" tables. Reproduce that
+        # exactly so the new panels are comparable with the published ones.
+        fcd, ce_d, cs_d = spec["cdf_ctrl"]
+        fld, le_d, ls_d = spec["cdf_lev"]
+        sub = {"EGFP control": columns(fcd, ce_d), "SV2A control": columns(fcd, cs_d),
+               "EGFP LEV": columns(fld, le_d), "SV2A LEV": columns(fld, ls_d)}
+        n_ctrl = min(100, min(len(c) for k in ("EGFP control", "SV2A control")
+                              for c in sub[k]))
+        n_lev = min(100, min(len(c) for k in ("EGFP LEV", "SV2A LEV")
+                             for c in sub[k]))
+        take = {"EGFP control": n_ctrl, "SV2A control": n_ctrl,
+                "EGFP LEV": n_lev, "SV2A LEV": n_lev}
+        pooled = {k: np.concatenate([c[:take[k]] for c in v])
+                  for k, v in sub.items()}
 
         # ---------- per-cell sheet ----------
         ws = wb.create_sheet(key)
@@ -167,8 +199,9 @@ def main() -> int:
 
         # ---------- cumulative-distribution sheet ----------
         wsd = wb.create_sheet(f"CDF_{key}")
-        wsd["A1"] = (f"sIPSC {spec['unit']} — pooled events, for cumulative "
-                     "distribution plots")
+        wsd["A1"] = (f"sIPSC {spec['cdf_unit']} — for cumulative distribution "
+                     f"plots (first {n_ctrl} events per cell in control, "
+                     f"{n_lev} in LEV, pooled — as in Figure 2)")
         wsd["A1"].font = BOLD
         wsd["A2"] = ("PRISM: paste a column, then Analyze -> Cumulative frequency "
                      "distribution (or plot as XY)")
@@ -189,11 +222,15 @@ def main() -> int:
         for a, b, lab in contrasts:
             D, p = ks(pooled[a], pooled[b])
             lines.append(f"  {lab:26} D = {D:.4f}   P = {p:.3g}   {star(p)}")
-            summary.append((spec["unit"], lab, D, p))
+            summary.append((spec["cdf_unit"], lab, D, p))
         lines += ["",
-                  "  Events are pooled within group and treated as independent,",
-                  "  as elsewhere in the manuscript; D is the informative measure",
-                  "  and the cell-level tests above carry the inference."]
+                  f"  Sampling: first {n_ctrl} events per cell in control and "
+                  f"{n_lev} in LEV, pooled,",
+                  "  matching how the Figure 2 cumulative panels were built (N is",
+                  "  set by the cell with the fewest events in that condition).",
+                  "  Events are pooled within group and treated as independent, as",
+                  "  elsewhere in the manuscript; D is the informative measure and",
+                  "  the cell-level tests carry the inference."]
         for i, t in enumerate(lines):
             wsd.cell(row=r + i, column=1, value=t).font = BOLD if i == 0 else ITAL
         for c in "ABCD":
