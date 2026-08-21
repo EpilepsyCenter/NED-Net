@@ -51,6 +51,20 @@ EDITS = [
      "the mean ± s.e.m. across cells. sIPSC and mIPSC frequency, amplitude and "
      "rise time were compared by unpaired Welch's t-test"),
 
+    # --- Figure 2 legend: the ephys panels plot s.d., not s.e.m.
+    ("(d,e) Cumulative inter-event-interval distributions",
+     "bars show the mean ± s.e.m. across cells",
+     "bars show the mean ± s.d. across cells"),
+
+    # --- Methods: name the panels that depart from the s.e.m. default
+    ("Data are shown as mean ± s.e.m. with individual data points overlaid",
+     "the cumulative convulsive seizure burden in Fig. 3g is shown as the "
+     "median because the SV2A distribution is bimodal.",
+     "the cumulative convulsive seizure burden in Fig. 3g is shown as the "
+     "median because the SV2A distribution is bimodal, and the "
+     "electrophysiology panels in Fig. 2 and Extended Data Fig. 1 show "
+     "mean ± s.d."),
+
     # --- Figure 4 legend: D for panel f
     ("(e) Probability-density and (f) cumulative distributions",
      "inter-spike-interval distributions compared by two-sample "

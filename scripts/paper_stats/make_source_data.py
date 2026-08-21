@@ -33,6 +33,7 @@ from openpyxl.utils import get_column_letter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from prism_rewrite_all import Data                      # noqa: E402
 from fig3_replacement_panels import cumulative          # noqa: E402
+from lev_ephys_workbook import columns as eph_columns, SPEC as EPH_SPEC  # noqa: E402
 
 BOLD = Font(bold=True)
 BIG = Font(bold=True, size=12)
@@ -529,6 +530,63 @@ def main() -> int:
         rowptr[fig] += 2
         covered.append((fig, panel, caption))
 
+    # ---- Extended Data 1: acute levetiracetam ephys ----
+    fig = "Extended Data 1"
+    sh = wb.create_sheet(fig)
+    sheets[fig] = sh
+    rowptr[fig] = 1
+    PANEL_OF = {"Frequency": ("a", "b"), "Amplitude": ("c", "d"),
+                "RiseTime": ("e", "f")}
+    grp4 = ["EGFP control", "EGFP LEV", "SV2A control", "SV2A LEV"]
+    for key, spec in EPH_SPEC.items():
+        bar_p, cdf_p = PANEL_OF[key]
+        fc, ce_t, cs_t = spec["ctrl"]
+        fl, le_t, ls_t = spec["lev"]
+        cells = {"EGFP control": eph_columns(fc, ce_t),
+                 "EGFP LEV": eph_columns(fl, le_t),
+                 "SV2A control": eph_columns(fc, cs_t),
+                 "SV2A LEV": eph_columns(fl, ls_t)}
+        meds = {k: [float(np.median(c)) for c in v] for k, v in cells.items()}
+        emit(sh, fig, f"{fig}{bar_p} — sIPSC {spec['unit']}, per-cell medians", BIG)
+        emit(sh, fig, "Statistical test: unpaired Welch's t-test "
+                      "(levetiracetam and control are different cells)", ITAL)
+        emit(sh, fig, None, BOLD, ["cell"] + grp4)
+        for i in range(max(len(v) for v in meds.values())):
+            emit(sh, fig, None, None,
+                 [i + 1] + [round(meds[g][i], 4) if i < len(meds[g]) else None
+                            for g in grp4])
+        rowptr[fig] += 1
+        covered.append((fig, bar_p, f"sIPSC {spec['unit']}, per-cell medians"))
+
+        fcd, ce_d, cs_d = spec["cdf_ctrl"]
+        fld, le_d, ls_d = spec["cdf_lev"]
+        sub = {"EGFP control": eph_columns(fcd, ce_d),
+               "SV2A control": eph_columns(fcd, cs_d),
+               "EGFP LEV": eph_columns(fld, le_d),
+               "SV2A LEV": eph_columns(fld, ls_d)}
+        n_c = min(100, min(len(c) for k in ("EGFP control", "SV2A control")
+                           for c in sub[k]))
+        n_l = min(100, min(len(c) for k in ("EGFP LEV", "SV2A LEV")
+                           for c in sub[k]))
+        take = {"EGFP control": n_c, "SV2A control": n_c,
+                "EGFP LEV": n_l, "SV2A LEV": n_l}
+        pooled = {k: np.concatenate([c[:take[k]] for c in v])
+                  for k, v in sub.items()}
+        emit(sh, fig,
+             f"{fig}{cdf_p} — sIPSC {spec['cdf_unit']}, cumulative distribution",
+             BIG)
+        emit(sh, fig, "Statistical test: two-sample Kolmogorov-Smirnov", ITAL)
+        emit(sh, fig, f"First {n_c} events per cell in control and {n_l} in "
+                      "levetiracetam, pooled within group — as in Figure 2.", ITAL)
+        emit(sh, fig, None, BOLD, [f"{g} (n={len(pooled[g])})" for g in grp4])
+        for i in range(max(len(v) for v in pooled.values())):
+            emit(sh, fig, None, None,
+                 [round(float(pooled[g][i]), 5) if i < len(pooled[g]) else None
+                  for g in grp4])
+        rowptr[fig] += 1
+        covered.append((fig, cdf_p,
+                        f"sIPSC {spec['cdf_unit']}, cumulative distribution"))
+
     for f, sh in sheets.items():
         sh.column_dimensions["A"].width = 20
         sh.column_dimensions["B"].width = 12
@@ -590,6 +648,12 @@ def main() -> int:
         ("  n = 10 WT-Ctrl, 5 5xFAD-EGFP, 9 5xFAD-SV2A in the Barnes maze; two", ITAL),
         ("  5xFAD-EGFP animals were lost between the recognition tasks and the", ITAL),
         ("  Barnes maze.", ITAL),
+        ("", ITAL),
+        ("ACUTE LEVETIRACETAM EPHYS (Extended Data 1)", BOLD),
+        ("  From the Ephys 'Cont VC' and 'LEV2' Prism files. Levetiracetam and", ITAL),
+        ("  control recordings are from different cells, so comparisons are", ITAL),
+        ("  unpaired. Bar panels use per-cell medians; the cumulative panels", ITAL),
+        ("  use the first N events per cell pooled within group, as in Figure 2.", ITAL),
         ("", ITAL),
         ("NOT INCLUDED", BOLD),
         ("  Supplementary Figure 1 (NED-Net validation).", ITAL),
