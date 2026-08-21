@@ -1,16 +1,17 @@
 #!/usr/bin/env python
 """Acute-levetiracetam sIPSC data for Extended Data Fig. 1, ready for Prism.
 
-Per-cell MEANS for the bar panels, and the pooled event distributions for the
+Per-cell MEDIANS for the bar panels, and the pooled event distributions for the
 cumulative panels, with two-sample Kolmogorov-Smirnov D and P for every
 contrast — matching how the other distribution panels are reported.
 
-NOTE ON MEANS. The per-event values for frequency are INSTANTANEOUS frequency
-(1/interval), which is strongly right-skewed: a burst of short intervals pulls
-the mean well above the median (EGFP cell 1: median 3.44 Hz, mean 6.68 Hz).
-The existing Figure 2 panels use per-cell medians for this reason. Means are
-provided here as requested and both are written out, so the choice is visible
-rather than buried.
+WHY MEDIANS. Each cell contributes many events, summarised within the cell
+before averaging across cells — the same construction as Figure 2. For
+frequency the per-event values are INSTANTANEOUS frequency (1/interval),
+strongly right-skewed, so per-cell means run about twice the medians and the
+Figure 2c group difference is lost on means (P = 0.048 vs 0.116). Medians are
+therefore the primary values here; means are written out underneath for
+reference.
 
     python scripts/paper_stats/lev_ephys_workbook.py
 """
@@ -97,7 +98,7 @@ def star(p):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default="ExtendedData_LEV_ephys.xlsx")
+    ap.add_argument("--out", default=os.path.join(EPH, "ExtendedData_LEV_ephys.xlsx"))
     args = ap.parse_args()
 
     wb = openpyxl.Workbook()
@@ -120,7 +121,7 @@ def main() -> int:
 
         # ---------- per-cell sheet ----------
         ws = wb.create_sheet(key)
-        ws["A1"] = f"sIPSC {spec['unit']} — per-cell MEANS"
+        ws["A1"] = f"sIPSC {spec['unit']} — per-cell MEDIANS (use these)"
         ws["A1"].font = BOLD
         ws["A2"] = "PRISM TABLE TYPE: Column (4 groups; one value per cell)"
         ws["A2"].font = BOLD
@@ -129,33 +130,36 @@ def main() -> int:
             cell = ws.cell(row=4, column=c + 1, value=h)
             cell.font, cell.fill = BOLD, HDR
         for c, k in enumerate(order):
-            for r, x in enumerate(means[k]):
+            for r, x in enumerate(meds[k]):
                 ws.cell(row=5 + r, column=c + 1, value=round(float(x), 4))
-        r = 5 + max(len(v) for v in means.values()) + 1
-        ws.cell(row=r, column=1, value="per-cell MEDIANS (for reference)").font = BOLD
+        r = 5 + max(len(v) for v in meds.values()) + 1
+        ws.cell(row=r, column=1,
+                value="per-cell MEANS (reference only — see note below)").font = BOLD
         r += 1
         for c, h in enumerate(order):
             cell = ws.cell(row=r, column=c + 1, value=h)
             cell.font, cell.fill = BOLD, HDR
         for c, k in enumerate(order):
-            for rr, x in enumerate(meds[k]):
+            for rr, x in enumerate(means[k]):
                 ws.cell(row=r + 1 + rr, column=c + 1, value=round(float(x), 4))
-        r = r + 1 + max(len(v) for v in meds.values()) + 1
+        r = r + 1 + max(len(v) for v in means.values()) + 1
 
         W = lambda a, b: stats.ttest_ind(a, b, equal_var=False).pvalue
-        notes = ["STATISTICS on the per-cell means — unpaired Welch's t-test",
-                 f"  EGFP control vs SV2A control : P = {W(means['EGFP control'], means['SV2A control']):.4f}",
-                 f"  EGFP LEV     vs SV2A LEV     : P = {W(means['EGFP LEV'], means['SV2A LEV']):.4f}",
-                 f"  EGFP control vs EGFP LEV     : P = {W(means['EGFP control'], means['EGFP LEV']):.4f}",
-                 f"  SV2A control vs SV2A LEV     : P = {W(means['SV2A control'], means['SV2A LEV']):.4f}",
+        notes = ["STATISTICS on the per-cell MEDIANS — unpaired Welch's t-test",
+                 f"  EGFP control vs SV2A control : P = {W(meds['EGFP control'], meds['SV2A control']):.4f}",
+                 f"  EGFP LEV     vs SV2A LEV     : P = {W(meds['EGFP LEV'], meds['SV2A LEV']):.4f}",
+                 f"  EGFP control vs EGFP LEV     : P = {W(meds['EGFP control'], meds['EGFP LEV']):.4f}",
+                 f"  SV2A control vs SV2A LEV     : P = {W(meds['SV2A control'], meds['SV2A LEV']):.4f}",
                  "",
-                 "  n cells: " + ", ".join(f"{k} {len(means[k])}" for k in order),
+                 "  n cells: " + ", ".join(f"{k} {len(meds[k])}" for k in order),
                  "  LEV cells are NOT the control cells — comparisons are unpaired.",
                  ""]
         if key == "Frequency":
-            notes += ["  CAUTION: these are means of INSTANTANEOUS frequency, which is",
-                      "  right-skewed, so they run about twice the medians. Figure 2",
-                      "  uses medians for this measure. Medians are given above.", ""]
+            notes += ["  Medians are used because these are INSTANTANEOUS frequencies,",
+                      "  which are strongly right-skewed: per-cell means run about twice",
+                      "  the medians and the Figure 2c group difference does not survive",
+                      "  the switch (P = 0.048 on medians, 0.116 on means). Figure 2 uses",
+                      "  medians for the same reason — keep the two consistent.", ""]
         for i, t in enumerate(notes):
             ws.cell(row=r + i, column=1, value=t).font = BOLD if i == 0 else ITAL
         for c in "ABCD":
@@ -196,7 +200,7 @@ def main() -> int:
             wsd.column_dimensions[c].width = 18
 
     lines = [("Acute levetiracetam on sIPSCs — Extended Data Fig. 1", BOLD), ("", ITAL),
-             ("Per-measure sheets hold per-cell MEANS (and medians for reference)",
+             ("Per-measure sheets hold per-cell MEDIANS (means below, for reference)",
               ITAL),
              ("for the bar panels; CDF_ sheets hold the pooled events for the",
               ITAL),
