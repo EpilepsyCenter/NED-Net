@@ -62,8 +62,7 @@ def group_labels(book, width):
     The 5xFAD experiments use WT / 5xFAD-EGFP / 5xFAD-SV2A, not the SV2A
     cohort's EGFP / SV2A, and the two-group baseline panels are WT vs 5xFAD.
     """
-    fivex = book and book.startswith("AD/") and "Interictal" not in book
-    if fivex:
+    if _is_5x(book):
         names = ["WT", "5xFAD-EGFP", "5xFAD-SV2A"]
         if width == 2:
             names = ["WT", "5xFAD"]
@@ -75,11 +74,41 @@ def group_labels(book, width):
 
 
 def block_note(book):
-    fivex = book and book.startswith("AD/") and "Interictal" not in book
-    who = ("WT, then 5xFAD-EGFP, then 5xFAD-SV2A" if fivex
-           else "EGFP block then SV2A block")
-    return ("Row = condition/trial; values are individual animals, "
-            + who + ", in the order plotted.")
+    return ("Each column is one animal; the header row gives its group. "
+            "Blank = no value for that animal.")
+
+
+def block_split(book, width):
+    """-> (n_label_cols, block_width) for a Prism grouped table.
+
+    Blocks are equal width, one per group, so the data columns must divide by
+    the number of groups. Some tables carry a leading label column (trial
+    number, condition) and some do not — assuming one where there is none
+    shifts every block and silently drops values off the end, so pick whichever
+    divides exactly, preferring a label column when both do.
+    """
+    n = len(group_labels(book, 3 if _is_5x(book) else 2))
+    for n_hdr in (1, 0):
+        if width > n_hdr and (width - n_hdr) % n == 0:
+            return n_hdr, (width - n_hdr) // n
+    return 1, max(1, (width - 1) // n)
+
+
+def block_header(book, width):
+    """Column headings naming the group of every animal column."""
+    names = group_labels(book, 3 if _is_5x(book) else 2)
+    n_hdr, per = block_split(book, width)
+    head = [""] * n_hdr
+    for g in names:
+        for i in range(per):
+            head.append(f"{g} {i + 1}")
+    while len(head) < width:
+        head.append("")
+    return head[:width]
+
+
+def _is_5x(book):
+    return bool(book) and book.startswith("AD/") and "Interictal" not in book
 
 
 MW = "Mann-Whitney U, two-tailed"
@@ -407,12 +436,16 @@ def main() -> int:
                 emit(sh, fig, None, None, [int(idx)] + vals)
 
         elif layout == "ROWBLOCK":
+            width = max(len(r) for r in rows)
+            n_hdr, _per = block_split(book, width)
             emit(sh, fig, block_note(book), ITAL)
+            emit(sh, fig, None, BOLD, block_header(book, width))
             for r_ in rows:
                 if not any((c or "").strip() for c in r_):
                     continue
                 emit(sh, fig, None, None,
-                     [r_[0]] + [_num(c) for c in r_[1:]])
+                     [(r_[i] or "") if i < n_hdr else _num(r_[i])
+                      for i in range(len(r_))])
 
         elif layout == "AUTO":
             width = max(len(r) for r in rows)
@@ -423,11 +456,14 @@ def main() -> int:
                     if any(v is not None for v in vals):
                         emit(sh, fig, None, None, vals)
             else:
+                n_hdr, _per = block_split(book, width)
                 emit(sh, fig, block_note(book), ITAL)
+                emit(sh, fig, None, BOLD, block_header(book, width))
                 for r_ in rows:
                     if any((c or "").strip() for c in r_):
                         emit(sh, fig, None, None,
-                             [r_[0]] + [_num(c) for c in r_[1:]])
+                             [(r_[i] or "") if i < n_hdr else _num(r_[i])
+                              for i in range(len(r_))])
 
         elif layout == "SURV":
             emit(sh, fig,
