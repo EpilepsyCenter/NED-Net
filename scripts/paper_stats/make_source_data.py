@@ -246,45 +246,46 @@ PANELS = [
      "Barnes maze, change in AUC of total errors", "Kruskal-Wallis with Dunn's multiple comparisons", "AUTO"),
 
     # Extended Data 2 — object location and novel object recognition, 5xFAD triad.
-    ("Extended Data 2", "a", OLT2, "Time in object (test) GROUPED",
+    ("Extended Data 3", "a", OLT2, "Time in object (test) GROUPED",
      "Object location: exploration time (s), familiar vs displaced", KW, "ROWBLOCK"),
-    ("Extended Data 2", "b", OLT2, "zone entries (no. of investigations) GROUPED",
+    ("Extended Data 3", "b", OLT2, "zone entries (no. of investigations) GROUPED",
      "Object location: head entries, familiar vs displaced", KW, "ROWBLOCK"),
-    ("Extended Data 2", "c", OLT2, "DI test NEW",
+    ("Extended Data 3", "c", OLT2, "DI test NEW",
      "Object location: discrimination index "
      "(columns: WT-Sham, 5xFAD-EGFP, 5xFAD-SV2A)", KW, "AUTO"),
-    ("Extended Data 2", "d", NORT, "Time in object test GROUPED",
+    ("Extended Data 3", "d", NORT, "Time in object test GROUPED",
      "Novel object: exploration time (s), familiar vs novel", KW, "ROWBLOCK"),
-    ("Extended Data 2", "e", NORT, "Head entries test GROUPED",
+    ("Extended Data 3", "e", NORT, "Head entries test GROUPED",
      "Novel object: head entries, familiar vs novel", KW, "ROWBLOCK"),
-    ("Extended Data 2", "f", NORT, "Data 14",
+    ("Extended Data 3", "f", NORT, "Data 14",
      "Novel object: discrimination index "
      "(columns: WT-Sham, 5xFAD-EGFP, 5xFAD-SV2A)", KW, "AUTO"),
 
     # Extended Data 3 — Barnes maze training curves and probe trial.
-    ("Extended Data 3", "a", BARN, "Primary latency, training",
+    ("Extended Data 4", "a", BARN, "Primary latency, training",
      "Barnes maze training: primary latency (s), rows = trials 1-5", AN, "ROWBLOCK"),
-    ("Extended Data 3", "b", BARN, "Total latency, training",
+    ("Extended Data 4", "b", BARN, "Total latency, training",
      "Barnes maze training: total latency (s), rows = trials 1-5", AN, "ROWBLOCK"),
-    ("Extended Data 3", "c", BARN, "Primary errors, training",
+    ("Extended Data 4", "c", BARN, "Primary errors, training",
      "Barnes maze training: primary errors, rows = trials 1-5", AN, "ROWBLOCK"),
-    ("Extended Data 3", "d", BARN, "Total errors, training",
+    ("Extended Data 4", "d", BARN, "Total errors, training",
      "Barnes maze training: total errors, rows = trials 1-5", AN, "ROWBLOCK"),
-    ("Extended Data 3", "e", BARN, "Latency, probe",
+    ("Extended Data 4", "e", BARN, "Latency, probe",
      "Barnes maze probe trial: latency (s)", KW, "AUTO"),
-    ("Extended Data 3", "f", BARN, "Errors, probe",
+    ("Extended Data 4", "f", BARN, "Errors, probe",
      "Barnes maze probe trial: errors", KW, "AUTO"),
 
-    # AD (5xFAD) cohort = Extended Data Fig. 1 per the manuscript and the
+    # AD (5xFAD) cohort = Extended Data Fig. 2 after the levetiracetam ephys
+    # was added as Fig. 1; see README. Formerly Fig. 1 per the manuscript and the
     # Extended Data legends. The PDF file is named "...Figure 3" — the figure
     # FILES are shuffled relative to the text; see README.
-    ("Extended Data 1 (AD)", "c", ADSPK, "spike_rate_by_day",
+    ("Extended Data 2", "c", ADSPK, "spike_rate_by_day",
      "Interictal spikes per animal-hour, by recording day (col 1 = day, then "
      "animals 1-4, then cohort mean)", "Linear regression", "RAW"),
-    ("Extended Data 1 (AD)", "d", ADSPK, "spike_rate_by_week",
+    ("Extended Data 2", "d", ADSPK, "spike_rate_by_week",
      "Interictal spikes per animal-hour, by week (rows = animals 1-4)",
      "Descriptive", "RAW"),
-    ("Extended Data 1 (AD)", "-", None, None,
+    ("Extended Data 2", "-", None, None,
      "Seizures detected in the AD cohort (not plotted; quoted in the text)",
      "Descriptive", "ADSEIZ"),
 ]
@@ -673,6 +674,19 @@ def main() -> int:
         readme.cell(row=r, column=1, value=f"      {panel}   {caption}").font = ITAL
         r += 1
     readme.column_dimensions["A"].width = 100
+
+    # sheets are created in panel order, which leaves the Extended Data tabs
+    # jumbled; sort them so the workbook reads in figure order
+    def _key(ws):
+        t = ws.title
+        if t == "README":
+            return (0, 0)
+        if t.startswith("Figure"):
+            return (1, int(t.split()[1]))
+        if t.startswith("Extended Data"):
+            return (2, int(t.split()[2]))
+        return (3, 0)
+    wb._sheets.sort(key=_key)
 
     wb.save(args.out)
     print(f"Wrote {args.out}: {len(figures)} figure sheets, "
