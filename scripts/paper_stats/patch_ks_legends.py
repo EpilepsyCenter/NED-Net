@@ -43,6 +43,14 @@ EDITS = [
      "pooled within group and are descriptive; the cell-level comparisons in "
      "c, f and i provide the inferential statistics. *P < 0.05."),
 
+    # --- Figure 2 legend: say what the plotted symbols are
+    ("(d,e) Cumulative inter-event-interval distributions",
+     "Data are mean ± s.e.m.; sIPSC and mIPSC frequency, amplitude and rise "
+     "time compared by unpaired Welch's t-test",
+     "Each symbol is the median of all events recorded in one cell; bars show "
+     "the mean ± s.e.m. across cells. sIPSC and mIPSC frequency, amplitude and "
+     "rise time were compared by unpaired Welch's t-test"),
+
     # --- Figure 4 legend: D for panel f
     ("(e) Probability-density and (f) cumulative distributions",
      "inter-spike-interval distributions compared by two-sample "
