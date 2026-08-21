@@ -47,6 +47,8 @@ ANALYSIS = ("/Users/marcoledri/Dropbox/Work/Manuscripts and papers/"
 SEIZ = "Seizure_data_conf0.5.prism"
 IMMU = "SV2A Immuno.prism"
 BEHAV = "All Behaviour tests.prism"
+EPHYS = "Ephys/Ephys_summary.prism"
+ADSPK = "AD/AD_Interictal_spikes.prism"
 
 MW = "Mann-Whitney U, two-tailed"
 WSR = "Wilcoxon matched-pairs signed-rank (within animal)"
@@ -57,6 +59,29 @@ PANELS = [
      "SV2A-positive cell density (cells/mm2) by hippocampal region", MW, "ROWBLOCK"),
     ("Figure 1", "k", IMMU, "MGV (individual)",
      "SV2A immunoreactivity, mean grey value, by hippocampal region", MW, "ROWBLOCK"),
+
+    # Figure 2 — in vitro electrophysiology. sIPSC = "IPSC", mIPSC = "TTX"
+    # (miniature currents recorded in tetrodotoxin).
+    ("Figure 2", "c", EPHYS, "Frequency grouped",
+     "sIPSC / mIPSC frequency (Hz)", MW, "ROWBLOCK"),
+    ("Figure 2", "d", EPHYS, "IPSC IEI distribution",
+     "sIPSC inter-event interval, cumulative distribution",
+     "Kolmogorov-Smirnov", "RAW"),
+    ("Figure 2", "e", EPHYS, "TTX Frequency distribution",
+     "mIPSC inter-event interval, cumulative distribution",
+     "Kolmogorov-Smirnov", "RAW"),
+    ("Figure 2", "f", EPHYS, "Amplitude grouped",
+     "sIPSC / mIPSC amplitude (pA)", MW, "ROWBLOCK"),
+    ("Figure 2", "g", EPHYS, "IPSC Amplitude distribution",
+     "sIPSC amplitude, cumulative distribution", "Kolmogorov-Smirnov", "RAW"),
+    ("Figure 2", "h", EPHYS, "TTX Amplitude distribution",
+     "mIPSC amplitude, cumulative distribution", "Kolmogorov-Smirnov", "RAW"),
+    ("Figure 2", "i", EPHYS, "RT grouped",
+     "sIPSC / mIPSC rise time (ms)", MW, "ROWBLOCK"),
+    ("Figure 2", "j", EPHYS, "IPSC RT distribution",
+     "sIPSC rise time, cumulative distribution", "Kolmogorov-Smirnov", "RAW"),
+    ("Figure 2", "k", EPHYS, "TTX RT distribution",
+     "mIPSC rise time, cumulative distribution", "Kolmogorov-Smirnov", "RAW"),
 
     ("Figure 3", "c", SEIZ, "Seizures/day",
      "Seizures per 24 h of recording, baseline (weeks 1-3)", MW, "GG"),
@@ -136,6 +161,19 @@ PANELS = [
      "Open field — time in centre (s)", MW, "AUTO"),
     ("Figure 6", "o", BEHAV, "% Time in Center Arena OFT",
      "Open field — time in centre (% of mobile time)", MW, "AUTO"),
+
+    # AD (5xFAD) cohort = Extended Data Fig. 1 per the manuscript and the
+    # Extended Data legends. The PDF file is named "...Figure 3" — the figure
+    # FILES are shuffled relative to the text; see README.
+    ("Extended Data 1 (AD)", "c", ADSPK, "spike_rate_by_day",
+     "Interictal spikes per animal-hour, by recording day (col 1 = day, then "
+     "animals 1-4, then cohort mean)", "Linear regression", "RAW"),
+    ("Extended Data 1 (AD)", "d", ADSPK, "spike_rate_by_week",
+     "Interictal spikes per animal-hour, by week (rows = animals 1-4)",
+     "Descriptive", "RAW"),
+    ("Extended Data 1 (AD)", "-", None, None,
+     "Seizures detected in the AD cohort (not plotted; quoted in the text)",
+     "Descriptive", "ADSEIZ"),
 ]
 
 
@@ -182,7 +220,7 @@ def main() -> int:
     args = ap.parse_args()
 
     books = {}
-    for f in (SEIZ, IMMU, BEHAV):
+    for f in (SEIZ, IMMU, BEHAV, EPHYS, ADSPK):
         p = f if os.path.exists(f) else os.path.join(ANALYSIS, f)
         if not os.path.exists(p):
             print(f"  !! missing {f}")
@@ -342,6 +380,31 @@ def main() -> int:
                      + [round(float(np.median([cum[a][i] for a in E])), 3),
                         round(float(np.median([cum[a][i] for a in S])), 3)])
 
+        elif layout == "ADSEIZ":
+            import sqlite3
+            adb = os.path.expanduser(
+                "~/.eeg_seizure_analyzer/projects/ad_seizures_local.db")
+            if not os.path.exists(adb):
+                emit(sh, fig, f"(not built: {adb} not found)", ITAL)
+            else:
+                emit(sh, fig,
+                     "Confidence >= 0.5; every event visually confirmed. "
+                     "Recording 462 h per animal (1,847 animal-hours).", ITAL)
+                emit(sh, fig, None, BOLD,
+                     ["animal", "week", "convulsive", "non-convulsive"])
+                con = sqlite3.connect(adb)
+                rowsq = con.execute(
+                    "SELECT e.animal_id, "
+                    "  CASE WHEN c.path LIKE '%Week_1%' THEN 1 "
+                    "       WHEN c.path LIKE '%Week_2%' THEN 2 ELSE 3 END wk, "
+                    "  SUM(e.type='convulsive'), SUM(e.type='non_convulsive') "
+                    "FROM events e JOIN chunks c ON e.chunk_id=c.id "
+                    "WHERE e.cnn_confidence>=0.5 "
+                    "GROUP BY e.animal_id, wk ORDER BY e.animal_id, wk").fetchall()
+                con.close()
+                for a, w, cv, nc in rowsq:
+                    emit(sh, fig, None, None, [f"AD animal {a}", w, cv, nc])
+
         else:   # RAW
             emit(sh, fig, "Curve data as plotted; columns as in the figure.", ITAL)
             for r_ in rows:
@@ -382,10 +445,32 @@ def main() -> int:
         ("  EGFP block followed by SV2A block; animal identifiers were not", ITAL),
         ("  recorded in the analysis files.", ITAL),
         ("", ITAL),
+        ("ELECTROPHYSIOLOGY (Figure 2) — from 'Ephys/Ephys_summary.prism'", BOLD),
+        ("  sIPSC = tables named 'IPSC'; mIPSC = tables named 'TTX'", ITAL),
+        ("  (miniature currents recorded in tetrodotoxin).", ITAL),
+        ("  CHECK: the current Figure 2 PDF labels panel e's x-axis", ITAL),
+        ("  'Amplitude (pA)', but the manuscript describes panels d,e as", ITAL),
+        ("  inter-event interval. Panels here follow the manuscript.", ITAL),
+        ("", ITAL),
+        ("AD COHORT (5xFAD) — from 'AD/AD_Interictal_spikes.prism'", BOLD),
+        ("  Spike rates use the standard baseline-relative detector.", ITAL),
+        ("  The seizure block is not plotted; it supports the numbers quoted", ITAL),
+        ("  in the text, and every event was visually confirmed.", ITAL),
+        ("  Numbered Extended Data 1, following the manuscript and the", ITAL),
+        ("  Extended Data legends.", ITAL),
+        ("", ITAL),
+        ("  CHECK — THE EXTENDED DATA PDF FILES ARE MISNAMED.", BOLD),
+        ("  Manuscript text and legends say:  ED1 = AD interictal spikes,", ITAL),
+        ("     ED2 = object location / novel object, ED3 = Barnes maze.", ITAL),
+        ("  The PDF files currently hold:  'ExtendedData_Figure 1.pdf' = OLT/NOR,", ITAL),
+        ("     'ExtendedData_Figure 2.pdf' = Barnes, 'ExtendedData_Figure 3.pdf'", ITAL),
+        ("     = AD spikes. The three files need renaming 3->1, 1->2, 2->3", ITAL),
+        ("     before submission, or the citations will point at the wrong", ITAL),
+        ("     figures.", ITAL),
+        ("", ITAL),
         ("NOT INCLUDED (data held outside the Prism analysis files)", BOLD),
-        ("  Figure 2 — in vitro electrophysiology ('Ephys' folder)", ITAL),
         ("  Figure 7 — 5xFAD behaviour / Barnes maze", ITAL),
-        ("  Extended Data Figures 1-3, Supplementary Figure 1", ITAL),
+        ("  Extended Data (OLT/NOR, Barnes), Supplementary Figure 1", ITAL),
         ("", ITAL),
         ("CONTENTS", BOLD),
     ]
