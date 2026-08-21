@@ -39,12 +39,15 @@ ITAL = Font(italic=True, size=9)
 HDR = PatternFill("solid", fgColor="DDDDDD")
 
 
-def cumulative(D, E, S):
-    """-> {animal: [cumulative seizure MINUTES after each baseline day 1..21]}"""
+def cumulative(D, E, S, kind="all"):
+    """-> {animal: [cumulative seizure MINUTES after each baseline day 1..21]}
+
+    kind: 'all' | 'convulsive' | 'non_convulsive'
+    """
     import collections
     sec = collections.defaultdict(float)
-    for ci, a, _t, d in D.ev:
-        if D.wk.get(ci) in BASE:
+    for ci, a, t, d in D.ev:
+        if D.wk.get(ci) in BASE and (kind == "all" or t == kind):
             sec[(a, D.day[ci])] += d
     out = {}
     for a in E + S:
@@ -224,58 +227,74 @@ def main() -> int:
         ws2.column_dimensions[get_column_letter(2 + i)].width = 11
 
     # ---- sheet 3: cumulative burden over baseline days ----
-    cum = cumulative(D, E, S)
     ws3 = wb.create_sheet("3_CumulativeBurden")
     ws3["A1"] = ("Cumulative seizure time (minutes) over baseline days 1-21, "
                  f"confidence >= {args.cut}")
     ws3["A1"].font = BOLD
-    ws3["A3"] = ("PRISM TABLE TYPE:  XY, with X = day and one Y column per "
-                 "animal (Y = single values, no replicates)")
+    ws3["A3"] = ("PRISM TABLE TYPE:  XY, X = day, one Y column per animal "
+                 "(Y = single values, no replicates)")
     ws3["A3"].font = BOLD
-    ws3["A4"] = ("Plot every animal as a thin grey line; overlay the two group "
-                 "MEDIAN columns as bold lines. Do not use mean +/- SEM — see note.")
+    ws3["A4"] = ("Two blocks below: CONVULSIVE ONLY and ALL SEIZURES. Use one. "
+                 "Plot each animal as a thin grey line, group medians bold.")
     r = 6
-    hdr = (["X  (day)"] + [f"EGFP {a}" for a in E] + [f"SV2A {a}" for a in S]
-           + ["EGFP median", "SV2A median"])
-    for c, h in enumerate(hdr):
-        cell = ws3.cell(row=r, column=c + 1, value=h)
-        cell.font, cell.fill = BOLD, HDR
-    r += 1
-    for i, dd in enumerate(range(1, 22)):
-        ws3.cell(row=r, column=1, value=dd)
-        for j, a in enumerate(E + S):
-            ws3.cell(row=r, column=2 + j, value=round(cum[a][i], 3))
-        ws3.cell(row=r, column=2 + len(E) + len(S),
-                 value=round(float(np.median([cum[a][i] for a in E])), 3))
-        ws3.cell(row=r, column=3 + len(E) + len(S),
-                 value=round(float(np.median([cum[a][i] for a in S])), 3))
+    endpoints = {}
+    for kind, label in (("convulsive", "BLOCK 1 — CONVULSIVE seizures only "
+                         "(recommended: matches the survival panel)"),
+                        ("all", "BLOCK 2 — ALL seizures "
+                         "(convulsive + non-convulsive)")):
+        cum = cumulative(D, E, S, kind)
+        ws3.cell(row=r, column=1, value=label).font = BOLD
         r += 1
-    fa = [cum[a][20] for a in E]
-    fb = [cum[a][20] for a in S]
-    pf = mw(fa, fb)
-    put_notes(ws3, r + 1, [
+        hdr = (["X  (day)"] + [f"EGFP {a}" for a in E] + [f"SV2A {a}" for a in S]
+               + ["EGFP median", "SV2A median"])
+        for c, h in enumerate(hdr):
+            cell = ws3.cell(row=r, column=c + 1, value=h)
+            cell.font, cell.fill = BOLD, HDR
+        r += 1
+        for i, dd in enumerate(range(1, 22)):
+            ws3.cell(row=r, column=1, value=dd)
+            for j, a in enumerate(E + S):
+                ws3.cell(row=r, column=2 + j, value=round(cum[a][i], 3))
+            ws3.cell(row=r, column=2 + len(E) + len(S),
+                     value=round(float(np.median([cum[a][i] for a in E])), 3))
+            ws3.cell(row=r, column=3 + len(E) + len(S),
+                     value=round(float(np.median([cum[a][i] for a in S])), 3))
+            r += 1
+        fa = [cum[a][20] for a in E]
+        fb = [cum[a][20] for a in S]
+        endpoints[kind] = (mw(fa, fb), sum(1 for a in S if cum[a][20] == 0))
+        r += 1
+
+    (pc_all, zc), (pa_all, za) = endpoints["convulsive"], endpoints["all"]
+    put_notes(ws3, r, [
         "STATISTICS TO RUN IN PRISM",
         "  The curves are descriptive. Test the ENDPOINT (day 21 total) only:",
         "  Analyze → Column analyses → t test (and nonparametric tests)",
         "         → 'Mann-Whitney test' (unpaired, two-tailed), EGFP vs SV2A.",
-        f"  EXPECTED: median EGFP {pf[0]:.1f} min, SV2A {pf[1]:.1f} min, "
-        f"p = {pf[2]:.4f}",
+        f"  CONVULSIVE ONLY: median EGFP {pc_all[0]:.1f} min, SV2A "
+        f"{pc_all[1]:.1f} min, p = {pc_all[2]:.4f}",
+        f"  ALL SEIZURES:    median EGFP {pa_all[0]:.1f} min, SV2A "
+        f"{pa_all[1]:.1f} min, p = {pa_all[2]:.4f}",
         "  Do not run a 2-way ANOVA over days: cumulative values are not",
         "  independent across time, so the day factor is not interpretable.",
         "",
-        "PLOT MEDIAN, NOT MEAN +/- SEM. The SV2A group is bimodal — 4 animals",
-        "at exactly 0 for all 21 days and 2 non-responders as high as EGFP — so",
-        "the mean is dragged up and the error bars overlap (EGFP 225 +/- 78 vs",
-        "SV2A 45 +/- 29 min), which understates a difference the medians show",
-        "clearly (87.7 vs 0.8 min).",
+        "WHICH BLOCK: convulsive-only is recommended. Its "
+        f"{zc}/{len(S)} SV2A animals that",
+        "never seize are the SAME animals censored in the survival panel, so the",
+        f"two panels cross-reference. All-seizures gives {za}/{len(S)} at zero,",
+        "which a reader then has to reconcile against the survival panel.",
+        "",
+        "PLOT MEDIAN, NOT MEAN +/- SEM. The SV2A group is bimodal — several",
+        "animals at exactly 0 for all 21 days and 2 non-responders as high as",
+        "EGFP — so the mean is dragged up and the error bars overlap, which",
+        "understates a difference the medians show clearly.",
         "",
         "ZEROS ARE REAL. A flat line along the axis means that animal never had",
-        "a seizure; it is not a plotting floor. Use a LINEAR y-axis here — do not",
+        "a seizure; it is not a plotting floor. Use a LINEAR y-axis — do not",
         "log-transform, or the flat-at-zero animals cannot be drawn.",
         "",
-        f"NON-RESPONDERS: SV2A animals with the two highest totals are the two",
-        "climbing SV2A lines; naming them in the legend is worth doing, since the",
-        "responder/non-responder split is more informative than the group median.",
+        "Y-AXIS LABEL: 'Cumulative convulsive seizure time (min)' for block 1,",
+        "or 'Cumulative seizure time (min)' for block 2. State which in the legend.",
     ])
     ws3.column_dimensions["A"].width = 11
     for i in range(len(E) + len(S) + 2):
