@@ -91,6 +91,19 @@ EDITS = [
      "being right-shifted in SV2A-treated animals and indicating "
      "slower-rising events (Fig. 2j,k, Kolmogorov–Smirnov test)."),
 
+    # --- Methods: flag the acute-LEV slice conditions for the postdoc
+    ("Whole-cell voltage-clamp recordings of spontaneous and miniature IPSCs",
+     "[Slice preparation, solutions, recording and analysis details to be "
+     "added from the electrophysiology protocol.]",
+     "A separate set of recordings was made with levetiracetam applied "
+     "acutely to the slice. [Slice preparation, solutions, recording and "
+     "analysis details to be added from the electrophysiology protocol. "
+     "For the acute levetiracetam experiments, add: concentration, carrier/"
+     "vehicle, pre-incubation and bath-application times, whether "
+     "levetiracetam and control recordings came from the same slices and "
+     "animals or from separate ones, and the number of animals contributing "
+     "the 7 EGFP and 7 SV2A cells.]"),
+
     # --- Results text: means vs distributions
     ("Cumulative distributions confirmed a leftward shift",
      "Neither the amplitude nor the rise time of sIPSCs or mIPSCs differed "
