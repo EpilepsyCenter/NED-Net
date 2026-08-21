@@ -149,11 +149,11 @@ def blocks_of(rows, skip_first_col_numeric=False):
     return runs
 
 
-def fmt(v, floor: bool):
+def fmt(v, floor: float):
     if v != v:
         return ""
     if floor and abs(v) < 1e-12:
-        return "0.01"
+        return f"{floor:g}"
     return f"{v:.4f}".rstrip("0").rstrip(".") or "0"
 
 
@@ -196,28 +196,33 @@ def main() -> int:
 
     REG = {
         # rows = metric, blocks = [EGFP, SV2A]
-        "Seizures/day":                 ("rowsGG", [R("conv", BASE_W), R("non", BASE_W)], True),
-        "Seizures/day linearSeizures/day": ("rowsGG", [R("conv", BASE_W), R("non", BASE_W)], True),
-        "Duration":                     ("rowsGG", [U("conv", BASE_W | LEV_W | {6}), U("non", BASE_W | LEV_W | {6})], False),
-        "LEV Duration":                 ("rowsGG", [U("conv", LEV_W), U("non", LEV_W)], False),
-        "LEV Seizures/day":             ("rowsGG", [R("conv", LEV_W), R("non", LEV_W)], False),
+        "Seizures/day":                 ("rowsGG", [R("conv", BASE_W), R("non", BASE_W)], 0.01),
+        "Seizures/day linearSeizures/day": ("rowsGG", [R("conv", BASE_W), R("non", BASE_W)], 0.01),
+        "Duration":                     ("rowsGG", [U("conv", BASE_W | LEV_W | {6}), U("non", BASE_W | LEV_W | {6})], 0),
+        "LEV Duration":                 ("rowsGG", [U("conv", LEV_W), U("non", LEV_W)], 0),
+        "LEV Seizures/day":             ("rowsGG", [R("conv", LEV_W), R("non", LEV_W)], 0),
         # rows = group, blocks = [baseline, LEV]
-        "Convulsive pre-post LEV":      ("rowsPP", [R("conv", BASE_W), R("conv", LEV_W)], False),
-        "Non-Convulsive pre-post LEV":  ("rowsPP", [R("non", BASE_W), R("non", LEV_W)], False),
-        "Convulsive Duration pre-post LEV":     ("rowsPP", [U("conv", BASE_W), U("conv", LEV_W)], False),
-        "Non-Convulsive Duration pre-post LEV": ("rowsPP", [U("non", BASE_W), U("non", LEV_W)], False),
-        "Convulsive free days pre-post LEV":    ("rowsPP", [F(BASE_W), F(LEV_W)], False),
+        "Convulsive pre-post LEV":      ("rowsPP", [R("conv", BASE_W), R("conv", LEV_W)], 0),
+        "Non-Convulsive pre-post LEV":  ("rowsPP", [R("non", BASE_W), R("non", LEV_W)], 0),
+        "Convulsive Duration pre-post LEV":     ("rowsPP", [U("conv", BASE_W), U("conv", LEV_W)], 0),
+        "Non-Convulsive Duration pre-post LEV": ("rowsPP", [U("non", BASE_W), U("non", LEV_W)], 0),
+        "Convulsive free days pre-post LEV":    ("rowsPP", [F(BASE_W), F(LEV_W)], 0),
         # 4 columns: EGFP base, EGFP LEV, SV2A base, SV2A LEV
-        "Convulsive pre-post LEV for stats":        ("cols4", [R("conv", BASE_W), R("conv", LEV_W)], False),
-        "Non-Convulsive pre-post LEV for stats":    ("cols4", [R("non", BASE_W), R("non", LEV_W)], False),
+        "Convulsive pre-post LEV for stats":        ("cols4", [R("conv", BASE_W), R("conv", LEV_W)], 0),
+        "Non-Convulsive pre-post LEV for stats":    ("cols4", [R("non", BASE_W), R("non", LEV_W)], 0),
         # NOTE: this one interleaves by GROUP (conv EGFP, conv SV2A, non EGFP,
         # non SV2A), unlike the pre-post tables which interleave by phase.
-        "LEV Seizures/day for stats":               ("cols4G", [R("conv", LEV_W), R("non", LEV_W)], False),
-        "Convulsive Duration pre-post LEV for stats":     ("cols4", [U("conv", BASE_W), U("conv", LEV_W)], False),
-        "Non-Convulsive Duration pre-post LEV for stats": ("cols4", [U("non", BASE_W), U("non", LEV_W)], False),
-        "Convulsive free days pre-post LEV for stats":    ("cols4", [F(BASE_W), F(LEV_W)], False),
+        "LEV Seizures/day for stats":               ("cols4G", [R("conv", LEV_W), R("non", LEV_W)], 0),
+        "Convulsive Duration pre-post LEV for stats":     ("cols4", [U("conv", BASE_W), U("conv", LEV_W)], 0),
+        "Non-Convulsive Duration pre-post LEV for stats": ("cols4", [U("non", BASE_W), U("non", LEV_W)], 0),
+        "Convulsive free days pre-post LEV for stats":    ("cols4", [F(BASE_W), F(LEV_W)], 0),
         # 2 columns: EGFP, SV2A
-        "Convulsive free days baseline":  ("cols2", [F(BASE_W)], False),
+        "Convulsive free days baseline":  ("cols2", [F(BASE_W)], 0),
+        # rows = week number in column 0; all seizures per 24 h. Zeros floored
+        # at 0.1 here, not 0.01 — this table uses its own log-axis floor.
+        "Per week seizures":  ("weekrows", None, 0.1),
+        # rows = day number in column 0; all seizures per HOUR (not per 24 h).
+        "Events/animal-hour ALL DAYS":  ("dayrows", None, 0),
     }
 
     tmp = tempfile.mkdtemp()
@@ -286,6 +291,29 @@ def main() -> int:
             for cj, vals in enumerate(cols):
                 for k, v in enumerate(vals):
                     plan[(k, cj)] = v
+
+        elif kind in ("weekrows", "dayrows"):
+            width = max(len(r) for r in rows)
+            b1, b2 = 1, 1 + (width - 1) // 2
+            for ri, row in enumerate(rows):
+                idx = _num(row[0]) if row else None
+                if idx is None:
+                    continue
+                idx = int(idx)
+                if kind == "weekrows":
+                    if not 1 <= idx <= 6:
+                        continue
+                    ve, vs = (D.rate(E, "all", weeks={idx}),
+                              D.rate(S, "all", weeks={idx}))
+                else:
+                    if not 1 <= idx <= 35:      # weeks 1-5; week 6 excluded
+                        continue
+                    ve = [v / 24 for v in D.rate(E, "all", days=idx)]
+                    vs = [v / 24 for v in D.rate(S, "all", days=idx)]
+                for k, v in enumerate(ve):
+                    plan[(ri, b1 + k)] = v
+                for k, v in enumerate(vs):
+                    plan[(ri, b2 + k)] = v
 
         elif kind == "cols2":
             for cj, vals in enumerate([fns[0](E), fns[0](S)]):
