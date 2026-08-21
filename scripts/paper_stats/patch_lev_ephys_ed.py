@@ -71,19 +71,28 @@ NEW_INTERPRETATION = (
 NEW_LEGEND = (
     "Extended Data Fig. 1 | Acute levetiracetam reverses the SV2A-mediated "
     "increase in inhibitory transmission. Whole-cell voltage-clamp recordings "
-    "of spontaneous IPSCs from dentate gyrus granule cells, with and without "
-    "acute bath application of levetiracetam. (a) sIPSC frequency, (b) "
-    "amplitude and (c) rise time, shown as per-cell medians for AAV-mDlx-EGFP "
-    "and AAV-mDlx-SV2A animals under control conditions and during "
-    "levetiracetam. Levetiracetam abolished the increase in sIPSC frequency "
+    "of spontaneous IPSCs from dentate gyrus granule cells in AAV-mDlx-EGFP "
+    "(grey) and AAV-mDlx-SV2A (white) animals, under control conditions and "
+    "during acute bath application of levetiracetam (LEV). (a,c,e) sIPSC "
+    "frequency (a), amplitude (c) and rise time (e). Each symbol is the median "
+    "of all events recorded in one cell; bars show the mean \u00b1 s.e.m. "
+    "across cells. Levetiracetam abolished the increase in sIPSC frequency "
     "seen in SV2A-treated animals, so that the groups no longer differed, "
     "while control cells were little affected and amplitude was unchanged "
-    "throughout. n = 6 cells (EGFP) and 6 cells (SV2A) under control "
-    "conditions, and 7 and 7 during levetiracetam; levetiracetam and control "
-    "recordings were made from different cells, so all comparisons are "
-    "unpaired (Welch's t-test). Data are mean ± s.e.m. with individual cells "
-    "overlaid. *P < 0.05. [Add the acute levetiracetam slice conditions and "
-    "the number of animals contributing these cells.]"
+    "throughout. (b,d,f) Cumulative distributions of inter-event interval "
+    "(b), amplitude (d) and rise time (f), shown separately for EGFP and SV2A "
+    "animals with and without levetiracetam. n = 6 cells (EGFP) and 6 cells "
+    "(SV2A) under control conditions, and 7 and 7 during levetiracetam; "
+    "levetiracetam and control recordings were made from different cells, so "
+    "all comparisons are unpaired. Frequency, amplitude and rise time were "
+    "compared by unpaired Welch\u2019s t-test; cumulative distributions by "
+    "two-sample Kolmogorov\u2013Smirnov test (D = 0.181 in b for EGFP and "
+    "0.228 for SV2A, 0.073 and 0.140 in d, and 0.223 and 0.368 in f). "
+    "Kolmogorov\u2013Smirnov comparisons were made on the first 60 events per "
+    "cell pooled within group and are descriptive; the cell-level comparisons "
+    "in a, c and e provide the inferential statistics. *P < 0.05, "
+    "***P < 0.001. [Add the acute levetiracetam slice conditions and the "
+    "number of animals contributing these cells.]"
 )
 
 
@@ -136,6 +145,11 @@ def main() -> int:
     # ---- 2. renumber citations in both documents ----
     for path in (MS, ED):
         d = docx.Document(str(path))
+        # Renumbering is NOT idempotent — a second pass would shift 1->2->3->4
+        # again. Once "Extended Data Fig. 4" exists the shift has been applied.
+        if any("Extended Data Fig. 4" in p.text for p in d.paragraphs):
+            actions.append(f"renumbering already applied in {path.name}, skipped")
+            continue
         n = 0
         for p in d.paragraphs:
             if "Extended Data Fig." in p.text:
@@ -179,9 +193,15 @@ def main() -> int:
 
     # ---- 4. Extended Data: add the new legend as Fig. 1 ----
     d = docx.Document(str(ED))
-    if any(p.text.startswith("Extended Data Fig. 1 | Acute levetiracetam")
-           for p in d.paragraphs):
-        actions.append("new Extended Data legend already present, skipped")
+    existing = [p for p in d.paragraphs
+                if p.text.startswith("Extended Data Fig. 1 | Acute levetiracetam")]
+    if existing:
+        if existing[0].text.strip() == NEW_LEGEND.strip():
+            actions.append("Extended Data Fig. 1 legend already current, skipped")
+        else:
+            actions.append("update the Extended Data Fig. 1 legend text")
+            if go:
+                set_text(existing[0], NEW_LEGEND)
     else:
         anchor = [p for p in d.paragraphs
                   if p.text.startswith("Extended Data Fig. 2 |")]
