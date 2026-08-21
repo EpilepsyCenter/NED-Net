@@ -11,9 +11,7 @@ exception, having been added after the analysis file was built, and are
 recomputed from the same database and definitions.
 
 Figures NOT covered here, because their data live outside the Prism files:
-    Figure 2 (in vitro electrophysiology) — 'Ephys' folder
-    Figure 7 (5xFAD behaviour, Barnes maze)
-    Extended Data 1-3, Supplementary 1
+    Supplementary Figure 1 (NED-Net validation)
 
     python scripts/paper_stats/make_source_data.py
 """
@@ -49,9 +47,45 @@ IMMU = "SV2A Immuno.prism"
 BEHAV = "All Behaviour tests.prism"
 EPHYS = "Ephys/Ephys_summary.prism"
 ADSPK = "AD/AD_Interictal_spikes.prism"
+OFTB = "AD/5xFAD_SV2A_GT_OFT baseline.prism"
+OFT2 = "AD/5xFAD_SV2A_GT_OFT repeat 2 + comparisons.prism"
+BARN = "AD/5xFAD_SV2A_GT_Barnes repeat 2 + comparisons.prism"
+NORT = "AD/5xFAD_SV2A_GT_NORT repeat2 + comparisons.prism"
+OLT2 = "AD/5xFAD_SV2A_GT_OLT repeat2 + comparisons.prism"
+
+AD_FILES = None   # set after the file constants below; see group_labels()
+
+
+def group_labels(book, width):
+    """Column headings for a table, by which cohort the file belongs to.
+
+    The 5xFAD experiments use WT / 5xFAD-EGFP / 5xFAD-SV2A, not the SV2A
+    cohort's EGFP / SV2A, and the two-group baseline panels are WT vs 5xFAD.
+    """
+    fivex = book and book.startswith("AD/") and "Interictal" not in book
+    if fivex:
+        names = ["WT", "5xFAD-EGFP", "5xFAD-SV2A"]
+        if width == 2:
+            names = ["WT", "5xFAD"]
+    else:
+        names = ["EGFP", "SV2A"]
+    if width <= len(names):
+        return names[:width]
+    return names + [f"col{i+1}" for i in range(len(names), width)]
+
+
+def block_note(book):
+    fivex = book and book.startswith("AD/") and "Interictal" not in book
+    who = ("WT, then 5xFAD-EGFP, then 5xFAD-SV2A" if fivex
+           else "EGFP block then SV2A block")
+    return ("Row = condition/trial; values are individual animals, "
+            + who + ", in the order plotted.")
+
 
 MW = "Mann-Whitney U, two-tailed"
 WSR = "Wilcoxon matched-pairs signed-rank (within animal)"
+KW = "Kruskal-Wallis with Dunn's multiple comparisons"
+AN = "Two-way ANOVA with Dunnett's multiple comparisons"
 
 # (figure, panel, prism file, table title, caption, test, layout)
 PANELS = [
@@ -162,6 +196,55 @@ PANELS = [
     ("Figure 6", "o", BEHAV, "% Time in Center Arena OFT",
      "Open field — time in centre (% of mobile time)", MW, "AUTO"),
 
+    # Figure 7 — 5xFAD open field and Barnes maze. Groups: WT, 5xFAD-EGFP,
+    # 5xFAD-SV2A (panel a is the WT vs 5xFAD baseline comparison, two groups).
+    ("Figure 7", "a", OFTB, "OFT: distance",
+     "Open field distance (m), WT vs 5xFAD at baseline (2 columns)",
+     "Unpaired t-test", "AUTO"),
+    ("Figure 7", "b", OFT2, "Distance",
+     "Open field distance (m) after treatment "
+     "(columns: WT, 5xFAD-EGFP, 5xFAD-SV2A)", "Kruskal-Wallis with Dunn's multiple comparisons", "AUTO"),
+    ("Figure 7", "c", OFT2, "Centre time ratio",
+     "Time in centre (fraction of total), pre vs post treatment "
+     "(rows Pre/Post; columns are animals, WT then 5xFAD-EGFP then 5xFAD-SV2A)",
+     "Kruskal-Wallis with Dunn's multiple comparisons", "ROWBLOCK"),
+    ("Figure 7", "d", BARN, "delta AUC: primary latency",
+     "Barnes maze, change in AUC of primary latency", "Kruskal-Wallis with Dunn's multiple comparisons", "AUTO"),
+    ("Figure 7", "e", BARN, "delta AUC: total latency",
+     "Barnes maze, change in AUC of total latency", "Kruskal-Wallis with Dunn's multiple comparisons", "AUTO"),
+    ("Figure 7", "f", BARN, " delta AUC: total errors",
+     "Barnes maze, change in AUC of total errors", "Kruskal-Wallis with Dunn's multiple comparisons", "AUTO"),
+
+    # Extended Data 2 — object location and novel object recognition, 5xFAD triad.
+    ("Extended Data 2", "a", OLT2, "Time in object (test) GROUPED",
+     "Object location: exploration time (s), familiar vs displaced", KW, "ROWBLOCK"),
+    ("Extended Data 2", "b", OLT2, "zone entries (no. of investigations) GROUPED",
+     "Object location: head entries, familiar vs displaced", KW, "ROWBLOCK"),
+    ("Extended Data 2", "c", OLT2, "DI test NEW",
+     "Object location: discrimination index "
+     "(columns: WT-Sham, 5xFAD-EGFP, 5xFAD-SV2A)", KW, "AUTO"),
+    ("Extended Data 2", "d", NORT, "Time in object test GROUPED",
+     "Novel object: exploration time (s), familiar vs novel", KW, "ROWBLOCK"),
+    ("Extended Data 2", "e", NORT, "Head entries test GROUPED",
+     "Novel object: head entries, familiar vs novel", KW, "ROWBLOCK"),
+    ("Extended Data 2", "f", NORT, "Data 14",
+     "Novel object: discrimination index "
+     "(columns: WT-Sham, 5xFAD-EGFP, 5xFAD-SV2A)", KW, "AUTO"),
+
+    # Extended Data 3 — Barnes maze training curves and probe trial.
+    ("Extended Data 3", "a", BARN, "Primary latency, training",
+     "Barnes maze training: primary latency (s), rows = trials 1-5", AN, "ROWBLOCK"),
+    ("Extended Data 3", "b", BARN, "Total latency, training",
+     "Barnes maze training: total latency (s), rows = trials 1-5", AN, "ROWBLOCK"),
+    ("Extended Data 3", "c", BARN, "Primary errors, training",
+     "Barnes maze training: primary errors, rows = trials 1-5", AN, "ROWBLOCK"),
+    ("Extended Data 3", "d", BARN, "Total errors, training",
+     "Barnes maze training: total errors, rows = trials 1-5", AN, "ROWBLOCK"),
+    ("Extended Data 3", "e", BARN, "Latency, probe",
+     "Barnes maze probe trial: latency (s)", KW, "AUTO"),
+    ("Extended Data 3", "f", BARN, "Errors, probe",
+     "Barnes maze probe trial: errors", KW, "AUTO"),
+
     # AD (5xFAD) cohort = Extended Data Fig. 1 per the manuscript and the
     # Extended Data legends. The PDF file is named "...Figure 3" — the figure
     # FILES are shuffled relative to the text; see README.
@@ -220,7 +303,7 @@ def main() -> int:
     args = ap.parse_args()
 
     books = {}
-    for f in (SEIZ, IMMU, BEHAV, EPHYS, ADSPK):
+    for f in (SEIZ, IMMU, BEHAV, EPHYS, ADSPK, OFTB, OFT2, BARN, NORT, OLT2):
         p = f if os.path.exists(f) else os.path.join(ANALYSIS, f)
         if not os.path.exists(p):
             print(f"  !! missing {f}")
@@ -324,9 +407,7 @@ def main() -> int:
                 emit(sh, fig, None, None, [int(idx)] + vals)
 
         elif layout == "ROWBLOCK":
-            emit(sh, fig,
-                 "Row = condition/region; values are individual animals, "
-                 "EGFP block then SV2A block, in the order plotted.", ITAL)
+            emit(sh, fig, block_note(book), ITAL)
             for r_ in rows:
                 if not any((c or "").strip() for c in r_):
                     continue
@@ -336,16 +417,13 @@ def main() -> int:
         elif layout == "AUTO":
             width = max(len(r) for r in rows)
             if width <= 3:
-                emit(sh, fig, None, BOLD,
-                     ["EGFP", "SV2A"] if width == 2 else ["col1", "col2", "col3"])
+                emit(sh, fig, None, BOLD, group_labels(book, width))
                 for r_ in rows:
                     vals = [_num(c) for c in r_]
                     if any(v is not None for v in vals):
                         emit(sh, fig, None, None, vals)
             else:
-                emit(sh, fig,
-                     "Values are individual animals, EGFP block then SV2A block.",
-                     ITAL)
+                emit(sh, fig, block_note(book), ITAL)
                 for r_ in rows:
                     if any((c or "").strip() for c in r_):
                         emit(sh, fig, None, None,
@@ -468,9 +546,17 @@ def main() -> int:
         ("     before submission, or the citations will point at the wrong", ITAL),
         ("     figures.", ITAL),
         ("", ITAL),
-        ("NOT INCLUDED (data held outside the Prism analysis files)", BOLD),
-        ("  Figure 7 — 5xFAD behaviour / Barnes maze", ITAL),
-        ("  Extended Data (OLT/NOR, Barnes), Supplementary Figure 1", ITAL),
+        ("5xFAD COHORT (Figure 7, Extended Data 2 and 3)", BOLD),
+        ("  From the 'AD' folder: OFT baseline and repeat 2, Barnes repeat 2,", ITAL),
+        ("  NORT repeat 2 and OLT repeat 2 Prism files.", ITAL),
+        ("  Groups are WT (or WT-Sham/WT-Ctrl), 5xFAD-EGFP and 5xFAD-SV2A,", ITAL),
+        ("  in that column order. Fig 7a is the two-group WT vs 5xFAD baseline.", ITAL),
+        ("  n = 10 WT-Ctrl, 5 5xFAD-EGFP, 9 5xFAD-SV2A in the Barnes maze; two", ITAL),
+        ("  5xFAD-EGFP animals were lost between the recognition tasks and the", ITAL),
+        ("  Barnes maze.", ITAL),
+        ("", ITAL),
+        ("NOT INCLUDED", BOLD),
+        ("  Supplementary Figure 1 (NED-Net validation).", ITAL),
         ("", ITAL),
         ("CONTENTS", BOLD),
     ]
