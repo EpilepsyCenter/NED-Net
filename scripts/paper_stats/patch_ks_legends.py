@@ -58,6 +58,39 @@ EDITS = [
      "Kolmogorov–Smirnov test on intervals pooled within group "
      "(EGFP D = 0.104, SV2A D = 0.066), and (i) spike duration."),
 
+    # --- Methods: state that K-S comparisons pool events
+    ("Inter-spike-interval distributions were compared",
+     "Inter-spike-interval distributions were compared with the two-sample "
+     "Kolmogorov–Smirnov test.",
+     "Inter-spike-interval distributions were compared with the two-sample "
+     "Kolmogorov–Smirnov test on intervals pooled within group. Because "
+     "pooling treats each interval as independent when the unit of analysis "
+     "is the animal, these comparisons are descriptive and the D statistic "
+     "is reported with the P value."),
+
+    ("For electrophysiological data, mean differences",
+     "Distributions were analyzed with two-sample Kolmogorov–Smirnov test.",
+     "Distributions were analyzed with the two-sample Kolmogorov–Smirnov "
+     "test on events pooled within group; as above, these comparisons are "
+     "descriptive relative to the cell-level tests, and D is reported in the "
+     "figure legend."),
+
+    # --- Results: the amplitude distributions cross rather than shift
+    ("The corresponding cumulative distributions differed modestly",
+     "The corresponding cumulative distributions differed modestly for "
+     "amplitude (Fig. 2g,h) and, more substantially, for sIPSC rise time, "
+     "which was right-shifted in SV2A-treated animals, indicating "
+     "slower-rising events (Fig. 2j,k, Kolmogorov–Smirnov test).",
+     "The corresponding cumulative distributions differed modestly for "
+     "amplitude (Fig. 2g,h), but these curves cross rather than separate: "
+     "median amplitude was unchanged (sIPSC 40.3 versus 40.0 pA) while the "
+     "SV2A distributions were narrower at both extremes, with fewer very "
+     "small and fewer very large events, so the difference reflects reduced "
+     "spread rather than a shift in either direction. The sIPSC rise-time "
+     "distribution differed more substantially and in a single direction, "
+     "being right-shifted in SV2A-treated animals and indicating "
+     "slower-rising events (Fig. 2j,k, Kolmogorov–Smirnov test)."),
+
     # --- Results text: means vs distributions
     ("Cumulative distributions confirmed a leftward shift",
      "Neither the amplitude nor the rise time of sIPSCs or mIPSCs differed "
@@ -93,6 +126,10 @@ def main() -> int:
 
     applied, failed = 0, []
     for anchor, old, new in EDITS:
+        if any(new in p.text for p in d.paragraphs):
+            print(f"\n--- {anchor[:60]}\n  (already applied, skipped)")
+            applied += 1
+            continue
         hits = [p for p in d.paragraphs if anchor in p.text and old in p.text]
         if len(hits) != 1:
             failed.append((anchor[:52], f"{len(hits)} paragraphs matched"))
