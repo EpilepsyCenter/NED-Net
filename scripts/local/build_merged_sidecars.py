@@ -48,6 +48,9 @@ def main() -> int:
     ap.add_argument("--db", default="~/.eeg_seizure_analyzer/projects/ram_gdnf_unet_v0.db")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--batch", default=None, help="restrict to one batch, e.g. 3")
+    ap.add_argument("--animals", nargs="*", default=None, metavar="ID",
+                    help="restrict the U-Net review queue to these animal IDs "
+                         "(Mir's labels for the same files are still written)")
     ap.add_argument("--tolerance", type=float, default=5.0,
                     help="seconds of slack when deciding a U-Net event duplicates a Mir event")
     ap.add_argument("--unet-min-confidence", type=float, default=0.0)
@@ -70,6 +73,8 @@ def main() -> int:
         "WHERE e.cnn_confidence >= ?", con, params=(a.unet_min_confidence,))
     if a.no_unet:
         ev = ev.iloc[0:0]
+    if a.animals:
+        ev = ev[ev.animal_id.astype(str).isin({str(x) for x in a.animals})]
     ev["stem"] = ev.path.str.rsplit("/", n=1).str[-1].str.replace(".edf", "", regex=False)
 
     paths = sorted(chunks)
