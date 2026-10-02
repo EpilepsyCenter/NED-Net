@@ -1,0 +1,98 @@
+# Phase 2 — retraining strategy
+
+**Written 2026-10-02**, after the Phase-1 failure (`PHASE1_RESULTS_20261002.md`).
+Phase 2 is now the load-bearing half of the paper: Phase 1 shows the frozen model fails,
+Phase 2 must show the adaptation pipeline fixes it. If it does not, the paper has no
+positive claim.
+
+## The asset nobody has used yet
+
+Mir's adjudicated rows are a ready-made in-domain training set, already partitioned by
+batch for LOCO:
+
+| batch | positives | hard negatives (`False`) |
+|---|---|---|
+| Batch 1 | 60 | 3,676 |
+| Batch 2 | 24 | 1,803 |
+| Batch 3 | 154 | 5,422 |
+| Batch 4 | 192 | 752 |
+| **total** | **430** | **11,653** |
+
+For comparison the SV2A set that trained `UNetv2_20260615` had 867 positives and 1,325
+hard negatives — so this is **8.8× more hard negatives**, in-domain, at zero annotation
+cost. Every LOCO fold retains 238–406 positives for training.
+
+`Normal` rows (2,657) are dropped, per `scripts/import_mir_annotations.py` — background
+negatives are auto-sampled by the trainer.
+
+## Round 0 — free. Two arms, and the contrast is the result.
+
+Train from scratch, LOCO by batch (4 folds), no new annotation:
+
+- **Arm A — SV2A + Mir's three training batches.** Tests whether more data helps.
+- **Arm B — Mir's three training batches only.** Tests whether *in-domain* data is what
+  matters.
+
+The contrast answers the question another lab actually has: *do we need your dataset, or
+just our own annotations?* If B ≈ A, the answer is "just your own", which is a far more
+useful and more distributable conclusion than "download our weights". If B ≪ A, the
+pretrained base has value and that is worth stating too.
+
+Caveat to watch: 430 positives total is half what SV2A had, and per fold 238–406. Arm B may
+underperform for lack of positives rather than for lack of relevance — Arm A hedges that,
+and the gap between them is interpretable either way.
+
+## Round 1 — targeted annotation: the model's own false positives
+
+Mir's hard negatives are *his detector's* false positives. They will not fix the Batch-4
+over-detection (69 detections/file), because the U-Net is firing on something his detector
+never proposed. To fix that, the model needs **its own** false positives as hard negatives.
+
+Review a sample of Round-0 detections, concentrated where the model floods, confirm/reject,
+add as hard negatives, retrain. This is exactly the two-round active-learning loop that
+built `UNetv2_20260615` in the first place — round 1 autocorrelation-proposed (640 pos /
+310 neg), round 2 reviewing the predecessor U-Net's proposals (227 pos / 1,015 neg). It is
+a method already validated internally, which is worth saying in the paper.
+
+Efficiency note: the flooding detections are likely highly redundant (one dominant artefact
+type), so a few hundred reviewed events should move the needle far more than their count
+suggests. That redundancy is itself measurable and worth reporting.
+
+## Round 2+ — iterate until the curve flattens
+
+Report performance against **cumulative human-reviewed events**. That curve is the paper's
+headline figure and the practical currency for adoption: a lab reading it can estimate
+their own annotation cost before committing.
+
+## Controls that must run alongside
+
+- **Retrain both stages.** Stage-2 also failed — precision ceilings near 30% even when
+  restricted to convulsive predictions.
+- **Catastrophic-forgetting check on held-out SV2A test data at every round.** Critical for
+  the "adapt per lab" claim: if adapting to RAM_GDNF destroys SV2A performance, the
+  pipeline produces disposable per-lab models rather than an improving one. Either result
+  is publishable; not checking is not an option.
+- **Report per batch, never pooled only.** Batch heterogeneity is the central Phase-1
+  finding; a pooled number would hide exactly what the paper is about.
+- **Fixed hyperparameters across folds and rounds**, multiple seeds, versioned
+  datasets/models. Any tuning per fold invalidates the comparison.
+- **Never train on the held-out batch's labels** — LOCO enforces this, and the staging step
+  should assert it rather than relying on care.
+
+## Power, per `NEDNet_validation_HANDOFF.md` §13
+
+Batch 2 has only 24 test seizures — underpowered as a LOCO test fold; report it with its CI
+and pool B1+B2 as a secondary estimate. Batch 4 has 192 seizures but only 97 annotated
+files; metrics stay restricted to the annotated region, which is valid for both precision
+and recall.
+
+## Order of work
+
+1. EDF-header comparison across batches (cheap, no compute) — may explain the Phase-1
+   heterogeneity before any retraining.
+2. One Round-0 fold as a **feasibility probe** — hold out Batch 3 (154 test seizures, worst
+   recall at 5.2%, so the most headroom). If recall there does not move substantially, stop
+   and rethink before spending on the full grid.
+3. Full Round-0 grid: 2 arms × 4 folds × seeds.
+4. Round-1 annotation and retrain.
+5. Learning curve, forgetting check, final per-batch table.
