@@ -17,6 +17,42 @@ completes.
 **Blocked on hardware:** annotation needs the lab PC. Everything in steps 0, 1 and 3 below
 can proceed without it.
 
+## BLOCKED: LUNARC file-count quota (2026-10-02)
+
+Project `lu2026-2-60` / `lu2026-12-29` is at **5,297 files against a 5,000 soft quota /
+5,500 hard**, with ~13 days of grace running from 2026-10-02. Space is irrelevant — 517 GB
+of 4.883 TB. Directories count: the project holds 4,324 files + 1,177 directories.
+
+An increase was **requested on 2026-10-02** (~100,000 files, space unchanged). Expected
+within the grace window. Until it lands:
+
+- **Cannot** upload the 1,364 merged sidecars (~203 inodes free; a partial rsync landed 203
+  before failing and those were deleted again to stop the clock).
+- **Cannot** start Phase-2 training — it needs Mir's sidecars beside the EDFs.
+- **Cannot** review in ThinLinc — same reason.
+- If grace expires while over the soft quota, **all writes to project storage block**.
+
+A home-directory tree of symlinked EDFs plus real sidecars was considered and verified
+technically sound (`annotation_json_path` is purely lexical and nothing in the dash app
+calls `resolve()`/`realpath()`), but rejected as operationally fragile: opening an EDF via
+its project-storage path out of habit makes the UI write an **empty** sidecar there,
+silently losing the review queue. Revisit only if the quota request stalls.
+
+## What is NOT blocked
+
+**The classical-detector sweeps can run now.** `detect_autocorr_batch.py` only *reads* EDFs
+from project storage; per-worker part-DBs go to `${SNIC_TMP:-/tmp}` (node-local) and the
+merged DB lands in `~/.eeg_seizure_analyzer/projects/` — home, which has ~349,000 free
+inodes and 78 GB free. Zero project-storage inode cost.
+
+Worth doing now because it is on the critical path for the strongest version of the paper:
+if the published methods from other labs (White 2006 autocorrelation, Casillas-Espinosa
+2019 spectral, Twele 2017 spike-train) fail on this data the same way our U-Net did, the
+generalization claim becomes a four-method benchmark rather than one model's anecdote.
+Scoring is free afterwards — `validate_frozen_unet_vs_mir.py` works against any DB.
+
+Also unblocked: asking Mir the Q1 questions (below), and all local analysis.
+
 ## Key artifacts
 
 | What | Where |
