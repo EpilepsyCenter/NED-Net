@@ -6,7 +6,10 @@ tracked. Separate from the SV2A biology manuscript, whose record lives in
 
 | File | What it is |
 |---|---|
-| `NEDNet_validation_HANDOFF.md` | **The live plan (v2).** Read this one. |
+| `NEXT_STEPS.md` | **Current state and what to do next. Start here.** |
+| `NEDNet_validation_HANDOFF.md` | The full plan (v2) — background, data, architecture facts. |
+| `PHASE1_RESULTS_20261002.md` | Frozen-model validation: it fails, 9.1% recall, heterogeneous by batch. |
+| `PHASE2_STRATEGY.md` | Retraining plan — LOCO by `--exclude-animals`, two arms, learning curve. |
 | `VERIFICATION_LOG_20261001.md` | Evidence for every correction made to v1, with the commands that produced it. Referenced from the handoff as V1–V8. |
 | `archive/HANDOFF_v1_20261001_as_received.md` | The original v1 as received, kept for diffing. Superseded — do not work from it. |
 
@@ -24,8 +27,9 @@ Data and backups referenced by the plan:
 - Production models: `~/.eeg_seizure_analyzer/models/` — `UNetv2_20260615`,
   `Convulsive_v4LUNARC_20260616`, plus `Re-rankerv2_20260625` kept as ablation evidence
 
-## State as of 2026-10-01
+## State
 
-- Phase 0 complete.
-- Phase 1 U-Net detection **running** on LUNARC (job 3770118, 1377/1377 EDFs matched).
-- Two blocking questions open before further compute — see handoff §10 Q1 and Q2.
+See `NEXT_STEPS.md` — it is the single source of truth and is updated as steps complete.
+
+As of 2026-10-02: Phase 1 detection and scoring are done (the frozen model fails);
+annotation is blocked on lab-PC access; round-0 retraining can start without it.

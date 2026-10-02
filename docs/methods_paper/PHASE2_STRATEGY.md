@@ -86,10 +86,51 @@ and pool B1+B2 as a secondary estimate. Batch 4 has 192 seizures but only 97 ann
 files; metrics stay restricted to the annotated region, which is valid for both precision
 and recall.
 
+## How LOCO is enforced — `--exclude-animals`, not staged trees
+
+Animals partition **cleanly by batch** (verified 2026-10-02, zero pairwise overlap):
+
+| batch | animals |
+|---|---|
+| Batch 1 | 449381-449388 (8) |
+| Batch 2 | 450093-450098, 450916, 450917 (8) |
+| Batch 3 | 459657-459664 (8) |
+| Batch 4 | 483549-483560 (12) |
+
+So a LOCO fold is just `--exclude-animals <held-out batch's IDs>`. Both
+`train_unet.py` and `train_convulsive.py` accept it and `ml/dataset.py:259` drops those
+animals from the dataset entirely. **No symlinked fold trees are needed** -- an earlier
+draft of this plan proposed them and they are unnecessary complexity.
+
+This means the sidecars live where they naturally belong: **beside the EDFs in the real
+LUNARC folders**, which is also the only place the trainer looks (`scan_annotation_files`
+walks `--data-dir` for `*_ned_annotations.json` and derives each EDF path from the sidecar
+name). SV2A's sidecars are already there; Mir's need to be written there too.
+
+Leakage safety still holds: the held-out batch's sidecars may sit in the tree, but its
+animals are excluded from training, and **evaluation always reads Mir's CSV**
+(`~/ground_truth/mir_ramgdnf_annotations.csv`), never the sidecars. So the metric cannot be
+contaminated by what is on disk.
+
+## Sidecar merge — one file, two sources
+
+On 578 recordings both Mir's labels and U-Net detections apply, and they share one
+filename. The converter must **merge, not overwrite**:
+
+- Mir's adjudicated events -> `confirmed` / `rejected` (these are training labels)
+- U-Net detections -> `pending` (these are the review queue)
+- a U-Net detection overlapping a Mir event is not duplicated; keep Mir's label and record
+  in `features["detectors"]` that the U-Net also found it
+
+This is good for review as well as for safety: opening a file shows what Mir already
+decided plus only the new U-Net proposals, so Marco clicks the pending ones and nothing
+else. Writing an unmerged sidecar would destroy Mir's labels on those 578 files.
+
 ## Order of work
 
 1. EDF-header comparison across batches (cheap, no compute) — may explain the Phase-1
    heterogeneity before any retraining.
+1b. Build the merged-sidecar converter (Mir CSV + U-Net DB -> one sidecar per EDF).
 2. One Round-0 fold as a **feasibility probe** — hold out Batch 3 (154 test seizures, worst
    recall at 5.2%, so the most headroom). If recall there does not move substantially, stop
    and rethink before spending on the full grid.
