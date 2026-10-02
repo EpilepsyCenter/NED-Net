@@ -25,6 +25,44 @@ cost. Every LOCO fold retains 238–406 positives for training.
 `Normal` rows (2,657) are dropped, per `scripts/import_mir_annotations.py` — background
 negatives are auto-sampled by the trainer.
 
+## Split design — an adaptation curve, not a single holdout
+
+Pure batch holdout answers only the zero-shot question and yields one point. The paper's
+claim is about adaptation, so the design is nested:
+
+> Pick a **target batch**. Reserve a fixed **test set** from it, never trained on at any k.
+> Train on the other batches **plus k annotated day-folders from the target batch**, for
+> k = 0, 1, 2, ... Plot recall/precision on the test set against k.
+
+- **k = 0** is pure cross-batch zero-shot — the frozen-model scenario.
+- **k > 0** is the adaptation curve, and its x-axis is the number an adopting lab cares
+  about: how much of their own data they must annotate.
+
+**Increment by day-folders, not animals.** A lab annotates recording sessions covering all
+its animals, not individual animals; days also give ~21 points per batch instead of 6, and
+avoid the treatment-group confound (B4's two highest-seizure animals are both CAG_GDNF at
+81 and 78, while the eGFP controls have 28 and 3 — any animal split also splits groups
+unevenly).
+
+**Do not split animals randomly across all batches.** The Phase-1 failure is
+batch-structured (2.6 vs 69.3 detections/file). Training on animals from every batch lets
+the model see each batch's acquisition characteristics, so it would measure generalization
+to a new *animal* under known conditions — the easy question — not to a new *batch*, which
+is the one that failed.
+
+**Target batch: B3.** Confirmed seizures per animal:
+
+| batch | seizures per animal | suitability |
+|---|---|---|
+| B1 | 26, 15, 12, 5, 1, 1 | training only (60 total) |
+| B2 | 11, 8, 3, 1, 1 | training only (24 total — underpowered) |
+| **B3** | **51, 50, 25, 12, 9, 7** | **primary target** — spread, top animal only 33% |
+| B4 | 81, 78, 28, 3, 1, 1 | secondary target — top two animals hold 83%, noisy curve |
+
+Report both a **day-split curve** (train and test share animals — realistic for a
+longitudinal study, state it plainly) and a stricter **animal-disjoint** variant as a
+secondary.
+
 ## Round 0 — free. Two arms, and the contrast is the result.
 
 Train from scratch, LOCO by batch (4 folds), no new annotation:
@@ -95,7 +133,12 @@ Animals partition **cleanly by batch** (verified 2026-10-02, zero pairwise overl
 | Batch 1 | 449381-449388 (8) |
 | Batch 2 | 450093-450098, 450916, 450917 (8) |
 | Batch 3 | 459657-459664 (8) |
-| Batch 4 | 483549-483560 (12) |
+| Batch 4 | 483550, 483551, 483552, 483553, 483554, 483555, 483557, 483559 (8) |
+
+**32 animals, 8 per batch.** `RAM_GDNF_2025_cohort_key.csv` lists 12 rows for Batch 4, but
+four are flagged `EXCLUDED` with `channel = '(none)'` (died after kainate, died after virus
+injection, negative control, not implanted). **Use `RAM_GDNF_2025_batch_metadata.csv` as
+the authoritative animal list** — it is derived from the files themselves.
 
 So a LOCO fold is just `--exclude-animals <held-out batch's IDs>`. Both
 `train_unet.py` and `train_convulsive.py` accept it and `ml/dataset.py:259` drops those

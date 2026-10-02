@@ -73,7 +73,9 @@ adjudicated. Write them as sidecars beside the EDFs (step 1), then:
 
 ```bash
 # feasibility probe: hold out Batch 3 (154 test seizures, worst recall -> most headroom)
-EXCL="459657 459658 459659 459660 459661 459662 459663 459664"
+EXCL="459657 459658 459659 459660 459661 459662 459663 459664"   # B3, all 8
+# animal lists come from RAM_GDNF_2025_batch_metadata.csv (file-derived), NOT cohort_key.csv:
+# B4 is 483550/551/552/553/554/555/557/559 — the key lists 12 but 4 are EXCLUDED/not implanted
 
 # Arm A — with SV2A: point at a dir containing both trees, or run from the shared parent
 MODEL_NAME=ramgdnf_armA_holdB3 EXCLUDE_ANIMALS="$EXCL" bash scripts/lunarc/train_unet.sh
