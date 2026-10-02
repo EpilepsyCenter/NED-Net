@@ -23,7 +23,8 @@ from collections import defaultdict
 
 
 def _summarise(db_path: str, min_conf: float, keep_convulsive: bool = False,
-               path_like: str | None = None) -> dict:
+               path_like: str | None = None,
+               exclude_animals: list[str] | None = None) -> dict:
     db_path = os.path.abspath(os.path.expanduser(db_path))
     c = sqlite3.connect(db_path)
     # Only non-excluded events; apply the confidence cut (no-op at 0.0). With
@@ -36,11 +37,16 @@ def _summarise(db_path: str, min_conf: float, keep_convulsive: bool = False,
     # GLOB so character classes work: 'Week[123]' = wk1-3, 'Week[456]' = wk4-6.
     glob = f"*{path_like}*" if path_like else None
     where_path = "AND ch.path GLOB ? " if glob else ""
-    params = [min_conf] + ([glob] if glob else [])
+    # Drop whole animals (e.g. noisy ones excluded from a spot-check). Matches
+    # e.animal_id as text so '30' / '355676' work regardless of column type.
+    excl = [str(a) for a in (exclude_animals or [])]
+    where_excl = (f"AND CAST(e.animal_id AS TEXT) NOT IN "
+                  f"({','.join('?' * len(excl))}) ") if excl else ""
+    params = [min_conf] + ([glob] if glob else []) + excl
     rows = c.execute(
         "SELECT e.animal_id, e.type, e.duration_sec, e.cnn_confidence "
         f"FROM events e {join}WHERE COALESCE(e.excluded,0)=0 "
-        f"AND ({conv_clause}COALESCE(e.cnn_confidence,1.0) >= ?) {where_path}",
+        f"AND ({conv_clause}COALESCE(e.cnn_confidence,1.0) >= ?) {where_path}{where_excl}",
         params).fetchall()
     nf_where = "WHERE path GLOB ?" if glob else ""
     n_files = c.execute(f"SELECT COUNT(*) FROM chunks {nf_where}",
@@ -86,13 +92,19 @@ def main() -> int:
                     help="restrict BOTH DBs to files whose path contains this "
                          "(e.g. 'Week4' or a LIKE pattern) — slice one combined "
                          "DB by week. Repeat per week for in/out-of-sample splits.")
+    ap.add_argument("--exclude-animal", action="append", default=None,
+                    dest="exclude_animal", metavar="ANIMAL_ID",
+                    help="drop this animal_id from BOTH DBs (repeatable) — e.g. "
+                         "the noisy animals excluded from the spot-check.")
     args = ap.parse_args()
 
     # The old DB's confidences are raw CNN, so the convulsive carve-out is moot
     # there; apply keep_convulsive only to the (re-ranked) new DB.
-    old = _summarise(args.old, args.old_min_confidence or 0.0, path_like=args.path_like)
+    old = _summarise(args.old, args.old_min_confidence or 0.0, path_like=args.path_like,
+                     exclude_animals=args.exclude_animal)
     new = _summarise(args.new, args.min_confidence,
-                     keep_convulsive=args.keep_convulsive, path_like=args.path_like)
+                     keep_convulsive=args.keep_convulsive, path_like=args.path_like,
+                     exclude_animals=args.exclude_animal)
 
     def line(label, a, b):
         print(f"  {label:24s} {a:>12} {b:>12}")

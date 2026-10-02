@@ -85,7 +85,7 @@ def main() -> int:
                 # drives the UI's confidence filter and sorting -- without this,
                 # min_conf > 0 would silently hide everything.
                 detector_confidence=float(e["cnn_confidence"] or 0.0),
-                event_id=f"unet_{edf.stem}_{e['channel']}_{i}",
+                event_id=i + 1,   # int: from_dict() does int(d["event_id"])
                 features={
                     "detection_method": "ml_unet",
                     "convulsive": conv,

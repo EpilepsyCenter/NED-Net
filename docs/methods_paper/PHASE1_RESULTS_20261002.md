@@ -39,7 +39,14 @@ Precision denominators are small (only detections overlapping a candidate Mir ad
 count; the rest are UNKNOWN, since his pool is not exhaustive). 35/127 carries a 95% CI of
 roughly 20–36%.
 
-## The real finding: failure is heterogeneous across batches
+## Superseded framing: "heterogeneous across batches"
+
+> The per-batch table below was the first reading. It is **misleading** and is kept
+> only to document the correction — see the next section. Batches are not an
+> experimental variable: they exist because the rig has 8 recording stations, and all
+> animals were handled identically (user, 2026-10-02). What looked like a batch effect
+> is three animals.
+
 
 Like-for-like, restricted to Mir-annotated recordings:
 
@@ -60,10 +67,37 @@ Two distinct failure modes:
 Even the best batches sit at 33%, so no batch is usable. Batch 4 alone produces ~82% of all
 41,408 detections; Batch 2 another ~15%; batches 1+3 together ~3.5%.
 
-This is **one lab, one rig, one protocol, one species, one model**. The heterogeneity
-removes the usual explanations for cross-lab failure (different electrodes, species,
-seizure definitions) and makes the generalization claim sharper than a cross-lab comparison
-would.
+## The real finding: two independent failures, one of them three animals
+
+**Batches are not the unit.** Excluding just three animals — 483552, 483553, 483555 —
+Batch 4 falls from **94.7 to 8.8 detections/file**, in line with the others:
+
+| detections/file | all animals | excluding those 3 |
+|---|---|---|
+| Batch 1 | 2.6 | 2.6 |
+| Batch 2 | 18.2 | 18.2 |
+| Batch 3 | 1.6 | 1.6 |
+| Batch 4 | **94.7** | **8.8** |
+
+Those three animals produce **30,669 of 41,408 detections (74.1%)** and have **one
+confirmed seizure between them**. Mir's detector proposed almost nothing on the two worst
+(6 and 3 candidates reviewed on 483552 and 483553 respectively), so whatever the U-Net is
+responding to, his spike/spectral detector ignored it — consistent with artefact rather
+than missed pathology.
+
+So there are **two separate failures**, and they need separate fixes:
+
+1. **Precision collapse concentrated in ~3 animals.** Not a general property of the model;
+   it behaves reasonably elsewhere (449384: 906 candidates reviewed, 0 seizures, and the
+   U-Net fires only 4 times).
+2. **Broad recall failure — 9.1%.** Independent of the above: those three animals have no
+   confirmed seizures, so they cannot explain missed ones. This is the fundamental problem
+   and the harder one.
+
+For the paper this is a better story than batch heterogeneity: the model fails in two
+distinct, characterisable ways on data from the *same rig and protocol*, and failure mode 1
+is concentrated enough to be fixed cheaply with hard negatives (30,669 near-identical
+artefact events are a very cheap source of them).
 
 ## Controls — why this is not a mapping bug
 
