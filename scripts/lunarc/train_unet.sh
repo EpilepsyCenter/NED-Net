@@ -25,7 +25,11 @@
 # ============================================================
 
 #SBATCH -p gpua100
-#SBATCH -t 02:00:00
+#SBATCH -t 06:00:00
+# 06:00 not 02:00 — at ~226 s/epoch (observed, job 3795251 on the RAM_GDNF-only
+# arm) 50 epochs is >3 h, and the SV2A+RAM_GDNF arm has more data so its epochs
+# are slower. Patience normally stops well short of this; the ceiling only
+# matters in the good case where val_loss keeps improving.
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH -J unet_train
