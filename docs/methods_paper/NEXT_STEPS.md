@@ -1,53 +1,52 @@
 # Where we are, and what happens next
 
-**Updated 2026-10-02.** Single source of truth for project state. Update it when a step
-completes.
+**Updated 2026-10-06.** Single source of truth for project state. Update it when a step
+completes. Every run is in `RUN_LOG.md`; every correction in
+`VERIFICATION_LOG_20261001.md`.
 
 ## State
 
 | | |
 |---|---|
-| Phase 0 | **done** — ground truth consolidated, leakage audit clean |
-| Phase 1 detection | **done** — job 3770118, `ram_gdnf_unet_v0.db`, 41,408 events, copied back |
-| Phase 1 scoring | **done** — frozen model fails: 9.1% recall. See `PHASE1_RESULTS_20261002.md` |
-| Sidecars on LUNARC | **done** 2026-10-06 — 1,364 merged sidecars beside the EDFs |
-| Phase 1 review | **not started** — needs the lab PC / ThinLinc. Priority: the 3 flood animals, then B3 |
-| Phase 2 round 0 | **unblocked** — Mir's labels are in place, needs no lab PC |
-| Classical detector arms | **not started** |
+| Phase 0 | **done** |
+| Phase 1 detection | **done** — job 3770118, 41,408 events over 1,377 EDFs |
+| Phase 1 scoring | **done** — frozen model fails: recall ~10.6%, convulsive precision 27.6%, full-cohort precision 0.12% |
+| Phase 1 mechanism | **done** — RAM_GDNF has a more rhythmic background than SV2A; one cause for both failure modes |
+| Sidecars on LUNARC | **done** — 1,364 merged, plus 1,377 `_ned_channels.json` |
+| Flood review | **done enough** — 0-1 real events in 113, all three confidence terciles |
+| Signal-quality sweep | **done** — jobs 3798487 (v1) and 3799553 (v2); both metrics failed their pre-registered test, see `EXCLUSION_CRITERIA.md` |
+| LUNARC repo | **consolidated** at `4786254`+ |
+| Round-0 arm B | **done** — job 3795251, overfit from epoch 1, val event_f1 0.056 |
+| Round-0 arm A | **RUNNING** — job 3800378 (SV2A + RAM_GDNF, hold out Batch 3) |
+| Batch-3 review | **not started** — 401 pending; the only lead left on recall |
 
-**Blocked on hardware:** annotation needs the lab PC. Everything in steps 0, 1 and 3 below
-can proceed without it.
+## The three headline results so far
 
-## RESOLVED: LUNARC file-count quota (2026-10-06)
+1. **The frozen model does not transfer.** Recall ~10.6% against 392 evaluable confirmed
+   seizures; convulsive precision 27.6%; full-cohort precision 0.12%. Worst on short
+   events (3% under 10 s).
+2. **Why**: RAM_GDNF carries a more rhythmic, more periodic background at lower amplitude
+   than SV2A (duty cycle 0.53 vs 0.20, p=1.7e-32). The model's boundary — learned from
+   autocorrelation-proposed positives — is "rhythmic activity against non-rhythmic
+   background", and that premise fails here. Explains the false positives, the misses, and
+   why no exclusion rule could be built.
+3. **Phase 2 is the test of that account.** If a rhythmic background is the cause,
+   retraining on RAM_GDNF should recover performance. Arm A is therefore discriminating,
+   not merely better-powered.
 
-Quota raised to **50,000 files / 55,000 hard** (was 5,000/5,500). The merged sidecars
-transferred on 2026-10-06: **1,364 files** now beside the EDFs under `RAM_GDNF_2025`,
-project at 6,635/50,000, grace `none`.
+## Decisions on record
 
-Historical note, in case it recurs: directories count toward the file quota (the project
-holds ~4,300 files + ~1,180 directories), and space is never the constraint here — 517 GB
-of 4.883 TB. A home tree of symlinked EDFs plus real sidecars was considered as a
-workaround and verified technically sound (`annotation_json_path` is purely lexical;
-nothing in the dash app calls `resolve()`/`realpath()`), but rejected as fragile — opening
-an EDF by its project-storage path makes the UI write an *empty* sidecar there and silently
-lose the review queue.
-
-## Also worth running (no project-storage inode cost)
-
-**The classical-detector sweeps can run now.** `detect_autocorr_batch.py` only *reads* EDFs
-from project storage; per-worker part-DBs go to `${SNIC_TMP:-/tmp}` (node-local) and the
-merged DB lands in `~/.eeg_seizure_analyzer/projects/` — home, which has ~349,000 free
-inodes and 78 GB free. Zero project-storage inode cost.
-
-Worth doing now because it is on the critical path for the strongest version of the paper:
-if the published methods from other labs (White 2006 autocorrelation, Casillas-Espinosa
-2019 spectral, Twele 2017 spike-train) fail on this data the same way our U-Net did, the
-generalization claim becomes a four-method benchmark rather than one model's anecdote.
-Scoring is free afterwards — `validate_frozen_unet_vs_mir.py` works against any DB.
-
-Also unblocked: asking Mir the Q1 questions (below), and all local analysis.
+* Batch 4 **kept**, minus the 37 recordings with out-of-range ground-truth timestamps.
+* Exclusions must be **signal-based, never performance-based**. Only an amplitude rule
+  survived (dead/saturated channels; catches 449382). The three flood animals are handled
+  by **reporting both with and without them**, with their performance-driven origin stated.
+* Both Phase-2 arms use `--stable-val-split`, or the comparison confounds data with split.
+* Ground truth covers **convulsive and behavioural seizures only** — 78% of the model's
+  output is non-convulsive and has no reference in this cohort. Arm B therefore cannot
+  learn that class at all; only SV2A supplies it.
 
 ## Key artifacts
+
 
 | What | Where |
 |---|---|
@@ -62,11 +61,12 @@ Also unblocked: asking Mir the Q1 questions (below), and all local analysis.
 
 ## Steps
 
-### 0. EDF header comparison across batches — no compute, do first
-Batches span ~9 months (B1 Sep 2025, B2 Oct 2025, B3 Jan 2026, B4 Jun 2026) and behave
-completely differently (2.6 vs 69.3 detections/file). Compare sampling rate, physical
-min/max, dimension and prefilter across a few files per batch. If acquisition drifted,
-that partly explains Phase 1 and is itself a result.
+### 0. ~~EDF header comparison~~ — DONE, and the batch effect was three animals
+Not acquisition drift: excluding 483552/483553/483555 drops Batch 4 from 94.7 to 8.8
+detections/file. Recordings are uniform 90-minute files tiling the 21-day protocol
+(2,014 h x 8 ch = 16,114 animal-hours, no file over 92 min). B1-B3 are 16-channel
+(8 EEG + 8 activity); **Batch 4 is mixed 8- and 16-channel**, so its acquisition is the
+one genuine heterogeneity.
 
 ### 1. Merged-sidecar converter — to build
 `db_to_sidecars.py` currently writes U-Net detections as `pending` and **skips files that
