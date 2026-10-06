@@ -55,6 +55,13 @@ class DatasetConfig:
     seed: int = 42
     exclude_animals: tuple = ()  # animal IDs to drop from the dataset entirely
     #   (no train/val windows) — e.g. noisy recordings.
+    stable_convulsive_val: bool = False  # fill the convulsive val stratum with the
+    #   SMALLEST animals first instead of at random, so the dominant animals stay in
+    #   train. Positives are heavily concentrated (e.g. 355675 carries ~1/3 of all
+    #   convulsive events), and a random draw can put half of them in validation —
+    #   which both wastes training data and makes the result a lottery on the seed.
+    #   Default False so runs predating this flag reproduce exactly; the spike path
+    #   has always passed True. Use True for any run being compared against another.
     cache_windows: bool = True  # keep each window's read+resampled signal in RAM
     #   after the first read, so no epoch re-reads from disk. (Compute, not I/O,
     #   was the real bottleneck — see mixed precision in train.py — but the cache
@@ -806,7 +813,9 @@ def build_datasets(
         raise ValueError("No training windows could be extracted. "
                          "Check that the dataset has confirmed annotations.")
 
-    train_specs, val_specs = split_by_animal(specs, seed=config.seed)
+    train_specs, val_specs = split_by_animal(
+        specs, seed=config.seed,
+        stable_convulsive_val=config.stable_convulsive_val)
 
     train_ds = SeizureDataset(train_specs, config, augment=config.augment)
     val_ds = SeizureDataset(val_specs, config, augment=False)

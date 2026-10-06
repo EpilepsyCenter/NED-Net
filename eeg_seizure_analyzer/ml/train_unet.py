@@ -40,7 +40,8 @@ def _build_dataset_def(data_dir: str, name: str) -> dict:
     return {"name": name, "folder": data_dir, "files": files}
 
 
-def analyze(dataset_def: dict, exclude_animals: tuple = ()) -> dict:
+def analyze(dataset_def: dict, exclude_animals: tuple = (),
+            stable_val_split: bool = False) -> dict:
     """Report class balance + the per-animal train/val split, and recommend a
     neg/pos ratio and pos_weight.  Returns the recommendation dict.
 
@@ -80,11 +81,15 @@ def analyze(dataset_def: dict, exclude_animals: tuple = ()) -> dict:
               "     recording's ch0 is pooled together. Consider writing batch-\n"
               "     aware channel IDs (*_ned_channels.json) for a finer split.")
 
-    # Simulate the default split.
-    train_specs, val_specs = split_by_animal(specs, val_fraction=0.2, seed=42)
+    # Simulate the split the real run will use -- including the stable-stratum
+    # option, or --analyze reports a split training will not produce.
+    train_specs, val_specs = split_by_animal(
+        specs, val_fraction=0.2, seed=42,
+        stable_convulsive_val=stable_val_split)
     tp = sum(s.is_positive for s in train_specs)
     vp = sum(s.is_positive for s in val_specs)
-    print(f"\nDefault split (val_fraction=0.2, by animal):")
+    print(f"\nSplit (val_fraction=0.2, by animal, "
+          f"stable_convulsive_val={stable_val_split}):")
     print(f"  train: {len(train_specs):5} windows, {tp} positive")
     print(f"  val:   {len(val_specs):5} windows, {vp} positive")
     if vp == 0:
@@ -134,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
                         "as random background from the recordings (the old behaviour).")
     p.add_argument("--include-activity", action="store_true",
                    help="add the paired activity channel as a 2nd input channel")
+    p.add_argument("--stable-val-split", action="store_true",
+                   help="fill the convulsive validation stratum with the smallest "
+                        "animals first, keeping the dominant ones in train. Positives "
+                        "are heavily concentrated, so a random draw can put half of "
+                        "them in val. Use for any run compared against another.")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop from the dataset entirely (no "
                         "train/val windows), e.g. noisy recordings: "
@@ -160,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.analyze:
-        analyze(dataset_def, tuple(args.exclude_animals))
+        analyze(dataset_def, tuple(args.exclude_animals), args.stable_val_split)
         return 0
 
     use_hard = args.neg_source == "hard"
@@ -187,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         use_hard_negatives=use_hard,
         include_activity=args.include_activity,
         exclude_animals=tuple(args.exclude_animals),
+        stable_convulsive_val=args.stable_val_split,
     )
     if args.exclude_animals:
         print(f"Excluding animals from dataset: {list(args.exclude_animals)}")
