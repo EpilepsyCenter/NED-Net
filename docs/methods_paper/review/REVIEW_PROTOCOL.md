@@ -41,9 +41,24 @@ not individual events, because it matches the UI and gives clean weights.
 **Weights.** 9 of 351 files; estimate per tercile and combine, so a tercile with fewer
 files is not over-weighted.
 
-**Record for each event:** confirmed / rejected, convulsive flag, and a free-text note on
-what it actually is (movement artefact, electrical noise, chewing, genuine ictal, …). The
-note matters more than the label here — the paper needs to say *what* the model fires on.
+**Record for each event:** confirmed / rejected, plus the convulsive flag. That is the
+quantitative output and it is all that is required for every event.
+
+**Do NOT attempt behavioural attribution.** The behaviour videos are not on LUNARC, so
+"movement artefact" versus "genuine event" is not decidable at review time. Judge the EEG
+trace only. This is a stated limitation of the precision estimate: it tells us the share of
+detections that are not seizures, not what each one physically was.
+
+**Characterisation (secondary, ~10 events, not all 832).** For a handful of representative
+rejected events, use the Training page's notes box (`tr-notes`) to describe the *EEG
+morphology* only — e.g. high-amplitude broadband noise, flat or clipped signal, rhythmic
+low-frequency activity, electrode pop. The note saves when you navigate to another event,
+so move off the event before closing the file. Ten of these is enough to say what the model
+fires on; per-event notes across the whole sample are not worth the time.
+
+If behavioural attribution turns out to matter for the paper, the Batch_N_Behavior folders
+on the research share would need syncing for the sampled files only — a separate decision,
+not a blocker here.
 
 ## Review 2 — Batch 3 pending (recall)
 
