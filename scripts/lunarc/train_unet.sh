@@ -49,6 +49,11 @@
 : "${PATIENCE:=10}"
 : "${NEG_POS_RATIO:=8}"
 : "${EXCLUDE_ANIMALS:=}"   # space-separated animal IDs to drop, e.g. "355676"
+: "${STABLE_VAL_SPLIT:=1}"  # 1 = keep the dominant convulsive animals in train.
+#   Positives are heavily concentrated (355675 alone carries ~1/3 of all convulsive
+#   events), so a random split can land half of them in validation -- which wastes
+#   training data and makes the result a lottery on the seed. Set to 0 only to
+#   reproduce a run from before this flag existed.
 # POS_WEIGHT left unset/blank => auto (train_unet sets it to NEG_POS_RATIO).
 
 # ============================================================
@@ -80,7 +85,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
-           EXCLUDE_ANIMALS EDF_DIR
+           EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -96,6 +101,7 @@ echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
 echo "             exclude=${EXCLUDE_ANIMALS:-none}"
 echo "Data dir:    $EDF_DIR"
+echo "Stable val split: $STABLE_VAL_SPLIT"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -126,6 +132,9 @@ POS_WEIGHT_ARG=()
 EXCLUDE_ARG=()
 [ -n "$EXCLUDE_ANIMALS" ] && EXCLUDE_ARG=(--exclude-animals $EXCLUDE_ANIMALS)
 
+STABLE_ARG=()
+[ "$STABLE_VAL_SPLIT" = "1" ] && STABLE_ARG=(--stable-val-split)
+
 python -m eeg_seizure_analyzer.ml.train_unet \
     --data-dir "$EDF_DIR" \
     --model-name "$MODEL_NAME" \
@@ -137,6 +146,7 @@ python -m eeg_seizure_analyzer.ml.train_unet \
     --patience "$PATIENCE" \
     "${POS_WEIGHT_ARG[@]}" \
     "${EXCLUDE_ARG[@]}" \
+    "${STABLE_ARG[@]}" \
     --weight-decay 1e-4 \
     --base-filters 32 \
     --depth 4 \
