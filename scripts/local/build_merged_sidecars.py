@@ -42,6 +42,16 @@ from eeg_seizure_analyzer.io.annotation_store import (        # noqa: E402
 LABEL_MAP = {"Seizure": "confirmed", "False": "rejected"}      # 'Normal' -> dropped
 
 
+def _num(row, field: str) -> float | None:
+    """Numeric feature off a namedtuple row, or None when absent/NaN."""
+    v = getattr(row, field, None)
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f      # drop NaN
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ground-truth", default="~/ground_truth/mir_ramgdnf_annotations.csv")
@@ -102,12 +112,27 @@ def main() -> int:
                     onset_sec=float(r.start_s), offset_sec=float(r.end_s),
                     channel=int(r.ch0), label=LABEL_MAP[r.label],
                     source="detector", event_type="seizure",
-                    detector_confidence=float(getattr(r, "candidate_peak_score", 0.0) or 0.0),
+                    # detector_confidence MUST be a 0-1 probability: the UI's
+                    # confidence inputs are dcc.Input(min=0, max=1) and an
+                    # out-of-domain value breaks the Training tab render.
+                    # Mir's candidate_peak_score is an autocorrelation peak score
+                    # (hundreds to hundreds of thousands), not a probability, and
+                    # is not comparable to the U-Net's cnn_confidence -- it is kept
+                    # in features instead. These events are human-adjudicated, so
+                    # a detector confidence is not meaningful for them.
+                    detector_confidence=0.0,
                     features={"detection_method": "mir_candidate",
                               "detectors": ["mir"],
                               "convulsive": bool(conv),
                               "candidate_type": r.candidate_type,
-                              "provenance": "mir_video"},
+                              "provenance": "mir_video",
+                              "candidate_peak_score": _num(r, "candidate_peak_score"),
+                              "candidate_mean_score": _num(r, "candidate_mean_score"),
+                              "candidate_spike_freq": _num(r, "candidate_spike_freq"),
+                              "candidate_spike_count": _num(r, "candidate_spike_count"),
+                              "candidate_mean_low": _num(r, "candidate_mean_low"),
+                              "candidate_mean_gamma": _num(r, "candidate_mean_gamma"),
+                              "candidate_mean_broad": _num(r, "candidate_mean_broad")},
                 ))
                 claimed.append((int(r.ch0), float(r.start_s), float(r.end_s), len(anns) - 1))
                 n_conf += LABEL_MAP[r.label] == "confirmed"
