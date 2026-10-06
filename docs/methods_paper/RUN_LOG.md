@@ -157,6 +157,32 @@ fix:      `detector_confidence=0.0` for human-adjudicated rows; his candidate sc
 note:     This was NOT the cause of the Training-tab crash (that was the timestamp defect
           above), but it was a real defect found while investigating it.
 
+### 2026-10-06 — Is the ground truth still usable? Yes. (sensitivity analysis)
+question: if Mir's and the U-Net's time bases disagree, is all ground truth invalid?
+test 1 — alignment vs chance:
+          For each in-range confirmed seizure, count matches within 5 s, then repeat with
+          the seizure shifted by a random offset within its own file (200 draws).
+          Observed **39**; null **mean 3.3, sd 4.0, max 32**. **z = 9.0, p < 0.005.**
+          Systematic misalignment would give ~3 matches, so the alignment is real.
+test 2 — localisation:
+          All 277 overrunning rows are in **Batch 4 only**, affecting **37 of 1,074
+          recordings (3.4%)**, median 5 rows each; worst file 30 rows.
+test 3 — sensitivity (rows inside a suspect file could be shifted yet still land in range,
+          so drop those recordings wholesale):
+
+| treatment | overall | B1 | B2 | B3 | B4 |
+|---|---|---|---|---|---|
+| in-range rows only | 39/392 = 9.9% | 33.3% | 33.3% | 5.2% | 1.9% |
+| also drop the 37 suspect recordings | 38/356 = 10.7% | 33.3% | 33.3% | 5.2% | 1.7% |
+
+conclusion:
+          The ground truth is usable. The defect is localised to Batch 4 and immaterial:
+          Batch 4's near-zero recall is **not** a ground-truth artefact — excluding every
+          suspect recording makes it slightly worse (1.9% -> 1.7%), and B1-B3 are
+          unaffected. Report the in-range figure with this sensitivity analysis beside it.
+caveat:   This establishes alignment on average, not per event. Sub-second drift is
+          absorbed by the 5 s matching tolerance (matched events: median gap -2.2 s).
+
 ---
 
 ## Entries to add as you go
