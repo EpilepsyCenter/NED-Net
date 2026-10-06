@@ -72,7 +72,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
-           EXCLUDE_ANIMALS
+           EXCLUDE_ANIMALS EDF_DIR
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -87,6 +87,7 @@ echo "Start time:  $(date)"
 echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
 echo "             exclude=${EXCLUDE_ANIMALS:-none}"
+echo "Data dir:    $EDF_DIR"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -101,7 +102,12 @@ cd $HOME/NED-Net
 mkdir -p logs
 
 # EDF data + their *_ned_annotations.json sidecars live in project storage.
-EDF_DIR="/lunarc/nobackup/projects/lu2026-2-60/edf_data"
+# Overridable so one script serves both retraining arms:
+#   arm A (SV2A + RAM_GDNF): EDF_DIR=/lunarc/nobackup/projects/lu2026-2-60
+#   arm B (RAM_GDNF only):   EDF_DIR=/lunarc/nobackup/projects/lu2026-2-60/RAM_GDNF_2025
+# The scan is recursive and keyed on *_ned_annotations.json sidecars, so the
+# data-dir choice IS the dataset definition -- check what lives under it first.
+: "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/edf_data}"
 
 # Optional pos-weight: only pass the flag if the user set it (else train_unet
 # auto-picks pos_weight = neg/pos ratio).
