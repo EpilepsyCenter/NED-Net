@@ -304,13 +304,43 @@ result:   _pending_
           files previously scp'd were md5-verified identical to the committed versions
           before being discarded for the pull.
 
+### 2026-10-06 — Round-0 arm A, hold out Batch 3 — job 3800378
+script:   `scripts/lunarc/train_unet.sh` @ `4786254`
+config:   `EDF_DIR=/lunarc/nobackup/projects/lu2026-2-60` (**parent** -> SV2A `edf_data`
+          + `RAM_GDNF_2025`); exclude 459657-459664; neg_pos_ratio 10, pos_weight auto,
+          **--stable-val-split**, epochs 50, batch 32, lr 3e-4, patience 10
+dataset:  1,216 annotated EDFs; **1,369 confirmed**, 12,925 rejected (more than the 867 in
+          `SV2A_20260615` because LUNARC's `edf_data` holds more annotated files than the
+          165-file subset that trained UNetv2). After exclusion: 45 animal groups,
+          1,215 positive windows, 7,503 hard-negative windows.
+          Split with the stable option: **train 865 positives / val 350** (without it:
+          603/612 — half the positives in validation).
+caveat:   available neg/pos ratio is only 6.2 here, so requesting 10 yields everything;
+          arm B had 23 available and used 10. The arms therefore differ in *effective*
+          ratio because the data differ. Same requested value is the honest choice but
+          must be stated rather than presented as matched.
+result:   _pending_
+
+### 2026-10-06 — Round-0 arm B RERUN with stable split — job 3801062
+script:   `scripts/lunarc/train_unet.sh` @ `4786254`
+config:   identical to arm A except `EDF_DIR=.../RAM_GDNF_2025` (no SV2A)
+why:      the first arm B (3795251) ran before `--stable-val-split` existed, so comparing
+          it with arm A would confound **data** with **split**. This run isolates the data
+          difference. 3795251 is retained as the unstable-split reference.
+what it separates:
+          arm A trains on SV2A **plus** RAM_GDNF, so success alone cannot distinguish
+          "in-domain data" from "more positives". If stable arm B (276 in-domain positives)
+          also recovers -> the recommendation to other labs is "annotate your own cohort".
+          If only arm A recovers -> the pretrained base carries real value. Different
+          conclusions, so both arms are needed.
+result:   _pending_
+
 ---
 
 ## Entries to add as you go
 
 - Flood review: one mid-tercile file to complete the strata (files 1-2 done)
 - Batch-3 review
-- Round-0 arm A (SV2A + RAM_GDNF), hold out Batch 3
 - Round-0 remaining folds
 - Post-training detection + scoring per fold
 
