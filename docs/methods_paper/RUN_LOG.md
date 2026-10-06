@@ -119,6 +119,44 @@ interpretation:
           applied an amplitude floor (~6x baseline in SV2A), so low-amplitude rhythmic
           noise never entered his review queue.
 
+### 2026-10-06 — Ground-truth defect: timestamps outside their EDF
+found:    Review of `B4_W1_D1_21062026(4)` crashed the Training tab:
+          `ValueError: The length of the input vector x must be greater than padlen`
+          from `sosfiltfilt` in `_build_review_figure` -> `bandpass_filter`. Cause: the
+          first event on that file starts at 7,813.9 s in a 5,400 s recording, so the
+          extracted segment was empty.
+extent:   **242 of 12,083** adjudicated rows (2.0%) end past their file's duration,
+          including **38 of 430 confirmed seizures (8.8%)**. Max `end_s` = 10,740 s
+          against a 5,401 s maximum file duration. Listed in
+          `review/groundtruth_out_of_range.csv`.
+not longer files:
+          The recordings are 90-minute files that **tile the protocol continuously** —
+          per batch 340/339/341/357 files covering 20.7/20.7/20.8/21.7 days; 2,014
+          recording hours x 8 channels = **16,114 animal-hours**, matching the ~16,000
+          expected, with **0 files over 92 minutes**. `chunk_end_sec` is the true duration
+          read from the EDF (`analysis.py:421`), and neither `detect_batch.py` nor
+          `process_chunk` caps length. So detection covered 100% of the data and no re-run
+          is needed; the overruns are a misalignment in the source export.
+effect:   Those rows can never match a detection, so counting them as misses understated
+          recall. Corrected denominator: **recall 9.8% -> 10.6%** (convulsive 340).
+          Per-batch figures unchanged (33.3 / 33.3 / 5.2 / 1.6%). Precision unaffected.
+fixes:    `build_merged_sidecars.py` drops them (and logs them); `validate_frozen_unet_vs_mir.py`
+          excludes them from the denominator.
+to ask Mir:
+          whether `start_s` is file-relative or session-relative for these rows — 10,740 s
+          is about two files, so a multi-file session time base is the likely explanation.
+
+### 2026-10-06 — Sidecar bug: detector_confidence out of domain
+found:    Mir's `candidate_peak_score` was written into `detector_confidence`. It is an
+          autocorrelation peak score (hundreds to 710,660), not a probability.
+          12,072 of 53,128 events exceeded 1.0. The UI's confidence filters are
+          `dcc.Input(min=0, max=1)`.
+fix:      `detector_confidence=0.0` for human-adjudicated rows; his candidate scores
+          (peak, mean, spike freq/count, low/gamma/broad band powers) moved into
+          `features`, where they remain available for analysis. Commit `acb6ea2`.
+note:     This was NOT the cause of the Training-tab crash (that was the timestamp defect
+          above), but it was a real defect found while investigating it.
+
 ---
 
 ## Entries to add as you go

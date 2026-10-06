@@ -64,6 +64,8 @@ def main() -> int:
     ap.add_argument("--tolerance", type=float, default=5.0,
                     help="seconds of slack when deciding a U-Net event duplicates a Mir event")
     ap.add_argument("--unet-min-confidence", type=float, default=0.0)
+    ap.add_argument("--dropped-csv", default=None,
+                    help="write the out-of-range ground-truth rows here for the record")
     ap.add_argument("--no-unet", action="store_true",
                     help="write only Mir's labels (training sidecars, no review queue)")
     a = ap.parse_args()
@@ -76,6 +78,15 @@ def main() -> int:
     con = sqlite3.connect(os.path.expanduser(a.db))
     con.row_factory = sqlite3.Row
     chunks = {r["path"]: r["id"] for r in con.execute("SELECT id, path FROM chunks")}
+    # File durations, used to drop Mir rows whose timestamps fall outside their
+    # EDF. 242 of his 12,083 rows (2.0%), including 38 of 430 confirmed seizures,
+    # end past the end of the file: recordings are 5,400 s but his max end_s is
+    # 10,740 s, about two files, so for some sessions his time base spans more
+    # than one EDF. Such a row cannot be rendered (sosfiltfilt gets an empty
+    # segment and raises) and can never match a detection, so it is dropped
+    # rather than silently relocated. Dropped rows are written to --dropped-csv.
+    durations = {Path(r["path"]).stem: float(r["chunk_end_sec"] or 0) - float(r["chunk_start_sec"] or 0)
+                 for r in con.execute("SELECT path, chunk_start_sec, chunk_end_sec FROM chunks")}
     ev = pd.read_sql(
         "SELECT c.path, e.start_sec, e.end_sec, e.channel, e.type, "
         "       e.cnn_confidence, e.convulsive_confidence, e.animal_id "
@@ -94,6 +105,7 @@ def main() -> int:
 
     out_root = Path(os.path.expanduser(a.out_dir))
     n_files = n_conf = n_rej = n_pend = n_dup = 0
+    dropped: list[dict] = []
 
     for path in paths:
         stem = Path(path).stem
@@ -105,7 +117,14 @@ def main() -> int:
         claimed: list[tuple[int, float, float, int]] = []   # (channel, on, off, ann index)
 
         if g is not None:
+            dur = durations.get(stem, 0.0)
             for r in g.itertuples():
+                if dur and float(r.end_s) > dur:
+                    dropped.append({"stem": stem, "channel": r.channel, "label": r.label,
+                                    "start_s": r.start_s, "end_s": r.end_s,
+                                    "file_duration_s": round(dur, 1),
+                                    "overrun_s": round(float(r.end_s) - dur, 1)})
+                    continue
                 conv = r.candidate_type == "convulsive"
                 anns.append(AnnotatedEvent(
                     file_path=path, animal_id="", annotator="mir",
@@ -188,6 +207,12 @@ def main() -> int:
             json.dumps(payload, indent=2))
         n_files += 1
 
+    if dropped:
+        print(f"DROPPED {len(dropped)} ground-truth rows whose timestamps fall outside "
+              f"their EDF ({sum(d['label'] == 'Seizure' for d in dropped)} confirmed seizures)")
+        if a.dropped_csv:
+            pd.DataFrame(dropped).to_csv(os.path.expanduser(a.dropped_csv), index=False)
+            print(f"  -> {a.dropped_csv}")
     print(f"wrote {n_files} sidecars under {out_root}")
     print(f"  confirmed {n_conf} | rejected {n_rej} | pending (U-Net) {n_pend} "
           f"| U-Net events merged into a Mir event {n_dup}")

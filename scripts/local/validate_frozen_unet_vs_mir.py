@@ -24,7 +24,7 @@ import pandas as pd
 TOL = 5.0  # seconds of slack when matching a detection to a ground-truth event
 
 
-def load(db: str, gt_csv: str):
+def load(db: str, gt_csv: str, drop_out_of_range: bool = True):
     gt = pd.read_csv(gt_csv)
     gt["stem"] = gt.session_name.str.replace(r"\.edf$", "", regex=True)
     gt["ch0"] = gt.channel - 1
@@ -34,6 +34,23 @@ def load(db: str, gt_csv: str):
         "FROM events e JOIN chunks c ON c.id = e.chunk_id", con)
     ev["stem"] = ev.path.str.rsplit("/", n=1).str[-1].str.replace(".edf", "", regex=False)
     ev["batch"] = ev.path.str.extract(r"Batch_(\d)_Recordings")[0]
+
+    # 242 ground-truth rows (2.0%), including 38 of 430 confirmed seizures, carry
+    # timestamps past the end of their EDF -- recordings are 90 min and tile the
+    # 21-day protocol continuously (2,014 h x 8 ch = 16,114 animal-hours, no file
+    # over 92 min), so these are a misalignment in the source export, not longer
+    # files. They can never match a detection, so leaving them in the denominator
+    # counts them as misses and understates recall.
+    if drop_out_of_range:
+        dur = pd.read_sql("SELECT path, chunk_start_sec, chunk_end_sec FROM chunks", con)
+        dur["stem"] = dur.path.str.rsplit("/", n=1).str[-1].str.replace(".edf", "", regex=False)
+        dur["dur"] = dur.chunk_end_sec - dur.chunk_start_sec
+        gt = gt.merge(dur[["stem", "dur"]], on="stem", how="left")
+        n_before = len(gt)
+        gt = gt[(gt.dur.isna()) | (gt.end_s <= gt.dur)].copy()
+        if len(gt) != n_before:
+            print(f"dropped {n_before - len(gt)} ground-truth rows with timestamps "
+                  f"outside their EDF\n")
     return gt, ev
 
 

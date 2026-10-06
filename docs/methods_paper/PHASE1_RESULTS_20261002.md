@@ -21,15 +21,20 @@ enter a training scan.
 
 ## Headline
 
-**The frozen model does not transfer.** 41,408 detections against 430 known seizures;
-overall recall **9.1%**.
+**The frozen model does not transfer.** 41,408 detections against 392 evaluable confirmed
+seizures; overall recall **10.6%**.
+
+> Corrected 2026-10-06: 242 ground-truth rows (2.0%), including 38 of 430 confirmed
+> seizures, carry timestamps past the end of their EDF and can never match a detection.
+> Counting them as misses understated recall. The original figures were 9.1% overall /
+> 9.8% convulsive against a 430 denominator. See `RUN_LOG.md`.
 
 | filter | detections | recall vs 368 convulsive | precision (adjudicated) |
 |---|---|---|---|
-| all events | 41,408 | 9.8% | 13.7% (51/372) |
-| conf ≥ 0.5 | 11,135 | 7.1% | 17.3% (32/185) |
-| convulsive only | 9,089 | 6.8% | 27.6% (35/127) |
-| convulsive + conf ≥ 0.5 | 3,769 | 4.6% | 29.6% (21/71) |
+| all events | 41,408 | 10.6% | 13.7% (51/372) |
+| conf ≥ 0.5 | 11,135 | 7.6% | 17.3% (32/185) |
+| convulsive only | 9,089 | 7.4% | 27.6% (35/127) |
+| convulsive + conf ≥ 0.5 | 3,769 | 5.0% | 29.6% (21/71) |
 
 Restricting to convulsive roughly doubles precision — the non-convulsive detections are
 disproportionately junk — but confidence filtering does not rescue it: precision plateaus
