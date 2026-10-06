@@ -40,9 +40,12 @@ def _build_dataset_def(data_dir: str, name: str) -> dict:
     return {"name": name, "folder": data_dir, "files": files}
 
 
-def analyze(dataset_def: dict) -> dict:
+def analyze(dataset_def: dict, exclude_animals: tuple = ()) -> dict:
     """Report class balance + the per-animal train/val split, and recommend a
     neg/pos ratio and pos_weight.  Returns the recommendation dict.
+
+    ``exclude_animals`` must mirror what training will use, or --analyze
+    reports a split that the real run will not produce.
     """
     files = dataset_def["files"]
     n_conf = sum(f["n_confirmed"] for f in files)
@@ -57,7 +60,8 @@ def analyze(dataset_def: dict) -> dict:
 
     # Plan windows with ALL hard negatives so we see the full pool, then look at
     # how build_window_specs actually lays them out per animal-group.
-    cfg = DatasetConfig(neg_pos_ratio=0.0, augment=False)  # 0 => keep all
+    cfg = DatasetConfig(neg_pos_ratio=0.0, augment=False,  # 0 => keep all
+                        exclude_animals=tuple(exclude_animals))
     specs = build_window_specs(dataset_def, cfg)
     pos = [s for s in specs if s.is_positive]
     neg = [s for s in specs if not s.is_positive]
@@ -156,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.analyze:
-        analyze(dataset_def)
+        analyze(dataset_def, tuple(args.exclude_animals))
         return 0
 
     use_hard = args.neg_source == "hard"
