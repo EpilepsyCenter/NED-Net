@@ -335,6 +335,72 @@ what it separates:
           conclusions, so both arms are needed.
 result:   _pending_
 
+### 2026-10-06 — Batch-3 review INVERTS the Phase-1 conclusion
+files:    `B3_W3_D7_06022026(6)` (17 U-Net events) and `B3_W3_D8_07022026(9)` (15).
+          Both had **zero** of Mir's confirmed seizures, so anything real here is an event
+          his reference does not contain.
+result:   **23 of 32 real (72% precision)** — and the split by confidence is clean:
+
+| confidence | n | real | precision |
+|---|---|---|---|
+| < 0.4 | 10 | 1 | **10%** |
+| >= 0.5 | 22 | 22 | **100%** |
+
+stage 2 is ANTI-PREDICTIVE:
+
+| Stage-2 says | n | actually real |
+|---|---|---|
+| convulsive | 9 | 1 (**11%**) |
+| non-convulsive | 23 | 22 (**96%**) |
+
+          Trained on SV2A convulsive events, it fires on RAM_GDNF's rhythmic artefact (the
+          flood was 26% convulsive-labelled) and correctly declines the real RAM_GDNF
+          seizures, which are non-convulsive. Reviewer: the detections look like genuine
+          seizures but were **misclassified as convulsive** — no signal evolution.
+          So the flag is not merely broken, it is informative in reverse.
+what this does to the earlier numbers:
+          * "full-cohort precision 0.12%" pooled 41,408 detections of which 26,504 are
+            below mean-confidence 0.5, plus the flood. **It is not the precision of a
+            sensibly-thresholded detector.**
+          * precision measured against Mir's candidates (13.7% / 27.6%) is an
+            **UNDERestimate**: his 15-80 Hz, >=15 s detector cannot propose the ~10 Hz
+            non-convulsive events this model is best at, so real detections were scored as
+            false positives.
+          * **recall ~10.6% stands** — the model does miss most of Mir's episodes. The two
+            instruments are sensitive to different event populations with low overlap in
+            both directions; neither is a superset.
+          * At conf >= 0.5 excluding the flood animals: **4,336 detections = 6.5 per
+            animal-day** against Mir's 430 total. If precision holds, the cohort's seizure
+            burden is far higher than the reference captured.
+SELECTION BIAS — the reason this is not yet a result:
+          those two files were chosen **because** they had the highest confidence, so the
+          sample is biased toward the regime where precision is good. 22 events, 2 files,
+          1 batch.
+next:     `review/precision_at_conf05_sample.csv` — 16 files / 84 events, files drawn at
+          RANDOM stratified by batch with no confidence selection, flood animals excluded,
+          seed 7. That measures precision at conf >= 0.5 properly.
+
+### 2026-10-06 — Mir's candidate generator (answer to Q1)
+          Peaks in the **15-80 Hz** envelope above median + 4 x MAD; peaks grouped at
+          <=0.5 s, padded and merged; episodes retained at **>=15 s** with **>=2.5
+          spikes/s**; scored on spike density plus low/gamma/broadband power; labelled
+          convulsive when the peak score exceeds baseline, else behaviour. Then adjudicated
+          **manually with video** as Seizure / False / Normal.
+implications:
+          * Candidates are **automated, not video-generated** — video entered only at
+            adjudication. So recall against this set is "recall relative to a 15-80 Hz
+            episode detector", NOT absolute recall. The convulsive/behaviour labels are
+            video-anchored and sound.
+          * The **>=15 s floor applies to the candidate episode**, not the final label:
+            `False` rows have median 68.9 s (the episodes) while `Seizure` rows are median
+            18.5 s, minimum 3.4 s — the human refined boundaries inside each window, so the
+            Seizure timings are human-determined.
+          * A brief isolated seizure with no surrounding >=15 s high-density episode
+            **could never be a candidate** and cannot appear in the ground truth.
+          * **Band mismatch is the crux**: his 15-80 Hz envelope versus the U-Net's ~2-14 Hz
+            rhythmicity inherited from the autocorrelation detector. Different instruments,
+            different event populations — which is exactly what the Batch-3 review shows.
+
 ---
 
 ## Entries to add as you go
