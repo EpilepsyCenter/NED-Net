@@ -246,6 +246,48 @@ next:     one mid-tercile file (`B4_W1_D1_21062026(5)`, 14 events) completes the
           design cheaply; beyond that the marginal value is low and the remaining effort is
           better spent on Batch 3, which addresses recall rather than precision.
 
+### 2026-10-06 — Spot-check of Mir's positives, and recall vs event duration
+calibration (matched, both sources agree):
+          `B1_W3_D5_22092025(13)` ch0 3763.6-3810.8 s and ch7 1598.9-1636.7 s, both
+          convulsive. Reviewer: **both are good.** So the ground truth is sound for typical
+          events and the recall failure is not an artefact of bad labels.
+missed, long events:
+          `B1_W1_D1_04092025(1)` — four missed "convulsive" events of 172-239 s on ch7 plus
+          one of 62 s on ch1. Reviewer: **real convulsive seizures are never minutes long**,
+          so the long ones are almost certainly **multiple chained seizures annotated as one
+          block**; the 62 s event is rhythmic and is a seizure (possibly several in
+          sequence). So Mir's long annotations are blocks, not single events.
+match rate vs duration (all 383 in-range confirmed seizures):
+
+| duration | n | match rate |
+|---|---|---|
+| <10 s | 100 | **3.0%** |
+| 10-20 s | 100 | 8.0% |
+| 20-30 s | 59 | 11.9% |
+| 30-60 s | 94 | 17.0% |
+| 60-120 s | 26 | 19.2% |
+| 2-5 min | 10 | **0.0%** |
+| >5 min | 3 | **0.0%** |
+
+reading:
+          The reviewer's hypothesis (never trained on long or chained events; the model's
+          `window_sec` is 60 with per-channel z-scoring, so an event filling the window
+          leaves no contrast) **holds at the extreme — 0 of 13 events over 2 min were
+          caught** — but accounts for only ~4% of the 344 misses.
+          The dominant pattern is the opposite: the model is **worst on short events** (3%
+          under 10 s) and improves monotonically with duration to 2 min. 200 of 383 events
+          are under 20 s. Median convulsive duration is 22 s, a third of a 60 s window with
+          ample contrast, and 90% are still missed. That shape is the signature of broadly
+          low per-window sensitivity, with longer events caught more often through more
+          opportunities and greater salience — not a duration-specific bug.
+          **The core recall failure remains unexplained.** Best remaining leads: the
+          per-channel asymmetry (ch7: 52 detections cohort-wide against 107 confirmed
+          seizures; ch3: 15,291 against 8) and the signal-quality sweep.
+ground-truth caveat (bounded):
+          38 of 340 convulsive annotations (11%) exceed 60 s and 13 exceed 2 min; these are
+          likely chains and should carry a duration caveat, or be reported separately.
+          Excluding all 38 changes recall by about a point.
+
 ---
 
 ## Entries to add as you go
