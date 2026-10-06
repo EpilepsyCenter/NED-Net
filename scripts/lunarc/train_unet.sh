@@ -63,8 +63,12 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask LR            "Learning rate"
     ask PATIENCE      "Patience"
     ask NEG_POS_RATIO "Neg/pos ratio"
-    read -r -p "Pos weight (blank = auto = neg/pos ratio): " POS_WEIGHT
-    read -r -p "Exclude animal IDs (space-separated, blank = none): " EXCLUDE_ANIMALS
+    # Use ask() here too: a bare `read` sets the var to EMPTY on Enter, which
+    # silently destroys a preset passed in the environment. That is how job
+    # 3795249 was submitted with exclude=none despite EXCLUDE_ANIMALS being set,
+    # which would have trained a leave-one-batch-out fold on its own test set.
+    ask POS_WEIGHT      "Pos weight (Enter keeps current; unset = auto = neg/pos ratio)"
+    ask EXCLUDE_ANIMALS "Exclude animal IDs (space-separated)"
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
