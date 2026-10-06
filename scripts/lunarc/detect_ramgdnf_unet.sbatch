@@ -19,20 +19,26 @@
 #SBATCH --no-requeue
 
 # ---- paths (EDIT if your layout differs) ----
-EDF_DIR="/lunarc/nobackup/projects/lu2026-2-60/RAM_GDNF_2025"
-DB_PATH="$HOME/.eeg_seizure_analyzer/projects/ram_gdnf_unet_v0.db"
-METADATA_CSV="$HOME/NED-Net/scripts/lunarc/RAM_GDNF_2025_batch_metadata.csv"
+: "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/RAM_GDNF_2025}"
+: "${DB_PATH:=$HOME/.eeg_seizure_analyzer/projects/ram_gdnf_unet_v0.db}"
+: "${METADATA_CSV:=$HOME/NED-Net/scripts/lunarc/RAM_GDNF_2025_batch_metadata.csv}"
 # cohort EDFs ONLY -> excludes the 8 non-cohort files (483580 baseline + Hamza 2023):
-PATH_INCLUDE="Batch_[1-4]_Recordings"
+: "${PATH_INCLUDE:=Batch_[1-4]_Recordings}"
 
-# ---- frozen production operating point (DO NOT change for the validation) ----
-MODEL="UNetv2_20260615"
-CONV_MODEL="Convulsive_v4LUNARC_20260616"
-THRESHOLD=0.5
-BOUNDARY_THRESHOLD=0.1
-CONV_THRESHOLD=0.45
-MIN_DURATION=5
-MERGE_GAP=2
+# ---- frozen production operating point (DO NOT change for the Phase-1 validation) ----
+# Every setting below is an env override so ONE script serves both the frozen
+# validation and each retrained fold's evaluation. Keep the operating point fixed
+# when comparing models -- only MODEL, DB_PATH and PATH_INCLUDE should change.
+#   e.g. MODEL=ramgdnf_armB_holdB3 PATH_INCLUDE='Batch_3_Recordings' \
+#        DB_PATH=~/.eeg_seizure_analyzer/projects/armB_holdB3_on_B3.db \
+#        sbatch scripts/lunarc/detect_ramgdnf_unet.sbatch
+: "${MODEL:=UNetv2_20260615}"
+: "${CONV_MODEL:=Convulsive_v4LUNARC_20260616}"
+: "${THRESHOLD:=0.5}"
+: "${BOUNDARY_THRESHOLD:=0.1}"
+: "${CONV_THRESHOLD:=0.45}"
+: "${MIN_DURATION:=5}"
+: "${MERGE_GAP:=2}"
 
 module purge
 module load Anaconda3/2024.06-1
@@ -52,7 +58,8 @@ if [ "$N" -eq 0 ]; then
 fi
 
 WORKERS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
-echo "node=$(hostname) workers=$WORKERS  db=$DB_PATH  start=$(date)"
+echo "node=$(hostname) workers=$WORKERS  model=$MODEL  conv=$CONV_MODEL"
+echo "  db=$DB_PATH  include=$PATH_INCLUDE  start=$(date)"
 
 python scripts/lunarc/detect_batch.py \
     --edf-dir "$EDF_DIR" \

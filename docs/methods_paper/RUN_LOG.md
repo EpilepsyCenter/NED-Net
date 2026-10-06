@@ -288,6 +288,22 @@ ground-truth caveat (bounded):
           likely chains and should carry a duration caveat, or be reported separately.
           Excluding all 38 changes recall by about a point.
 
+### 2026-10-06 — Signal-quality sweep — job 3798487
+script:   `scripts/lunarc/signal_quality.sbatch` @ `58ab100`
+config:   1,377 cohort EDFs, 60 windows/channel, peak_ratio 10, lu48 -c 24
+outputs:  `~/signal_quality_ramgdnf.csv` (home, no project inodes)
+purpose:  pre-registered exclusion metric (`EXCLUSION_CRITERIA.md`) AND an explanation for
+          the per-channel asymmetry (ch7: 52 detections cohort-wide vs 107 confirmed
+          seizures; ch3: 15,291 vs 8)
+result:   _pending_
+
+### 2026-10-06 — LUNARC repo consolidated
+          Pulled 48 commits (38be406 -> bf08e7b). Removed a stale nested clone
+          (`~/NED-Net/NED-Net`, 166 files from Jun 16, older commit, nothing unique) and
+          two empty scp-accident directories (`scriptsarrhenius`, `scriptslocal`). The two
+          files previously scp'd were md5-verified identical to the committed versions
+          before being discarded for the pull.
+
 ---
 
 ## Entries to add as you go
@@ -297,5 +313,5 @@ ground-truth caveat (bounded):
 - Round-0 arm A (SV2A + RAM_GDNF), hold out Batch 3
 - Round-0 remaining folds
 - Post-training detection + scoring per fold
-- Signal-quality sweep (scripts/lunarc/signal_quality.sbatch)
+
 - Classical-detector sweeps
