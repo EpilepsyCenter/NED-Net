@@ -221,11 +221,36 @@ for Phase 2:
   computed from the raw EEG and blind to model output — never because a detector fired on
   them. See `EXCLUSION_CRITERIA.md`; sweep not yet run.
 
+### 2026-10-06 — Flood review, files 1-2 of 9: 0 real events in 81
+files:    `B4_W2_D3_30062026(14)` (46 events, **low** confidence tercile) and
+          `B4_W1_D1_21062026(4)` (35 events, **high** tercile) — both queues cleared in full.
+result:   **0 confirmed of 81.** 95% upper bound on the true-event rate **3.6%**, so at
+          most ~1,100 of the 30,669 flood detections could be real; point estimate 0.
+morphology (reviewer, EEG only — no video):
+          regular ~10 Hz spiking on some channels, less regular background noise on others,
+          and crucially **no evolution of the signal** in any of them. Real ictal activity
+          evolves in frequency and amplitude across an event; none of these do. That is a
+          morphological criterion that does not require video.
+why the two terciles matter:
+          The sample was stratified by mean confidence. Files from the lowest and highest
+          terciles both came back all-noise, so **confidence carries no information here** —
+          the model is not merely uncertain about these, it is wrong about them with equal
+          force at every confidence level.
+consequence:
+          Full-cohort precision, treating the flood as noise: **51/41,408 = 0.12%**.
+          The 51 TP are against the convulsive reference only.
+coverage of the output now characterised:
+          flood sampled and found to be noise **30,669 (74%)**; adjudicated against Mir's
+          candidates 372 (0.9%); still uncharacterised 10,367 (25%).
+next:     one mid-tercile file (`B4_W1_D1_21062026(5)`, 14 events) completes the stratified
+          design cheaply; beyond that the marginal value is low and the remaining effort is
+          better spent on Batch 3, which addresses recall rather than precision.
+
 ---
 
 ## Entries to add as you go
 
-- Flood review: files 2-9 (file 1 done, see above)
+- Flood review: one mid-tercile file to complete the strata (files 1-2 done)
 - Batch-3 review
 - Round-0 arm A (SV2A + RAM_GDNF), hold out Batch 3
 - Round-0 remaining folds

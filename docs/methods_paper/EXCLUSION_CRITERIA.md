@@ -54,6 +54,13 @@ estimate needs far less than the whole recording, and sampling keeps the sweep c
 _Not yet set — the sweep has not run. Record it here with the date and the distribution it
 was read from._
 
+## Review evidence that motivates the metric (2026-10-06)
+
+Two sampled files, from the lowest and highest confidence terciles, 81 events reviewed in
+full: **0 real events**. The reviewer's description — regular ~10 Hz spiking, and **no
+evolution of the signal** in any event — is what the metric must capture. Confidence
+carried no information: the highest-confidence file was as wrong as the lowest.
+
 ## Predictions to check against (stated in advance)
 
 - 483552, 483553 and 483555 should show a **high** `rhythmic_duty_cycle` with
