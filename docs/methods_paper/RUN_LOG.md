@@ -183,6 +183,44 @@ conclusion:
 caveat:   This establishes alignment on average, not per event. Sub-second drift is
           absorbed by the 5 s matching tolerance (matched events: median gap -2.2 s).
 
+### 2026-10-06 — Precision was pessimistic: Mir's set has no non-convulsive events
+fact:     Mir annotated **convulsive or behavioural seizures only** — no short
+          non-convulsive events (user, 2026-10-06). But **78% of the U-Net's output
+          (32,319 of 41,408) is non-convulsive**.
+consequence:
+          A U-Net non-convulsive detection overlapping one of Mir's `False` rows was being
+          counted as a false positive. `False` means "not a convulsive/behavioural
+          seizure"; it does not rule out a non-convulsive seizure. Breaking the 372
+          adjudicated overlaps apart:
+
+| | n |
+|---|---|
+| confirmed TP (overlaps a `Seizure`) | 51 |
+| **confirmed** FP (U-Net said convulsive, Mir said no) | 92 |
+| **ambiguous** (U-Net said non-convulsive, Mir said `False`/`Normal`) | 229 |
+
+corrected numbers:
+          * precision as first reported: 51/372 = **13.7%** — pessimistic
+          * precision on unambiguous rows: 51/143 = **35.7%**
+          * **convulsive-only precision: 35/127 = 27.6%** — the defensible figure
+          * **recall unaffected: ~10.6%**, since Mir's set *is* the convulsive reference
+what can and cannot be claimed:
+          Convulsive recall and convulsive precision are both reportable. The
+          non-convulsive arm — 78% of output — has **no ground truth in this cohort** and
+          cannot be scored in either direction. The flood review is currently the only
+          evidence about it (46 events, all noise bar one), which is why that sampling
+          still matters even though the 10 Hz mechanism will not be reported as a finding.
+for Phase 2:
+          Arm B (RAM_GDNF only) **structurally cannot learn non-convulsive seizures** — its
+          labels contain none. The SV2A batches are the only source of that class, so arm A
+          is required rather than a comparison arm.
+
+### 2026-10-06 — Decisions
+* **Batch 4 is kept**, minus the 37 recordings with out-of-range ground-truth timestamps.
+* **Noisy recordings will be excluded**, but on a pre-registered signal-quality metric
+  computed from the raw EEG and blind to model output — never because a detector fired on
+  them. See `EXCLUSION_CRITERIA.md`; sweep not yet run.
+
 ---
 
 ## Entries to add as you go
@@ -192,4 +230,5 @@ caveat:   This establishes alignment on average, not per event. Sub-second drift
 - Round-0 arm A (SV2A + RAM_GDNF), hold out Batch 3
 - Round-0 remaining folds
 - Post-training detection + scoring per fold
+- Signal-quality sweep (scripts/lunarc/signal_quality.sbatch)
 - Classical-detector sweeps

@@ -29,7 +29,13 @@ seizures; overall recall **10.6%**.
 > Counting them as misses understated recall. The original figures were 9.1% overall /
 > 9.8% convulsive against a 430 denominator. See `RUN_LOG.md`.
 
-| filter | detections | recall vs 368 convulsive | precision (adjudicated) |
+> Precision corrected 2026-10-06. Mir annotated convulsive/behavioural seizures only,
+> while 78% of the U-Net's output is non-convulsive, so 229 of the 321 apparent false
+> positives are **not refuted** by his labels. Unambiguous precision is 51/143 = 35.7%;
+> the defensible figure is **convulsive-only 35/127 = 27.6%**. Recall is unaffected. The
+> non-convulsive arm has no ground truth in this cohort. See `RUN_LOG.md`.
+
+| filter | detections | recall vs 340 convulsive | precision (adjudicated, pessimistic) |
 |---|---|---|---|
 | all events | 41,408 | 10.6% | 13.7% (51/372) |
 | conf ≥ 0.5 | 11,135 | 7.6% | 17.3% (32/185) |
