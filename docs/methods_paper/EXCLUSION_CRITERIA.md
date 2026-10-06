@@ -96,11 +96,73 @@ All three flood animals rank above all three seizure-bearing animals on both mea
 the two highest-burden animals score lowest — seizing, not noisy. `peak_freq_hz` now has a
 spread (median 7.9 Hz) instead of being pinned at 5.0.
 
-## Threshold
+## v2 ALSO FAILED at cohort scale (2026-10-06) — and the search stops here
 
-_Not yet set._ Three files is not a distribution. Re-run the full sweep with v2, then set
-the threshold at a natural gap in the cohort-wide `prominence_db` distribution and record
-it here with the date. The provisional gap in the table above sits between 4.24 and 5.45.
+Sweep job 3799553 (v2, 10,984 channel-rows). Per-animal median `prominence_db`:
+
+| animal | | prominence_db | rank of 32 |
+|---|---|---|---|
+| 450096 | 11 seizures | 12.91 | 1 |
+| 483555 | flood, 1 seizure | 8.78 | 4 |
+| **459663** | **51 seizures** | **8.58** | **5** |
+| 483553 | flood, 0 seizures | 6.23 | 15 |
+| 483552 | flood, 0 seizures | 5.31 | 22 |
+| 459658 | 50 seizures | 5.05 | 26 |
+| 483557 | 78 seizures | 4.23 | 30 |
+| 483559 | 81 seizures | 3.65 | 31 |
+
+The two highest-burden animals do score low as predicted, but **459663 with 51 seizures
+ranks 5th** and two of the three flood animals sit mid-table. The distribution is a smooth
+gradient from 12.9 to 2.2 with **no natural gap**. The provisional 3-file separation did
+not survive the full cohort.
+
+**The search stops here.** Two metrics have now been tried against the same five animals; a
+third would be fitting a threshold to a known answer, which is precisely what this document
+exists to prevent. Recorded as a negative result: **spectral rhythmicity does not separate
+noisy from seizure-bearing animals in this cohort** — and §"Why" below explains why not.
+
+## What survives: amplitude-based exclusion only
+
+**449382 is a dead electrode.** After demeaning, `rms` = 0.000, `rhythmic_duty_cycle` =
+0.000, lowest prominence at 2.18, and a spurious 11.25 Hz peak. In v1 (no demeaning) it
+read rms 2.44 with the cohort's highest line noise, 2.46 — so it is a large DC offset with
+no signal underneath. Unambiguous, measurable, and unrelated to model performance.
+
+**Rule (set 2026-10-06):** exclude any (recording, channel) whose demeaned `rms` is below
+0.001 or above 0.5 — dead or saturated. This caught 449382 and nothing seizure-bearing.
+Narrower than hoped, but defensible.
+
+## Why rhythmicity could not find "bad animals"
+
+Because the problem is **cohort-wide, not a few outliers**. Running the identical metric on
+SV2A (the training cohort) versus RAM_GDNF:
+
+| metric | SV2A | RAM_GDNF | P(GDNF>SV2A) | p |
+|---|---|---|---|---|
+| `rhythmic_duty_cycle` | 0.20 | 0.53 | 0.694 | 1.7e-32 |
+| `prominence_db` | 4.92 | 6.17 | 0.673 | 3.8e-26 |
+| `acorr_peak` | 0.076 | 0.119 | 0.657 | 8.8e-22 |
+| `rms` | 0.077 | 0.053 | 0.375 | 2.2e-14 |
+
+52% of RAM_GDNF channel-rows exceed SV2A's own 75th percentile of rhythmicity, against 22%
+of SV2A's. `duty_cycle`, `acorr_peak` and `prominence_db` are scale-free ratios, so this is
+not a units or gain artefact. The shifts are consistent but **moderate** (AUC 0.66-0.69);
+the distributions overlap heavily. There is no subset to exclude because the whole cohort
+sits further along the same axis.
+
+## The flood animals: transparency instead of a metric
+
+483552, 483553 and 483555 produced 74% of all detections. They are handled by disclosure,
+not by a metric we could not validate:
+
+> A stratified random sample of 113 of their detections — drawn before review, spanning all
+> three confidence terciles — was adjudicated by a human. **0 were genuine events.**
+
+They were flagged **because** they produced many detections, which is performance-driven in
+origin, so the protection is to **report the primary analysis both including and excluding
+them** and state the origin plainly. A reviewer then has everything needed to accept or
+reject the exclusion. This is weaker than an independent signal criterion would have been,
+and that weakness is part of the report.
 
 ## Review evidence that motivates the metric (2026-10-06)
 

@@ -120,6 +120,47 @@ artefact events are a very cheap source of them).
 | Per-file channel order | ruled out — every file is 8 channels / 8 animals (user-confirmed) |
 | Channel-indexed rig effect | ruled out — channel 1 is silent in batches 1–3 and floods in Batch 4, so the effect is per-batch, not per-slot |
 
+## Why SV2A was easier: the cohorts differ in the one dimension the model keys on
+
+Running the **identical** signal-quality metric on SV2A (the training cohort) and
+RAM_GDNF, 320 vs 10,984 channel-rows:
+
+| metric | SV2A | RAM_GDNF | P(GDNF>SV2A) | p |
+|---|---|---|---|---|
+| `rhythmic_duty_cycle` | 0.20 | **0.53** | 0.694 | 1.7e-32 |
+| `prominence_db` | 4.92 | 6.17 | 0.673 | 3.8e-26 |
+| `acorr_peak` | 0.076 | 0.119 | 0.657 | 8.8e-22 |
+| `rms` | 0.077 | **0.053** | 0.375 | 2.2e-14 |
+
+RAM_GDNF recordings carry a **more rhythmic, more periodic background at lower amplitude**.
+52% of its channel-rows exceed SV2A's own 75th percentile of rhythmicity, against 22% of
+SV2A's. `duty_cycle`, `acorr_peak` and `prominence_db` are scale-free ratios, so this is
+not a units or gain artefact.
+
+**This is a single mechanism for both failure modes.** `UNetv2_20260615` took 74% of its
+training positives from the autocorrelation detector, whose criterion is rhythmic spiking
+near 10 Hz — so the model's learned decision boundary is *rhythmic activity standing out
+from non-rhythmic background*. In RAM_GDNF that premise fails:
+
+* the **background itself is rhythmic**, so it crosses the boundary -> precision collapse
+  (0.12% full-cohort), and the reviewer's description of the flood as regular ~10 Hz
+  spiking with **no evolution of the signal** is exactly this;
+* **real seizures stand out less** against a rhythmic background, compounded by 33% lower
+  amplitude which per-channel z-scoring cannot recover -> recall ~10%, worst on the short
+  events that have least time to distinguish themselves (3% under 10 s).
+
+It also explains why a signal-quality exclusion rule could not be built: the shift is
+**cohort-wide, not a few bad animals**, so there is no subset to exclude
+(`EXCLUSION_CRITERIA.md`).
+
+**Honest limits.** The effect sizes are moderate (AUC 0.66-0.69) and the distributions
+overlap heavily — this is a consistent shift, not a clean separation, and it is a
+correlational account rather than a demonstrated cause. The testable prediction is that
+retraining on RAM_GDNF data should recover performance **if** this is the mechanism, since
+the model would then learn a boundary appropriate to this background. Phase 2 tests exactly
+that, which makes arm A the discriminating experiment rather than merely the better-powered
+one.
+
 ## Still open
 
 - **Why Batch 4 floods and Batch 3 is silent.** Batches span ~9 months (B1 Sep 2025,
