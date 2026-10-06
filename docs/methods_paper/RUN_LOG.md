@@ -69,12 +69,44 @@ result:   430 confirmed + 11,653 rejected + 41,045 pending; 282 events proposed 
 result:   1,364 sidecars in place beside the EDFs; project at 6,635/50,000 files after the
           quota increase (was 5,000, and directories count). Grace cleared.
 
+### 2026-10-06 — Round-0 arm B, hold out Batch 3, CANCELLED — job 3795249
+script:   `scripts/lunarc/train_unet.sh` @ `f7736d1`
+result:   **CANCELLED before running.** Submitted with `exclude=none` despite
+          `EXCLUDE_ANIMALS` being set: `POS_WEIGHT` and `EXCLUDE_ANIMALS` used a bare
+          `read`, which sets the variable to empty on Enter and destroyed the preset.
+          Would have trained the hold-out-B3 fold on its own test set. Fixed in `a3ce36f`
+          (both fields now use the preserving `ask()` helper, which also displays the
+          current value). **Always check the summary line reads `exclude=<ids>`.**
+
+### 2026-10-06 — Round-0 arm B, hold out Batch 3 — job 3795251
+script:   `scripts/lunarc/train_unet.sh` @ `a3ce36f`
+config:   `EDF_DIR=.../RAM_GDNF_2025` (RAM_GDNF only, no SV2A); exclude 459657-459664;
+          neg_pos_ratio 10, pos_weight auto (=10), epochs 50, batch 32, lr 3e-4,
+          patience 10, base_filters 32, depth 4, dropout 0.2, neg-source hard
+inputs:   Mir's labels as merged sidecars + `*_ned_channels.json` (32 animals).
+          After exclusion: 24 animal groups, **276 positives**, 6,231 hard negatives;
+          default split train 184 pos / val 92 pos
+outputs:  `~/.eeg_seizure_analyzer/models/ramgdnf_armB_holdB3/`
+result:   _pending_
+notes:    Prediction on record — this should improve recall but NOT the over-detection,
+          because `_balance_negatives` prefers rejected events and only tops up with
+          random background on a shortfall; 6,231 rejected exceeds the 2,760 target, so
+          no background is drawn and the unlabelled flood regions are never seen.
+
+### 2026-10-06 — channel-ID files written and transferred
+script:   `scripts/local/build_channel_ids.py` @ `f7736d1`
+outputs:  1,377 `*_ned_channels.json` beside the EDFs (project ~8,012/50,000 files)
+result:   `--analyze` now reports **32 animal groups** with real IDs (was 8, pooled by
+          channel index). Batch 3's eight animals total exactly 154 positives, matching
+          Mir's count. Without this, `--exclude-animals` matched nothing.
+
 ---
 
 ## Entries to add as you go
 
 - Flood review (sample defined in `review/flood_review_sample.csv`)
 - Batch-3 review
-- Round-0 training, arm A and arm B, per fold
+- Round-0 arm A (SV2A + RAM_GDNF), hold out Batch 3
+- Round-0 remaining folds
 - Post-training detection + scoring per fold
 - Classical-detector sweeps
