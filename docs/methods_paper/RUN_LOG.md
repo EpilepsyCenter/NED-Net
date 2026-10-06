@@ -100,11 +100,30 @@ result:   `--analyze` now reports **32 animal groups** with real IDs (was 8, poo
           channel index). Batch 3's eight animals total exactly 154 positives, matching
           Mir's count. Without this, `--exclude-animals` matched nothing.
 
+### 2026-10-06 — Flood review, file 1 of 9 (low tercile)
+file:     `B4_W2_D3_30062026(14)` — 46 pending events (whole file queue cleared;
+          42 belong to the three flood animals, 4 to others on the same recording)
+result:   **all noise except possibly event 1.** ~1/46 = **~2% precision**, against the
+          13.7% measured on the animals Mir did review.
+morphology (reviewer, EEG only — no video on LUNARC):
+          channels 2 and 6 carry **regular ~10 Hz spiking** — rhythmic artefact, not ictal.
+          Other channels show less regular background noise. None are events.
+interpretation:
+          This is a mechanistic explanation for the precision collapse, not just a count.
+          `UNetv2_20260615` drew 74% of its training positives from the autocorrelation
+          detector, whose confirmed events centre near 10 Hz spike frequency (the SV2A
+          sidecars record `mean_spike_frequency_hz` 2-14 Hz, first confirmed = 10.48 Hz).
+          The model therefore learned "rhythmic ~10 Hz spiking" as its seizure signature,
+          and fires on channels carrying regular 10 Hz artefact.
+          It also explains why these events are unadjudicated: Mir's candidate generator
+          applied an amplitude floor (~6x baseline in SV2A), so low-amplitude rhythmic
+          noise never entered his review queue.
+
 ---
 
 ## Entries to add as you go
 
-- Flood review (sample defined in `review/flood_review_sample.csv`)
+- Flood review: files 2-9 (file 1 done, see above)
 - Batch-3 review
 - Round-0 arm A (SV2A + RAM_GDNF), hold out Batch 3
 - Round-0 remaining folds
