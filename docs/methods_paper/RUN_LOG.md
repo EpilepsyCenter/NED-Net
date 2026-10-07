@@ -433,13 +433,52 @@ lesson for the methods paper:
           discipline rather than from new data. Worth reporting as such: it is the
           strongest available argument for pre-registered sampling in detector validation.
 
+### 2026-10-07 — Round-0 RESULTS: arm A works, arm B does not
+| | arm A (SV2A + RAM_GDNF), job 3800378 | arm B (RAM_GDNF only), job 3801062 |
+|---|---|---|
+| best val loss | **0.676** | 0.818 |
+| event_f1 @ default thr | **0.329** | 0.012 |
+| **event_f1 @ best thr (0.9)** | **0.512** | 0.127 |
+| precision @ 0.9 | **0.690** | 0.080 |
+| recall @ 0.9 | 0.407 | 0.308 |
+| predicted vs true events | 1,485 for 371 | **12,070 for 52** |
+| training positives | 865 | 184 |
+
+reading:
+          Arm B is unusable — 12,070 predictions for 52 true events, 98% recall at 0.6%
+          precision, i.e. it learned to fire almost everywhere. **276 in-domain positives
+          are not enough to train a U-Net from scratch; ~1,200 are.**
+          Arm A is usable: at threshold 0.9, precision 0.69 / recall 0.41 / f1 0.51.
+the transferable answer (and it is the inconvenient one):
+          **Annotating your own cohort alone is not sufficient at this scale.** A lab cannot
+          be handed the pipeline and told to label ~300 events; the requirement is nearer a
+          thousand, or they need the base dataset. That is a concrete annotation-cost
+          statement, and it is the opposite of the convenient conclusion.
+also:     both models select `best_threshold = 0.9`, consistent with confidence being
+          informative. Convulsive-specific f1 stays weak for arm A (conv_event_f1 0.154,
+          conv_best 0.389).
+not comparable to the frozen model:
+          arm A's val set spans SV2A + RAM_GDNF animals, so 0.512 cannot be set against
+          UNetv2's 0.78 on SV2A alone. Only a common test set can.
+
+### 2026-10-07 — Arm A evaluated on Batch 3 — job 3809197
+script:   `scripts/lunarc/detect_ramgdnf_unet.sbatch` @ `770fe29` (env overrides)
+config:   `MODEL=ramgdnf_armA_holdB3`, `PATH_INCLUDE=Batch_3_Recordings`, frozen operating
+          point otherwise (0.5 / boundary 0.1 / conv 0.45)
+outputs:  `~/.eeg_seizure_analyzer/projects/armA_holdB3_on_B3.db`
+purpose:  **the comparable number.** Frozen UNetv2 managed **5.2% recall on Batch 3**;
+          scoring arm A the same way on the same held-out batch is the paper's positive
+          result if it lands near its val recall of 41%.
+result:   _pending_
+
 ---
 
 ## Entries to add as you go
 
 - Flood review: one mid-tercile file to complete the strata (files 1-2 done)
 - Batch-3 review
-- Round-0 remaining folds
+- Round-0 remaining folds (hold out B1, B2; B4 now excluded)
+- Arm A evaluated on Batch 3 (job 3809197)
 - Post-training detection + scoring per fold
 
 - Classical-detector sweeps
