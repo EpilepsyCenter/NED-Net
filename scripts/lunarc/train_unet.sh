@@ -49,6 +49,15 @@
 : "${PATIENCE:=10}"
 : "${NEG_POS_RATIO:=8}"
 : "${EXCLUDE_ANIMALS:=}"   # space-separated animal IDs to drop, e.g. "355676"
+: "${NEG_SOURCE:=hard}"   # hard | random.
+#   `hard` uses `rejected` annotations as negatives. That is right for SV2A, whose
+#   rejections were adjudicated for seizure-ness -- but WRONG for Mir's RAM_GDNF
+#   `False` rows, which mean "not a convulsive/behavioural seizure" and were
+#   confirmed by visual review (2026-10-07) to contain real non-convulsive activity,
+#   including 180 s blocks of clear bursting. Used as hard negatives they train the
+#   detector to suppress the events it should find.
+#   `random` ignores every rejected label and samples background negatives instead:
+#   no sidecar edits, so completed human reviews on disk are untouched.
 : "${STABLE_VAL_SPLIT:=1}"  # 1 = keep the dominant convulsive animals in train.
 #   Positives are heavily concentrated (355675 alone carries ~1/3 of all convulsive
 #   events), so a random split can land half of them in validation -- which wastes
@@ -85,7 +94,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
-           EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT
+           EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT NEG_SOURCE
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -101,7 +110,7 @@ echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
 echo "             exclude=${EXCLUDE_ANIMALS:-none}"
 echo "Data dir:    $EDF_DIR"
-echo "Stable val split: $STABLE_VAL_SPLIT"
+echo "Stable val split: $STABLE_VAL_SPLIT   neg-source: $NEG_SOURCE"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -138,7 +147,7 @@ STABLE_ARG=()
 python -m eeg_seizure_analyzer.ml.train_unet \
     --data-dir "$EDF_DIR" \
     --model-name "$MODEL_NAME" \
-    --neg-source hard \
+    --neg-source "$NEG_SOURCE" \
     --neg-pos-ratio "$NEG_POS_RATIO" \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \

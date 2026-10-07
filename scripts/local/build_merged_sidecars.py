@@ -66,6 +66,15 @@ def main() -> int:
     ap.add_argument("--unet-min-confidence", type=float, default=0.0)
     ap.add_argument("--dropped-csv", default=None,
                     help="write the out-of-range ground-truth rows here for the record")
+    ap.add_argument("--no-mir-negatives", action="store_true",
+                    help="omit Mir's `False` rows instead of writing them as `rejected`. "
+                         "His `False` means \"not a convulsive/behavioural seizure\", "
+                         "adjudicated on video -- it does NOT rule out a non-convulsive "
+                         "seizure, and visual review (2026-10-07) confirmed such rows "
+                         "contain real activity, including 180 s blocks of clear bursting. "
+                         "Used as hard negatives they teach a seizure detector to suppress "
+                         "the events it should find. Valid as convulsive-CLASSIFIER "
+                         "negatives, contaminated as DETECTION negatives.")
     ap.add_argument("--no-unet", action="store_true",
                     help="write only Mir's labels (training sidecars, no review queue)")
     a = ap.parse_args()
@@ -74,6 +83,11 @@ def main() -> int:
     gt["stem"] = gt.session_name.str.replace(r"\.edf$", "", regex=True)
     gt["ch0"] = gt.channel - 1
     gt = gt[gt.label.isin(LABEL_MAP)]
+    if a.no_mir_negatives:
+        n_before = len(gt)
+        gt = gt[gt.label == "Seizure"]
+        print(f"--no-mir-negatives: dropped {n_before - len(gt)} of Mir's `False` rows "
+              f"(kept {len(gt)} confirmed seizures)")
 
     con = sqlite3.connect(os.path.expanduser(a.db))
     con.row_factory = sqlite3.Row
