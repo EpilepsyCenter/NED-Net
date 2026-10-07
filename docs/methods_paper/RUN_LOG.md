@@ -401,6 +401,38 @@ implications:
             rhythmicity inherited from the autocorrelation detector. Different instruments,
             different event populations — which is exactly what the Batch-3 review shows.
 
+### 2026-10-07 — Unbiased sample WITHDRAWS the "works at conf >= 0.5" claim
+sample:   `review/precision_at_conf05_sample.csv` — 16 files drawn at random stratified by
+          batch, no confidence selection, seed 7. Batch 4 not reviewed (now excluded).
+          12 files / 112 adjudicated U-Net events returned.
+headline: **precision at conf >= 0.5 is 18/53 = 34% (95% CI 22-48%)**, not the 100% seen in
+          the two hand-picked Batch-3 files. **The 2026-10-06 claim is withdrawn.**
+          Confidence remains monotonically informative: 10% (<0.5), 24%, 35%, 42%, 67% (>0.8).
+by batch (conf >= 0.5): B1 6/7 = 86%, B2 6/40 = 15%, B3 6/6 = 100%.
+the channel exclusion does NOT rescue B2:
+          B2 is poor on every reviewed channel — ch1 5%, ch2 13%, ch3 9%, ch5 40% — and
+          excluding code-ch2/ch3 gives 12% against 10% for those channels alone. So B2's
+          problem is not confined to the channels flagged as noisy.
+Stage-2 inversion also does not survive:
+          unbiased sample gives 3/8 real among "convulsive" and 21/104 among
+          "non-convulsive". The dramatic 11%-vs-96% inversion of 2026-10-06 was a
+          small-sample artefact of the two hand-picked files. **Also withdrawn.**
+WHY PRECISION ON THE RETAINED SET STILL CANNOT BE ESTIMATED:
+          after excluding Batch 4, B2 code-ch2/ch3 and 449382, the retained output at
+          conf >= 0.5 is 934 detections — B1 160 (17%), **B2 437 (47%)**, B3 337 (36%).
+          The random sample spent 56 of its 71 B2 events on code-ch3, a channel now
+          excluded, leaving **2 reviewed events on B2's retained channels**. So nearly half
+          the output is unmeasured. A naive mean over retained reviewed events gives 87%,
+          which is an artefact of that weighting, not a result.
+next:     `review/b2_retained_sample.csv` — 10 files / 37 events on B2 channels 0,1,4,5,6 at
+          conf >= 0.5, seed 11. That is the binding measurement.
+lesson for the methods paper:
+          the picture has now moved three times — pessimistic (pooled, unthresholded),
+          optimistic (hand-picked high-confidence files), and back to uncertain (random
+          sample, then re-weighted by output volume). Each correction came from sampling
+          discipline rather than from new data. Worth reporting as such: it is the
+          strongest available argument for pre-registered sampling in detector validation.
+
 ---
 
 ## Entries to add as you go
