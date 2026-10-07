@@ -150,6 +150,32 @@ not a units or gain artefact. The shifts are consistent but **moderate** (AUC 0.
 the distributions overlap heavily. There is no subset to exclude because the whole cohort
 sits further along the same axis.
 
+## FINAL EXCLUSIONS (decided 2026-10-07 by expert visual review)
+
+After two signal-quality metrics failed to separate noisy from seizure-bearing recordings,
+exclusion is made on **expert visual review of the traces** by the electrophysiologist.
+That is the standard basis for artefact rejection in EEG work; what makes it defensible is
+stating the criterion and reporting results both ways, not having an automated metric agree.
+
+| excluded | basis |
+|---|---|
+| **Batch 4, entirely** | "so noisy we need to exclude it... maybe only noisy at times, but those are the times where all false positives show up" |
+| **Batch 2, channels 3 and 4** (animals 450095, 450096) | "noisy and have a lot of artefacts" |
+| **449382** (any batch) | dead electrode: demeaned `rms` 0.000, duty 0.000, highest line noise 2.46 |
+| **37 Batch-4 recordings** | ground-truth timestamps outside the EDF (subsumed by the Batch-4 exclusion) |
+
+**Cost, stated plainly:** dropping Batch 4 removes **154 of 392 evaluable confirmed
+seizures (39%)** and all of its training positives, which matters for a Phase 2 that is
+already short of positives. Dropping B2 ch3/ch4 removes a further 12.
+
+**Partial corroboration:** 450096 topped the cohort `prominence_db` table at 12.9, the
+highest of 32 animals, so the metric and the visual read agree on that channel. They
+disagree elsewhere, and where they disagree the visual read governs.
+
+**Reporting requirement:** the primary analysis is reported on the retained set, with the
+full-cohort figures given alongside. The exclusions were decided **after** seeing model
+output, so that sequence is disclosed rather than presented as independent.
+
 ## The flood animals: transparency instead of a metric
 
 483552, 483553 and 483555 produced 74% of all detections. They are handled by disclosure,
