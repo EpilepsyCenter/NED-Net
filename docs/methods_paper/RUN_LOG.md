@@ -471,6 +471,32 @@ purpose:  **the comparable number.** Frozen UNetv2 managed **5.2% recall on Batc
           result if it lands near its val recall of 41%.
 result:   _pending_
 
+### 2026-10-07 — Mir's convulsive labels verified; the U-Net misses 85% of them
+verified: 8 of 8 of Mir's confirmed convulsive seizures inspected by the reviewer are
+          **real seizures** (2 calibration events on 2026-10-06, 6 more today). His
+          convulsive ground truth is sound, so the miss rate is not a labelling artefact.
+scale:    of **148** confirmed convulsive seizures of typical duration (15-60 s) in
+          retained recordings, the U-Net caught **22 — 15%**. It is not a convulsive
+          detector in this cohort.
+morphology (CORRECTED):
+          The caught examples are on **UI ch8** (code ch7) and look like textbook
+          convulsive seizures; the missed ones are on **UI ch7** (code ch6) and "look a
+          little different... but still clear activity". So the model catches the typical
+          morphology and misses the atypical — the sensible failure direction.
+          An earlier note in this log claimed the reverse; that was a code/UI channel
+          mix-up and is withdrawn. **The reviewer always means UI channels (= code + 1).**
+Mir's `False` rows contain real activity:
+          a 180.29 s block on UI Ch6 was shown labelled `REJECTED` with the convulsive flag
+          set, containing several distinct bursts of clear high-amplitude spiking. His
+          `False` means "not a convulsive/behavioural seizure" and does not rule out
+          non-convulsive events. Arm A used 12,925 such windows as hard negatives.
+          Addressed by `NEG_SOURCE=random` (commit `dc49cca`), which ignores rejected
+          labels without touching any sidecar — so completed reviews stay intact.
+B2 channel exclusion CONFIRMED correct:
+          the reviewer's "B2 ch3 and ch4" are UI channels, i.e. code ch2 and ch3 (animals
+          450093 and 450094) — exactly what was excluded. Those two carry 5,095 of B2's
+          6,168 detections (83%), consistent with them being the noisy ones.
+
 ---
 
 ## Entries to add as you go

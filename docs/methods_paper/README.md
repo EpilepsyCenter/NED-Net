@@ -1,5 +1,13 @@
 # NED-Net methods paper — working folder
 
+> ## Channel numbering — read this first
+> **The reviewer always refers to UI channels. UI channel N = code/DB channel N-1.**
+> The UI, the EDF labels (`Ch1 Biopot`...`Ch8 Biopot`) and Mir's annotation `channel`
+> column are all 1-based. The database `events.channel`, the sidecar `channel` field,
+> `animal_ch0..animal_ch7` in the metadata CSV and `_ned_channels.json` keys are all
+> 0-based. Mixing them has already produced one wrong conclusion (2026-10-07), so state
+> which convention is in use every time.
+
 This is where the validation-and-retraining project for the **NED-Net methods paper** is
 tracked. Separate from the SV2A biology manuscript, whose record lives in
 `scripts/paper_stats/ANALYSIS_LOG.md`.
