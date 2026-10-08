@@ -869,7 +869,7 @@ lesson:   `train_unet.py` takes only `--data-dir` and re-scans the folder, so it
           entry for that job. The refresh is the `review -> retrain` link in the loop and
           is the step that fails silently.
 
-### 2026-10-08 — All-batches production retrain (no hold-out) — job 3825957
+### 2026-10-08 — All-batches production retrain (no hold-out) — job 3825989
 script:   `scripts/lunarc/train_unet.sh` @ `c6ac87d`
 config:   `EDF_DIR=~/train_nomirneg` (symlink tree, Mir's rejections dropped);
           `NEG_SOURCE=hard`, neg_pos_ratio 10, pos_weight auto, stable-val-split on,
@@ -896,9 +896,29 @@ exclusion caveat:
           the highest `prominence_db` of all 32 animals and the *best* precision of B2's
           three retained channels). A production model would normally train on them. Note
           it; do not quietly re-run without recording why.
-result:   **CANCELLED before running** — submitted against the stale label tree (see the
-          defect entry above). Resubmitted after the refresh as job <TBD>; record the
-          `--analyze` positive-window count there.
+history: job **3825957 CANCELLED before running** — submitted against the stale label
+          tree (see the defect entry above). Resubmitted as **3825989** after refreshing
+          with `--keep-mir-rejections` and adding the two training-set corrections.
+settings (all five confirmed on the submission summary line):
+          `neg/pos=10`, `pos_weight=auto` (=10), `max_positive_sec=100`,
+          `bg_avoid_rejected=1`, `hard_neg_exclude=mir_candidate`
+dataset (verified by `--analyze`, job 3825985, before submitting):
+          annotated EDFs **1,219** (was 404 — Mir's rejected rows are back in the tree);
+          confirmed 1,535; raw rejected 13,074 but **hard-negative windows 1,461**, i.e.
+          unchanged, which is the proof that the `mir_candidate` exclusion works;
+          **positive windows 1,346** = 1,361 - 15.
+          The cap's arithmetic reconciles exactly against Mir's CSV: 449381 -1,
+          449385 -2, 449388 -8 = **11 in B1**, and 459659 -4 = **4 in B3**, totalling the
+          15 events over 100 s. Nothing else moved.
+          39 animal groups (B3's 459657-459664 present). Split: train 982 pos / val 364.
+          Effective negatives at train time: 1,461 hard + ~12,000 background to reach the
+          10:1 target, the background now avoiding annotated regions.
+result:   _pending_
+watch for: the new log line `background sampling: dropped N of ~12000 draws that could not
+          avoid an annotated region`. A handful is fine; **over ~1,000 means Mir's rejected
+          regions blanket those channels densely enough that clean background is scarce**,
+          the effective neg/pos ratio falls below 10, and the result must be read with that
+          in mind.
 
 ---
 
