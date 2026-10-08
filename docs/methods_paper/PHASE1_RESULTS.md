@@ -56,8 +56,29 @@ Seizure / False / Normal.
 | conf >= 0.5 | 4/153 = 2.6% |
 | convulsive + conf >= 0.5 | 1/153 = 0.7% |
 
-Cohort-wide the same figure is 22 of 148 typical-duration convulsive seizures in retained
-recordings — **15%**. Caught examples look like textbook convulsive seizures (UI ch8);
+On the **retained set** (all batches except 4, minus Batch 2 UI ch3/ch4 and 449382),
+scored against convulsive ground truth only — no re-detection needed, since the U-Net runs
+per channel independently so filtering output by animal is equivalent:
+
+| filter | detections | convulsive recall |
+|---|---|---|
+| all detections | 2,499 | **34/222 = 15.3%** |
+| Stage-2 convulsive only | 450 | 23/222 = 10.4% |
+| all, conf >= 0.5 | 934 | 26/222 = 11.7% |
+| convulsive + conf >= 0.5 | 294 | 17/222 = 7.7% |
+
+| batch | convulsive recall | GT convulsive | detections |
+|---|---|---|---|
+| B1 | 35.7% | 56 | 867 |
+| B2 | 46.2% | 13 | 1,073 |
+| **B3** | **5.2%** | **153** | 559 |
+
+**Batch 3 holds 153 of the 222 convulsive seizures and has the worst recall by sevenfold —
+and it is the batch retained as clean.** So recording quality does **not** explain the
+convulsive failure: the cleanest batch with the most convulsive events is where the detector
+does worst. B1's and B2's better figures rest on few events (56 and 13; B2's 46% is 6 of 13).
+This is what makes Batch 3 the right held-out fold for Phase 2 — it is where the headroom
+is. Caught examples look like textbook convulsive seizures (UI ch8);
 missed ones look atypical (UI ch7) — the sensible failure direction.
 
 **Why**: `UNetv2_20260615` drew 640 of its 867 training positives (74%) from the
