@@ -574,13 +574,47 @@ inputs:   `ramgdnf_armA3_holdB3` over **Batch 1 + Batch 2** (held IN, never the 
           truth, n = **68** for every row, so the comparison is properly paired.
 outputs:  `~/.eeg_seizure_analyzer/projects/armA3_tune_t{0.5,0.7,0.8,0.9}_b{0.1,0.3,0.5,0.5}.db`
 
-| | det | recall | precision (vs Mir) | fired on | med IoU | med det dur |
+Ground truth is **convulsive only** (Mir's reference). Two detection scopes, because
+Stage 2 only labels and never filters, so they answer different questions.
+
+**PRIMARY — full cascade** (detection must also be labelled convulsive by Stage 2). This is
+the deployed pipeline and the type-matched comparison against a convulsive reference:
+
+| | det | recall | precision | fired on | med IoU | med det dur |
+|---|---|---|---|---|---|---|
+| **frozen, full cascade** | 189 | **27.9%** | **61%** | **16%** | 0.39 | 14 s |
+| A3 thr 0.5 / bnd 0.1 | 26,042 | 50.0% | 2% | 100% | 0.78 | 27 s |
+| A3 thr 0.7 / bnd 0.3 | 8,652 | 42.6% | 4% | 96% | 0.71 | 30 s |
+| A3 thr 0.8 / bnd 0.5 | 4,553 | 39.7% | 8% | 83% | 0.67 | 24 s |
+| **A3 thr 0.9 / bnd 0.5 (SELECTED)** | 2,865 | **38.2%** | 11% | **71%** | 0.66 | 26 s |
+
+**SECONDARY — Stage 1 alone** (all detections, whatever Stage 2 called them), which shows
+where the loss sits:
+
+| | det | recall | precision | fired on | med IoU | med det dur |
 |---|---|---|---|---|---|---|
 | **frozen UNetv2** | 1,844 | **38.2%** | 33% | **51%** | **0.36** | **10 s** |
 | A3 thr 0.5 / bnd 0.1 | 32,713 | 72.1% | 2% | 100% | 0.66 | 13 s |
 | A3 thr 0.7 / bnd 0.3 | 11,448 | 60.3% | 4% | 97% | 0.58 | 13 s |
 | A3 thr 0.8 / bnd 0.5 | 5,911 | 52.9% | 7% | 87% | 0.60 | 17 s |
 | **A3 thr 0.9 / bnd 0.5 (SELECTED)** | 3,692 | **50.0%** | 10% | **77%** | **0.60** | **19 s** |
+
+THE FROZEN MODEL'S SILENCE IS WORSE IN THE CASCADE VIEW:
+          with Stage 2 applied it fires on just **16% of recordings** — 189 convulsive
+          detections across all of retained B1+B2. Precise when it speaks (61%) and almost
+          mute. A3 at the strict point covers **71%**, a **4.4x** increase. This is the
+          strongest single statement in the comparison and it survives both scopes.
+STAGE 2 BEHAVES DIFFERENTLY BETWEEN THE TWO MODELS:
+          it keeps **10%** of the frozen model's detections as convulsive (189/1,844) but
+          **78%** of A3's (2,865/3,692) — `conv_armA_holdB3` was retrained on Mir's
+          convulsive events and now recognises this cohort's morphology. Retraining Stage 2
+          changed the cascade's character as much as retraining Stage 1, which is a
+          reportable finding in itself (and the reason the Stage-2 retrain was not optional).
+          Consistent with the earlier 22/34 = 65% figure; here 19/26 = 73%.
+NOT COMPARABLE TO THE 15.3% FIGURE:
+          "frozen 15.3% convulsive recall" in `PHASE1_RESULTS.md` uses a different
+          denominator — 148 events of 15-60 s across all retained batches — against the 68
+          here (retained B1+B2, any duration). Both correct; distinguish them in the text.
 
 operating point selected: **thr 0.9 / bnd 0.5.** The trade is monotone with no knee, so take
           the conservative end: it still beats frozen on recall and coverage, keeps the

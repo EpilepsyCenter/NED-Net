@@ -82,7 +82,13 @@ def main() -> int:
     ap.add_argument("--db", action="append", required=True)
     ap.add_argument("--ground-truth", default="~/ground_truth/mir_ramgdnf_annotations.csv")
     ap.add_argument("--batches", default="12", help="batch digits to score, e.g. 12 or 3")
-    ap.add_argument("--conv-only", action="store_true", default=True)
+    ap.add_argument("--conv-only", action="store_true", default=True,
+                    help="ground truth: convulsive only (Mir's reference is convulsive)")
+    ap.add_argument("--det-conv-only", action="store_true",
+                    help="also require the DETECTION to be labelled convulsive by "
+                         "Stage 2 -- i.e. score the full cascade rather than Stage 1 "
+                         "alone. Stage 2 only labels and never filters, so without this "
+                         "the table measures the U-Net on its own.")
     a = ap.parse_args()
     bset = set(a.batches)
 
@@ -96,6 +102,8 @@ def main() -> int:
         # Like-for-like: only recordings Mir reviewed.
         reviewed = set(gt.stem)
         ev = ev[ev.stem.isin(reviewed)]
+        if a.det_conv_only:
+            ev = ev[ev.type == "convulsive"]
 
         sz = gt[gt.label == "Seizure"]
         if a.conv_only:
@@ -114,7 +122,8 @@ def main() -> int:
         })
     df = pd.DataFrame(rows)
     print(f"\nBatches {a.batches}, retained channels, "
-          f"{'convulsive' if a.conv_only else 'all'} ground truth\n")
+          f"{'convulsive' if a.conv_only else 'all'} ground truth; detections: "
+          f"{'Stage-2 convulsive only (full cascade)' if a.det_conv_only else 'ALL (Stage 1 alone)'}\n")
     print(df.to_string(index=False))
     print("\nHeld-IN data: absolute values are optimistic. Use for RANKING only.")
     return 0
