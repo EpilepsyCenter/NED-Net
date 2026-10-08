@@ -541,6 +541,30 @@ caveat on method: an earlier version of this calculation double-counted by pooli
 with different selection rules and by de-duplicating on non-unique keys. Both fixed; every
 figure above uses per-event keys and unbiased samples only.
 
+### 2026-10-08 — Operating-point validation on held-in batches — jobs 3822590-93
+why:      every Phase-2 number so far was measured through a **hand-chosen** operating
+          point. Arm A's threshold (0.9) came from its own validation but the hysteresis
+          **boundary (0.5) was guessed**, and boundary choice has swung coverage from 0.01%
+          to 72% of recorded time. So the comparisons were measuring threshold guesses as
+          much as models.
+design:   `ramgdnf_armA2_holdB3_randneg` (the best arm, event_f1 0.532) over
+          **Batch 1 + Batch 2 only** — held-in, never the test fold — at four
+          (threshold / boundary) points: **0.5/0.1** (the frozen point), 0.7/0.3, 0.8/0.5,
+          0.9/0.5 (what was guessed). Winner applied to Batch 3 **once**.
+          `CONV_THRESHOLD` is not varied: Stage 2 only labels and cannot affect detection
+          (see `MODELS.md`), so it is inert for every metric here.
+scored on: convulsive recall vs Mir's labels, precision vs his adjudicated candidates, and
+          **fraction of recordings fired on** — coverage matters as much as recall, because
+          the defect is per-recording silence.
+caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there were seen and
+          absolute performance will be optimistic. That is acceptable for *selecting* an
+          operating point — the purpose of validation data — but the chosen point may be
+          mis-tuned for unseen data, and that must be stated.
+          B1+B2 hold only **69 retained convulsive seizures** (56 + 13), so the ranking is
+          coarse: enough to separate 60% coverage from 20%, not to split adjacent
+          thresholds.
+result:   _pending_
+
 ---
 
 ## Entries to add as you go
