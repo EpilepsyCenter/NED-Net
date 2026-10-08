@@ -497,6 +497,50 @@ B2 channel exclusion CONFIRMED correct:
           450093 and 450094) — exactly what was excluded. Those two carry 5,095 of B2's
           6,168 detections (83%), consistent with them being the noisy ones.
 
+### 2026-10-08 — Precision at conf >= 0.5 on the retained set: ~68%
+samples used (unbiased only — the two hand-picked Batch-3 files are EXCLUDED from every
+estimate below, since they were chosen for high confidence and read 22/22):
+
+| sample | n | real | precision |
+|---|---|---|---|
+| random stratified by batch (seed 7) | 53 | 18 | 34% |
+| random within B2 retained channels (seed 11) | 34 | 12 | 35% |
+| hand-picked B3 (**biased, not used**) | 22 | 22 | 100% |
+
+retained set = all batches except 4, minus B2 UI ch3/ch4 (code ch2/ch3) and animal 449382:
+
+| batch | detections @0.5 | share | reviewed | real | precision | 95% CI |
+|---|---|---|---|---|---|---|
+| B1 | 160 | 17% | 7 | 6 | 86% | 42–100% |
+| B2 | 437 | 47% | 36 | 13 | 36% | 21–54% |
+| B3 | 337 | 36% | 6 | 6 | 100% | 54–100% |
+
+**VOLUME-WEIGHTED PRECISION: 68%** over 934 detections. Unweighted over reviewed events
+51% (25/49) — the weighted figure is the right one, since it accounts for how much output
+each batch actually produces.
+**Excluding Batch 2 as well: 95%** over 497 detections. That is the trade: 934 detections
+at 68%, or 497 at 95%.
+
+B2 per UI channel (conf >= 0.5):
+
+| UI ch | animal | reviewed | real | precision |
+|---|---|---|---|---|
+| ch2 | 450917 | 9 | 2 | 22% |
+| **ch6** | **450096** | 14 | 9 | **64%** |
+| ch7 | 450097 | 11 | 1 | 9% |
+
+**The counterintuitive result worth keeping:** ch6 is animal **450096, the highest
+`prominence_db` of all 32 animals (12.9)** — and it has the *best* precision of the three.
+So high background rhythmicity lowers precision but does **not** make a recording unusable.
+That refutes the premise of the rhythmicity exclusion metric directly, and vindicates
+reviewing rather than excluding on the metric. "Noisy" should be reported as a precision
+statement per channel, not a binary verdict.
+
+binding uncertainty: B3 is 36% of the retained output with only **6** reviewed events.
+caveat on method: an earlier version of this calculation double-counted by pooling samples
+with different selection rules and by de-duplicating on non-unique keys. Both fixed; every
+figure above uses per-event keys and unbiased samples only.
+
 ---
 
 ## Entries to add as you go
