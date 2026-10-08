@@ -565,6 +565,135 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-08 — Match-rule sensitivity: recall is robust, boundaries are not
+question (reviewer): does the scoring actually check that two events are the same event —
+          overlapping boundaries — or only compare counts?
+answer:   overlap, keyed on `(file_stem, channel)` after the Mir-`k` -> code-`k-1` mapping:
+          `det_start < gt_end + 5` and `det_end > gt_start - 5`
+          (`validate_frozen_unet_vs_mir.py:67` for recall, `:84` for precision). Never counts.
+script:   `scripts/local/matching_sensitivity.py` (new) — recall under five rules.
+frozen model, 340 convulsive ground-truth events on reviewed recordings:
+
+| rule | recall |
+|---|---|
+| any overlap, +-5 s (as reported) | 36/340 = **10.6%** |
+| any overlap, no slack | 36/340 = 10.6% |
+| IoU >= 0.20 | 27/340 = 7.9% |
+| detection covers >=50% of the seizure | 10/340 = 2.9% |
+| any overlap, **one-to-one** (greedy by overlap) | 36/340 = 10.6% |
+
+two worries tested and DISMISSED:
+          * the **5 s slack inflates nothing** — identical with and without it.
+          * the **flood does not buy cheap hits** — one-to-one matching gives the same 36,
+            so no ground-truth event was claimed by multiple detections. Inflation 1.00x.
+            (This had been a live concern: animal 449385 fired 792 times for 1 of 10.)
+          So **recall at 10.6% / 15.3% is robust** and event-level any-overlap is the right
+          primary criterion, as in the seizure-detection literature.
+by ground-truth duration (not a block artefact):
+
+| gt duration | n | loose | IoU >= 0.2 | covers >=50% |
+|---|---|---|---|---|
+| < 15 s | 118 | 5.9% | 5.9% | 4.2% |
+| **15-60 s (typical)** | 184 | **13.0%** | **9.2%** | 2.7% |
+| 60-120 s | 25 | 20.0% | 12.0% | 0.0% |
+| > 120 s (chains) | 13 | 0.0% | 0.0% | 0.0% |
+
+          Median IoU of a hit on typical events is **0.32**, so the weak overlap is real and
+          not an artefact of Mir's long block annotations.
+WHAT THE DETECTIONS LOOK LIKE (36 matched pairs):
+
+| | median | IQR |
+|---|---|---|
+| ground-truth duration | 37.4 s | 20.5-52.8 |
+| **detection duration** | **8.9 s** | 7.1-14.3 |
+| onset error (det - gt) | **+11.9 s** | 1.3-21.2 |
+| offset error (det - gt) | -4.7 s | -13.4 to -1.4 |
+
+          **97%** of matched detections are shorter than the seizure; median **1** detection
+          per event (max 3), so this is truncation, not fragmentation. When the frozen model
+          fires it marks a ~9 s fragment beginning ~12 s into a ~37 s seizure — barely above
+          the 5 s `min_duration` floor.
+consequences:
+          1. Report event-level recall as primary, with the IoU row as sensitivity. Do not
+             report boundary agreement as if it were measured by the loose rule.
+          2. **Any duration or burden metric derived from detected extents is short by ~4x.**
+             Not quoted anywhere yet, but the SV2A manuscript's duration figures come from
+             the same pipeline *in-domain* — check whether that cohort truncates too before
+             relying on them. See [[sv2a-figure-numbers-provenance]].
+          3. The running operating-point sweep (3823858-61) varies the hysteresis **boundary**
+             (0.1/0.3/0.5), which is precisely what controls event extension. Add IoU and
+             matched-duration columns to the selection table: if truncation is a threshold
+             artefact the low-boundary arm gives longer events and higher IoU; if detections
+             stay ~9 s regardless, it is a sensitivity limit of the model.
+
+### 2026-10-08 — DEFECT: every retraining arm trained on a stale label tree
+found:    before launching the all-batches run, compared `~/train_nomirneg` against the
+          live sidecars for Batch 3:
+
+| | confirmed | from Mir | manual | U-Net confirmed |
+|---|---|---|---|---|
+| LIVE B3 | 279 | 171 | **52** | **41** |
+| TREE B3 | 154 | 154 | **0** | **0** |
+
+          Only **240 of 338** B3 sidecars were present in the tree at all, and across the
+          whole cohort the tree held 1,024 real sidecars where the live tree has 1,364.
+          `refresh_training_tree.py` had been run once, before the review sessions, and
+          never again.
+consequence — this revises the Phase-2 results:
+          **arms A, A2, A3 and B all trained on Mir's positives only.** None of them saw
+          the 52 manual additions or the 344 adjudicated U-Net detections. So the
+          retraining campaign never included the label class Mir's reference structurally
+          lacks — RAM_GDNF **non-convulsive** events — which is precisely the class the
+          frozen model was best at finding (2026-10-06 Batch-3 review; 2026-10-08
+          precision analysis).
+          That is a plausible mechanical reason the arms barely moved against the frozen
+          model, and it is a *fixable* one. It does not invalidate the arm results: they
+          remain valid measurements of "retraining on an external convulsive reference".
+          They simply do not test "retraining on your own review work", which is the
+          pipeline claim the paper makes.
+          Related asymmetry already on record: Mir's positives were 276/1,215 = 23% of the
+          U-Net's positive windows but 215/451 = 48% of the convulsive classifier's.
+action:   job 3825957 **CANCELLED** before it ran. Tree refreshed (1,364 sidecars, 11,415
+          of Mir's rejected rows dropped, 52 manual + 344 adjudicated U-Net kept), then
+          resubmitted.
+lesson:   `train_unet.py` takes only `--data-dir` and re-scans the folder, so it cannot be
+          pointed at a frozen dataset definition and silently trains on whatever is in the
+          tree. **Run `refresh_training_tree.py --dry-run` and check the manual/adjudicated
+          counts immediately before every submission**, and record those counts in the log
+          entry for that job. The refresh is the `review -> retrain` link in the loop and
+          is the step that fails silently.
+
+### 2026-10-08 — All-batches production retrain (no hold-out) — job 3825957
+script:   `scripts/lunarc/train_unet.sh` @ `c6ac87d`
+config:   `EDF_DIR=~/train_nomirneg` (symlink tree, Mir's rejections dropped);
+          `NEG_SOURCE=hard`, neg_pos_ratio 10, pos_weight auto, stable-val-split on,
+          epochs 50, batch 32, lr 3e-4, patience 10, base_filters 32, depth 4, dropout 0.2
+exclude:  449382 (dead electrode), 450093 450094 (B2 UI ch3/ch4), and all eight Batch-4
+          animals (483550 483551 483552 483553 483554 483555 483557 483559)
+          -> trains on SV2A + B1 + B2-retained + **Batch 3**
+purpose:  **the SV2A-equivalent number.** UNetv2's 93.6% precision was measured on the
+          cohort it trained on; this model is the same construction for RAM_GDNF, so the
+          per-animal comparison against the frozen pipeline can cover every retained
+          animal — including Batch 3's eight, where frozen recall is worst (5.2%).
+          This is NOT a generalisation measurement: there is no held-out fold. It answers
+          "what do you get after annotating this cohort", which is the claim the paper
+          actually needs for the retraining loop. The out-of-sample claim stays with the
+          A3-on-B3 fold.
+why no held-out fold is acceptable here:
+          the three rows of the results table are deliberately different questions —
+          frozen-on-new-cohort (before annotating), this model (after annotating), and
+          A3-on-held-out-B3 (transfer to the *next* batch). Row 2 must be in-sample or it
+          is not comparable to SV2A's 93.6%.
+exclusion caveat:
+          450093/450094 were dropped for consistency with the retraining arms, but the
+          2026-10-08 precision analysis argues against binary noise exclusion (450096 has
+          the highest `prominence_db` of all 32 animals and the *best* precision of B2's
+          three retained channels). A production model would normally train on them. Note
+          it; do not quietly re-run without recording why.
+result:   **CANCELLED before running** — submitted against the stale label tree (see the
+          defect entry above). Resubmitted after the refresh as job <TBD>; record the
+          `--analyze` positive-window count there.
+
 ---
 
 ## Entries to add as you go
