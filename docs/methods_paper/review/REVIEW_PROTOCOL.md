@@ -74,37 +74,37 @@ sidecars and need no re-review).
 After round-0 training, review a sample of the new model's own false positives and add them
 as hard negatives. Sampling design to be written then, following the same rules.
 
-## UI gotcha: boundary editing can create a duplicate event
+## UI issue: editing boundaries then confirming can leave a duplicate
 
-Three drag gestures on the review plot do different things, and two look alike:
+**Reported by the reviewer, 2026-10-08, in the Training-tab review mode.** Changing an
+event's boundaries and confirming can leave a second event at the *original* duration.
 
-| gesture | callback | effect |
-|---|---|---|
-| drag the **highlight rectangle's edge** | `handle_boundary_adjustment` (`relayoutData`, `shapes[0].x0/.x1`) | **edits** the current event in place — correct |
-| type in **Onset (s) / Offset (s)** | `tr-onset-input` / `tr-offset-input` | **edits** in place — correct |
-| draw a **box/lasso selection** over the event | the add-event callback (`selectedData`) | **creates a NEW** `source="manual"` annotation; the original is untouched |
+Dragging is the intended way to create a manual event in that mode, so the issue is in the
+confirm path, not the add path.
 
-So "adjusting" an event by drawing a selection box leaves **two** annotations: the original
-at its own duration and a new manual one with the selected range. Confirming then yields two
-confirmed events for one seizure.
+**Likely mechanism (code inspection, NOT reproduced):**
+`_sync_boundary_to_seizure_events` (`training.py:238`) pushes a boundary change back to
+`state.seizure_events`, matching on channel plus onset within **0.01 s** of the original
+onset. On a failed match it returns silently, leaving `seizure_events` holding the pre-edit
+boundaries while the annotation holds the new ones. Annotations are re-derived from
+`seizure_events` via `detections_to_annotations` when loaded (`training.py:1027`), so a
+stale entry reappears as an annotation at the original duration. `_save_detection_file`
+also writes the detection JSON back on every edit, so the stale copy persists on disk.
 
-**Use the numeric Onset/Offset fields, or drag the existing rectangle's edge. Never
-box-select over an existing event.**
-
-Observed twice in the four exhaustively-reviewed files (2026-10-08):
+Observed twice in the four exhaustively-reviewed files, both on ch2:
 
 ```
-B3_W3_D3_02022026(12) ch2: detector 1693.9-1703.5 (orig_onset 1693.896) + manual 1694.2-1700.6
-B3_W3_D7_06022026(4)  ch2: detector 5266.2-5286.7 (orig_onset 5267.324) + manual 5266.1-5276.8
+B3_W3_D3_02022026(12): detector 1693.9-1703.5 (orig_onset 1693.896) + manual 1694.2-1700.6
+B3_W3_D7_06022026(4):  detector 5266.2-5286.7 (orig_onset 5267.324) + manual 5266.1-5276.8
 ```
 
-**Effect on the measurements: none.** The miss count only includes manual events overlapping
-*no* detection, and a duplicate by definition overlaps one — so recall 12/28 and precision
-12/13 are unaffected. Only the raw unique-seizure total shifts, 50 -> ~48.
+**Effect on the measurements: none.** The miss count includes only manual events overlapping
+*no* detection, and a duplicate overlaps one by definition — so recall 12/28 and precision
+12/13 stand. Only the raw unique-seizure total shifts, 50 -> ~48.
 
-**Proper fix, deferred:** the add-event callback should refuse a selection that substantially
-overlaps an existing annotation on that channel and offer to adjust it instead. Not changed
-2026-10-08 because annotation was in progress and jobs were running against the tree.
+**Deferred.** Not investigated further mid-annotation with jobs running against the tree. If
+pursued: widen the match tolerance, match on event_id rather than onset, and make a failed
+match loud rather than silent.
 
 ## Logging
 
