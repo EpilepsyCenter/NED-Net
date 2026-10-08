@@ -6,6 +6,33 @@ from a result to the weights that produced it.
 
 All live in `~/.eeg_seizure_analyzer/models/` on LUNARC.
 
+## READ THIS FIRST: the convulsive classifier does NOT affect detection
+
+`_apply_convulsive_classifier` (`ml/predict.py:242`) runs **after** detection and
+**mutates events in place**, setting `features["convulsive"]` and
+`features["convulsive_probability"]`. It never adds, removes or filters an event.
+
+Consequences, which govern how every number in this project is read:
+
+* **Which events exist depends only on the U-Net** — `MODEL`, `THRESHOLD`,
+  `BOUNDARY_THRESHOLD`, `min_duration`, `merge_gap`.
+* **`CONV_THRESHOLD` cannot change what was detected.** It is inert for recall,
+  precision, detection counts and coverage.
+* **Stage 2 cannot affect recall of detection.** If the U-Net misses a seizure, Stage 2
+  never sees it.
+* The **only** thing Stage 2 moves is the convulsive/non-convulsive label on events the
+  U-Net already found.
+
+**Errors this caused, now corrected:** job 3820427 was described as testing "arm A +
+retrained Stage 2" against the frozen cascade on convulsive recall. That metric is purely
+the U-Net's; the 5.2% -> 3.3% change came from the U-Net and the operating point, and
+Stage 2 was never tested by it. Threshold-validation sweeps likewise do not need
+`CONV_THRESHOLD` varied.
+
+**What Stage 2 should be measured on:** of the detections that overlap a convulsive
+ground-truth event, what fraction does Stage 2 label convulsive? Frozen: 4 of 8. Retrained:
+3 of 5. Both near 50-60% on single-digit counts.
+
 ## The cascade has two stages, trained separately
 
 | | Stage 1 — U-Net | Stage 2 — convulsive classifier |
