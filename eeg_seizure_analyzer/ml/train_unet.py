@@ -41,7 +41,9 @@ def _build_dataset_def(data_dir: str, name: str) -> dict:
 
 
 def analyze(dataset_def: dict, exclude_animals: tuple = (),
-            stable_val_split: bool = False) -> dict:
+            stable_val_split: bool = False, max_positive_sec: float = 0.0,
+            bg_avoid_rejected: bool = False,
+            hard_neg_exclude_methods: tuple = ()) -> dict:
     """Report class balance + the per-animal train/val split, and recommend a
     neg/pos ratio and pos_weight.  Returns the recommendation dict.
 
@@ -62,7 +64,10 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
     # Plan windows with ALL hard negatives so we see the full pool, then look at
     # how build_window_specs actually lays them out per animal-group.
     cfg = DatasetConfig(neg_pos_ratio=0.0, augment=False,  # 0 => keep all
-                        exclude_animals=tuple(exclude_animals))
+                        exclude_animals=tuple(exclude_animals),
+                        max_positive_sec=max_positive_sec,
+                        bg_avoid_rejected=bg_avoid_rejected,
+                        hard_neg_exclude_methods=tuple(hard_neg_exclude_methods))
     specs = build_window_specs(dataset_def, cfg)
     pos = [s for s in specs if s.is_positive]
     neg = [s for s in specs if not s.is_positive]
@@ -144,6 +149,24 @@ def main(argv: list[str] | None = None) -> int:
                         "animals first, keeping the dominant ones in train. Positives "
                         "are heavily concentrated, so a random draw can put half of "
                         "them in val. Use for any run compared against another.")
+    p.add_argument("--max-positive-sec", type=float, default=0.0,
+                   help="drop confirmed events LONGER than this from the positive "
+                        "windows (0 = no cap). Mir's long 'convulsive' rows are "
+                        "chained seizures annotated as one block, and 0 of 13 events "
+                        "over 120 s were ever detected. Capped events are still "
+                        "labelled where they fall inside other windows and still "
+                        "block background sampling. Suggested: 100.")
+    p.add_argument("--hard-neg-exclude-method", nargs="*", default=[], metavar="M",
+                   help="detection_method values whose `rejected` rows are not used "
+                        "as hard negatives, while their regions still block random "
+                        "background (with --bg-avoid-rejected). Use "
+                        "'mir_candidate' for RAM_GDNF.")
+    p.add_argument("--bg-avoid-rejected", action="store_true",
+                   help="random background windows avoid `rejected` regions as well "
+                        "as `confirmed` ones. Mir's `rejected` means 'not a "
+                        "convulsive/behavioural seizure' and contains real "
+                        "non-convulsive activity, so background drawn there trains "
+                        "the detector to suppress real events.")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop from the dataset entirely (no "
                         "train/val windows), e.g. noisy recordings: "
@@ -170,7 +193,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.analyze:
-        analyze(dataset_def, tuple(args.exclude_animals), args.stable_val_split)
+        analyze(dataset_def, tuple(args.exclude_animals), args.stable_val_split,
+                args.max_positive_sec, args.bg_avoid_rejected,
+                tuple(args.hard_neg_exclude_method))
         return 0
 
     use_hard = args.neg_source == "hard"
@@ -198,7 +223,18 @@ def main(argv: list[str] | None = None) -> int:
         include_activity=args.include_activity,
         exclude_animals=tuple(args.exclude_animals),
         stable_convulsive_val=args.stable_val_split,
+        max_positive_sec=args.max_positive_sec,
+        bg_avoid_rejected=args.bg_avoid_rejected,
+        hard_neg_exclude_methods=tuple(args.hard_neg_exclude_method),
     )
+    if args.hard_neg_exclude_method:
+        print(f"Not using as hard negatives: rejected rows from "
+              f"{list(args.hard_neg_exclude_method)}")
+    if args.max_positive_sec > 0:
+        print(f"Positive-window cap: dropping confirmed events over "
+              f"{args.max_positive_sec:.0f} s")
+    if args.bg_avoid_rejected:
+        print("Random background will avoid rejected regions as well as confirmed")
     if args.exclude_animals:
         print(f"Excluding animals from dataset: {list(args.exclude_animals)}")
     train_config = TrainConfig(
