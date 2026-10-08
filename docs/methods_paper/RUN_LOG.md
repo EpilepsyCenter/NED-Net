@@ -662,6 +662,39 @@ precision is CONFOUNDED, do not report 33% -> 10% as a regression:
             convulsive ground truth, which is either non-convulsive events or false
             positives and Mir's reference cannot tell them apart.
           The single regression (450097, 100% -> 0%) is one seizure — noise.
+**PER-ANIMAL, FULL CASCADE** (primary scope) — `review/frozen_vs_A3_per_animal_B1B2_cascade.csv`
+
+| batch | animal | UI ch | gt | frozen | % | det | A3 | % | det |
+|---|---|---|---|---|---|---|---|---|---|
+| B1 | 449381 | 1 | 14 | 1 | 7 | 6 | 3 | 21 | 23 |
+| B1 | 449385 | 5 | 10 | 0 | 0 | 25 | **0** | **0** | **569** |
+| B1 | 449387 | 7 | 5 | 0 | 0 | 0 | **0** | **0** | 117 |
+| B1 | 449388 | 8 | 26 | 15 | 58 | 28 | 18 | 69 | 38 |
+| B2 | 450095 | 5 | 1 | 1 | 100 | 1 | 1 | 100 | 71 |
+| B2 | 450096 | 6 | 11 | 2 | 18 | 52 | 4 | 36 | 465 |
+| B2 | 450097 | 7 | 1 | 0 | 0 | 34 | 0 | 0 | 105 |
+| | **total** | | **68** | **19** | **27.9** | **146** | **26** | **38.2** | **1,388** |
+
+          3 improved, 4 unchanged, **0 worse** — the single Stage-1 regression disappears.
+          But two findings cut the other way:
+STAGE 2 DESTROYS CORRECT DETECTIONS IN BOTH MODELS:
+          A3 caught 4/10 on 449385 at Stage 1 and **0/10** after Stage 2; 1/5 -> 0/5 on
+          449387. Overall Stage 2 takes A3 from 34 hits to 26 and the frozen model from 26
+          to 19 — **both lose ~25% of their correct detections.** Consistent with the
+          earlier 22/34 = 65%. This argues for reporting **Stage 1 as the detector's
+          performance** and treating Stage 2 as a separate classifier with its own measured
+          cost, rather than collapsing them into one number.
+THE EFFICIENCY CLAIM DOES NOT SURVIVE THE CASCADE VIEW — **RETRACTED**:
+          on seizure-bearing channels frozen uses **146** convulsive detections and A3 uses
+          **1,388** — **9.5x**, not the "+25% detections for +31% recall" computed from
+          Stage 1 alone. Stage 2 keeps 10% of frozen's output but 78% of A3's. So as
+          deployed, A3 buys +10 points of recall for roughly an order of magnitude more
+          output to review. Whether that is a good trade depends on true precision, which
+          Mir's convulsive-only reference cannot measure — and **569 detections catching 0
+          of 10 seizures on 449385** is not reassuring.
+          The Stage-1 efficiency figure is correct for Stage 1 and is retained above as
+          such; it must not be quoted as a property of the pipeline.
+
 CAVEATS that must travel with this result:
           * **IN-SAMPLE.** B1 and B2 were in A3's training, so Mir's labels there were seen.
             This is the "what you get after annotating the cohort" number — the direct
