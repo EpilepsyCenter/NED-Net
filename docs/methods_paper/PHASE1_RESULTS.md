@@ -101,68 +101,64 @@ are predominantly non-convulsive. The model learned that morphology. This is a
 the whole recording and is not restricted to any band, so missing convulsive seizures is a
 genuine sensitivity failure for that class.
 
-## Non-convulsive recall, from exhaustive manual review (2026-10-08)
+## Exhaustive manual review: the detector is silent, not imprecise (2026-10-08)
 
-Four Batch-3 recordings reviewed exhaustively — every event >=5 s on all 8 channels,
-independent of what the detector reported. Two strata, randomly drawn within stratum:
-files **with** a conf>=0.5 detection (43% of full-length B3 files) and files **without**
-(57%). ~48 animal-hours. Manual additions carry `source="manual"` in the sidecars.
+Four Batch-3 recordings reviewed exhaustively — **every event >=5 s on all 8 channels,
+independent of what the detector reported** — then the U-Net's own detections in those same
+files adjudicated. So precision and recall come from one dataset. ~48 animal-hours,
+**50 real seizures**. Manual additions carry `source="manual"`.
 
-| stratum | file | manual seizures | U-Net detections in file | caught |
-|---|---|---|---|---|
-| B | `B3_W2_D2_22012026(7)` | 9 | **0** | 0 |
-| B | `B3_W2_D3_23012026(9)` | 13 | **0** | 0 |
-| A | `B3_W3_D3_02022026(12)` | 5 | 7 | 3 |
-| A | `B3_W3_D7_06022026(4)` | 18 | 8 | 5 |
+Two strata, drawn at random within stratum: recordings **with** a conf>=0.5 detection (43%
+of full-length B3 files) and **without** (57%).
 
-**Non-convulsive recall: 15.0% (weighted 43/57)**; 8/45 unweighted; stratum A 34.8%,
-stratum B **0%**. In both stratum-B files the U-Net produced **no output whatsoever** — not
-merely nothing above threshold — while 22 real seizures were present.
+| | precision | recall |
+|---|---|---|
+| `B3_W3_D3_02022026(12)` | 6/6 = **100%** | 6/9 = 67% |
+| `B3_W3_D7_06022026(4)` | 6/7 = 86% | 6/19 = 32% |
+| **stratum A combined** | **12/13 = 92%** (CI 64-100) | **12/28 = 43%** (CI 24-63) |
+| **stratum B** (2 files) | undefined — no detections | **0/22 = 0%** |
+| **weighted 43/57** | — | **18%** |
 
-### This collapses the class-specific explanation
+### This is the central result
 
-**15.0% non-convulsive against 15.3% convulsive.** Two independent references (Mir's
-video-adjudicated convulsive set; exhaustive manual review for all types), two seizure
-classes, the same answer. So there is no instrument mismatch, no band mismatch and no
-convulsive-vs-non-convulsive asymmetry: **the frozen detector finds about 15% of seizures,
-of any type.** Earlier drafts of this document attributed the convulsive failure to training
-composition and the apparent non-convulsive success to a reference that could not see those
-events. Both were over-interpretation of class-stratified numbers; the simple reading is
-correct and the earlier one is withdrawn.
+**Where the detector fires it is ~92% precise and ~43% sensitive. The failure is that it
+fires in only 43% of recordings, and is silent in the rest while seizures are present** —
+0 detections against 22 real seizures across two 90-minute files.
 
-### Seizure burden — and a comparison NOT to make
+That is a different defect from the one every earlier reading proposed. It is not low
+precision (92%), not a convulsive-vs-non-convulsive asymmetry, not an instrument mismatch,
+and not uniform insensitivity. It is **binary per-recording silence**, and it also shows up
+within a single file across channels:
 
-45 seizures in 48 animal-hours = **~22 per animal-day** for **non-convulsive** events.
-Mir's reference rate is 0.64/animal-day for **convulsive** events.
-
-**These must not be divided.** An earlier version of this section reported the ratio as
-"the true burden is 35x what the reference captured", which is wrong: the two figures are
-different seizure classes. The correct statement is that **non-convulsive burden exceeds
-convulsive burden by roughly 35-fold in this cohort**, which is unremarkable — non-convulsive
-events are expected to be far more numerous — and says nothing about the reference's
-completeness for the class it was built to capture.
-
-### Detection is channel-selective, not uniformly insensitive
-
-Within a single recording (`B3_W3_D7_06022026(4)`, 90 min, one model):
-
-| channel | manual seizures | caught |
+| `B3_W3_D7_06022026(4)` | manual seizures | caught |
 |---|---|---|
 | UI ch3 | 6 | **4** |
 | UI ch8 | 3 | 1 |
 | UI ch1 | 5 | **0** |
 | UI ch6 | 4 | **0** |
 
-All of that file's U-Net output sits on three channels; on the others it produced nothing.
-This matches the cohort-wide asymmetry (UI ch8: 52 detections against 107 confirmed
-seizures; UI ch4: 15,291 against 8). So the ~15% aggregate recall is not a uniform
-sensitivity figure — it is the average of channels where the detector works and channels
-where it is silent. **What varies per channel, and why, is unresolved**; the two
-signal-quality metrics built to explain it both failed their pre-registered tests.
+Same recording, same 90 minutes, same model. It matches the cohort-wide asymmetry (UI ch8:
+52 detections against 107 confirmed seizures; UI ch4: 15,291 against 8).
 
-**Caveats:** 45 events from 4 recordings, all Batch 3. The U-Net detections in both
-stratum-A files were left `pending`, so **precision is not computable from this sample** —
-recall only. Three manual events fell below the 5 s inclusion criterion and were excluded.
+**What determines whether a channel or recording is in the silent set is unresolved.** Two
+signal-quality metrics were built to explain it and both failed their pre-registered tests
+(`EXCLUSION_CRITERIA.md`). This is the single biggest open question in the analysis, and it
+is the right target for Phase 2 — because a detector that is 92% precise where it works has
+a localisation problem, not a discrimination problem.
+
+### Burden, and a comparison NOT to make
+
+~22 non-convulsive seizures per animal-day in the reviewed recordings, against Mir's
+0.64/animal-day for convulsive events. **These must not be divided.** An earlier version
+reported the ratio as "the true burden is 35x what the reference captured", which compares
+two different seizure classes. The correct statement is that non-convulsive burden exceeds
+convulsive by roughly 35-fold here — unremarkable, and silent on the reference's
+completeness for the class it was built for.
+
+**Caveats:** 50 seizures from 4 recordings, all Batch 3. Precision rests on 13 adjudicated
+detections (CI 64-100%). Three manual events below the 5 s criterion were excluded. Several
+manual events matched pending detection boundaries almost exactly, so adjudicating the
+pendings was necessary to avoid double-counting; that has been done.
 
 ## Precision, on the retained set
 
