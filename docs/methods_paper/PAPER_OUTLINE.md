@@ -60,11 +60,38 @@ recording: 4 of 6 caught on UI ch3, 1 of 3 on ch8, **0 of 9** across ch1 and ch6
 model, same minutes. Matches the cohort-wide asymmetry (ch8: 52 detections against 107
 confirmed seizures; ch4: 15,291 against 8).
 
-### R4 — Retraining on the new cohort's annotations
-_PENDING._ Operating-point validation on held-in batches (jobs 3822590-93) then the best
-arm evaluated once on held-out Batch 3. Current state: arm A tested at a hand-chosen
-operating point was **worse** (5.2% -> 3.3%) because it fires on 33% of recordings against
-the frozen model's 58%. The best arm (A2, event_f1 0.532) is untested on Batch 3.
+### R4 — Retraining on the new cohort's annotations recovers most of the loss
+**IN-SAMPLE RESULT, 2026-10-08.** Retained B1+B2, convulsive ground truth (n=68), frozen
+and retrained models scored through the identical code path so the comparison is paired.
+Stage 2 tuned per model (frozen 0.45, A3 0.30) — see R6.
+
+| | convulsive recall | fires on | median IoU | median event |
+|---|---|---|---|---|
+| frozen `UNetv2` | 27.9% | **16%** of recordings | 0.36 | 9 s |
+| **A3 retrained** | **47.1%** | **73%** | 0.60-0.66 | 19-26 s |
+
+Per animal-channel: **4 improved, 2 unchanged, 1 worse** (the regression is a single
+seizure). Two cases carry the argument:
+* animal **449387** was **wholly silent** — 0 detections across 5 seizures — and now fires.
+* animal **449385** improved while firing **less**: 792 -> 729 detections, 1 -> 4 caught. So
+  this is not a volume effect.
+
+Boundaries improve too, and not because of a threshold: within A3 the median IoU barely
+moves across hysteresis boundary 0.1/0.3/0.5 (0.66/0.58/0.60), so the frozen model's
+9 s-fragment-inside-a-37 s-seizure behaviour was a property of the weights, which retraining
+fixed.
+
+**This is the direct analogue of how the source model's 93.6% was obtained** — measured on
+the cohort it was trained on — which is what makes the comparison fair. It is **in-sample**
+and must be labelled as such everywhere. The out-of-sample counterpart is held-out Batch 3
+(job 3825993, pending), and the gap between the two rows is the paper's central quantity:
+the difference between annotating a cohort and inheriting a model.
+
+**What is not yet measured: precision of the retrained model.** Every precision figure
+available is scored against Mir's convulsive-only candidate set, which structurally cannot
+credit a non-convulsive detection, and most of the retrained output is non-convulsive. So
+"fires more" is established and "finds more" is not. A pre-registered stratified review
+sample is required and is the last gap in this section.
 
 ### R5 — The annotation requirement
 | training positives | source | outcome |
