@@ -58,6 +58,25 @@
 #   detector to suppress the events it should find.
 #   `random` ignores every rejected label and samples background negatives instead:
 #   no sidecar edits, so completed human reviews on disk are untouched.
+: "${MAX_POSITIVE_SEC:=0}"   # 0 = no cap. Drops confirmed events LONGER than this
+#   from the positive windows. Mir's long "convulsive" rows are chained seizures
+#   annotated as one block (reviewer: "real convulsive seizures are never minutes
+#   long"), and 0 of 13 events over 120 s were ever detected -- a 240 s block fills a
+#   60 s window edge to edge, so per-channel z-scoring leaves no contrast to learn.
+#   Capped events are still labelled inside other windows and still block background
+#   sampling. Use 100 for RAM_GDNF.
+: "${BG_AVOID_REJECTED:=0}"  # 1 = random background avoids `rejected` regions too.
+#   Mir's `rejected` means "not a convulsive/behavioural seizure" and contains real
+#   non-convulsive activity (2026-10-07), so background drawn from those regions
+#   trains the detector to suppress real events -- the same reason those rows are
+#   dropped as hard negatives by refresh_training_tree.py. Set 1 whenever the data
+#   includes Mir's labels.
+: "${HARD_NEG_EXCLUDE_METHODS:=}"  # space-separated detection_method values whose
+#   `rejected` rows are NOT used as hard negatives but still block background (with
+#   BG_AVOID_REJECTED=1). Use "mir_candidate" when training on Mir's labels: those
+#   rows are wrong as negatives but right as regions to keep background out of.
+#   This supersedes deleting them from the sidecars -- deletion destroyed the
+#   region information, so the two settings could not both be honoured.
 : "${STABLE_VAL_SPLIT:=1}"  # 1 = keep the dominant convulsive animals in train.
 #   Positives are heavily concentrated (355675 alone carries ~1/3 of all convulsive
 #   events), so a random split can land half of them in validation -- which wastes
@@ -87,14 +106,20 @@ if [ -z "$SLURM_JOB_ID" ]; then
     # which would have trained a leave-one-batch-out fold on its own test set.
     ask POS_WEIGHT      "Pos weight (Enter keeps current; unset = auto = neg/pos ratio)"
     ask EXCLUDE_ANIMALS "Exclude animal IDs (space-separated)"
+    ask MAX_POSITIVE_SEC  "Max positive duration in s (0 = no cap)"
+    ask BG_AVOID_REJECTED "Background avoids rejected regions (1/0)"
+    ask HARD_NEG_EXCLUDE_METHODS "detection_methods NOT used as hard negatives"
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
     echo "            exclude=${EXCLUDE_ANIMALS:-none}"
+    echo "            max_positive_sec=${MAX_POSITIVE_SEC} bg_avoid_rejected=${BG_AVOID_REJECTED}"
+    echo "            hard_neg_exclude=${HARD_NEG_EXCLUDE_METHODS:-none}"
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
-           EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT NEG_SOURCE
+           EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT NEG_SOURCE \
+           MAX_POSITIVE_SEC BG_AVOID_REJECTED HARD_NEG_EXCLUDE_METHODS
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -111,6 +136,8 @@ echo "             patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WE
 echo "             exclude=${EXCLUDE_ANIMALS:-none}"
 echo "Data dir:    $EDF_DIR"
 echo "Stable val split: $STABLE_VAL_SPLIT   neg-source: $NEG_SOURCE"
+echo "max_positive_sec: $MAX_POSITIVE_SEC   bg_avoid_rejected: $BG_AVOID_REJECTED"
+echo "hard_neg_exclude: ${HARD_NEG_EXCLUDE_METHODS:-none}"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -144,6 +171,13 @@ EXCLUDE_ARG=()
 STABLE_ARG=()
 [ "$STABLE_VAL_SPLIT" = "1" ] && STABLE_ARG=(--stable-val-split)
 
+BG_ARG=()
+[ "$BG_AVOID_REJECTED" = "1" ] && BG_ARG=(--bg-avoid-rejected)
+
+# Intentionally unquoted: space-separated values -> multiple argparse values.
+HNX_ARG=()
+[ -n "$HARD_NEG_EXCLUDE_METHODS" ] && HNX_ARG=(--hard-neg-exclude-method $HARD_NEG_EXCLUDE_METHODS)
+
 python -m eeg_seizure_analyzer.ml.train_unet \
     --data-dir "$EDF_DIR" \
     --model-name "$MODEL_NAME" \
@@ -156,6 +190,9 @@ python -m eeg_seizure_analyzer.ml.train_unet \
     "${POS_WEIGHT_ARG[@]}" \
     "${EXCLUDE_ARG[@]}" \
     "${STABLE_ARG[@]}" \
+    "${BG_ARG[@]}" \
+    "${HNX_ARG[@]}" \
+    --max-positive-sec "$MAX_POSITIVE_SEC" \
     --weight-decay 1e-4 \
     --base-filters 32 \
     --depth 4 \

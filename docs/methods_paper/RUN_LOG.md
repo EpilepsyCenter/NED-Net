@@ -565,6 +565,64 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-08 — Two training-set corrections (reviewer-requested)
+request:  (1) exclude Mir's very long events — "everything above 100 s" — from the new
+          training; (2) sample random background only from areas not already annotated
+          as rejected.
+
+**(1) Positive-duration cap** — `--max-positive-sec` / `MAX_POSITIVE_SEC`.
+rationale:
+          Mir's long "convulsive" rows are chained seizures annotated as one block
+          (reviewer: "real convulsive seizures are never minutes long"); a 150-240 s block
+          centred in a 60 s window fills it edge to edge, so per-channel z-scoring leaves
+          no event-vs-baseline contrast. Measured: **0 of 13 events over 120 s were ever
+          detected**.
+cost, at 100 s:
+          drops **15 of Mir's 430** confirmed seizures (3.5%) — all convulsive, 11 in B1
+          and 4 in B3. Kept convulsive events run p50 21 s / p75 37 s / p95 66 s.
+          **Drops 0 of SV2A's 1,136** — their longest human-reviewed event is **84 s**.
+          That SV2A distribution is independent corroboration that Mir's >100 s rows are
+          chains, and is the justification to cite rather than convenience.
+          Capped events are NOT erased: they stay in the interval lists, so a window
+          overlapping one is still labelled seizure and background is never drawn from it.
+          Only the "centre a positive window on it" step is skipped. Applied to the
+          convulsive classifier path too, for the same reason.
+
+**(2) Background must avoid annotated regions** — `--bg-avoid-rejected` / `BG_AVOID_REJECTED`,
+plus `--hard-neg-exclude-method` / `HARD_NEG_EXCLUDE_METHODS`.
+the blocker this exposed:
+          `refresh_training_tree.py` **deleted** Mir's rejected rows, so the tree held no
+          record of those regions and background sampling could not avoid them — it drew
+          background from exactly the regions known to contain real non-convulsive
+          activity (2026-10-07, the 180 s block of clear bursting on UI Ch6).
+          Those rows have **two** uses and deletion served only the first:
+            1. as hard negatives they are WRONG (`rejected` = "not convulsive", not "not a
+               seizure") and must be excluded — deletion achieves this;
+            2. as regions to keep background out of they are RIGHT — deletion destroys this.
+fix:      the exclusion moved into the dataset builder, keyed on `detection_method`, so
+          both uses can be honoured at once. `refresh_training_tree.py` gains
+          `--keep-mir-rejections` (now the preferred mode) and the rows stay in the tree.
+verified (25 SV2A files, rejections tagged `mir_candidate` in memory only):
+
+| configuration | negatives landing on a rejected region |
+|---|---|
+| baseline — rejections as hard negatives | 34 |
+| **deletion alone (what the tree did)** | **23** |
+| exclude as negatives + block background | **0** |
+
+          The 34 comprises 11 hard negatives legitimately centred on rejected events plus
+          23 background windows that landed there by chance. Deletion removes the 11 and
+          leaves the 23 — the silent failure. The combination removes the 23.
+also:     when 50 sampling attempts cannot place a clean window on a channel, the draw is
+          now **dropped** rather than emitted anyway (it would have labelled a known event
+          as background), and the count is printed.
+cap verification: positives 1,136 -> 749 at a 20 s cap on the SV2A tree, hard negatives
+          unchanged — so the cap bites and bites only the intended pool.
+effect on dataset size: keeping Mir's rejections restores the tree's annotated-file count
+          from 404 to ~1,364. The hard-negative pool is unchanged (~1,461, still SV2A plus
+          our adjudicated U-Net rows), but many more channels now contribute background
+          context, so the ~12,149 background draws come from a more diverse pool.
+
 ### 2026-10-08 — Match-rule sensitivity: recall is robust, boundaries are not
 question (reviewer): does the scoring actually check that two events are the same event —
           overlapping boundaries — or only compare counts?

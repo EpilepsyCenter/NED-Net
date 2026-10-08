@@ -62,6 +62,29 @@ class DatasetConfig:
     #   which both wastes training data and makes the result a lottery on the seed.
     #   Default False so runs predating this flag reproduce exactly; the spike path
     #   has always passed True. Use True for any run being compared against another.
+    max_positive_sec: float = 0.0  # drop confirmed events LONGER than this from
+    #   the positive windows (0 = no cap). Mir's long "convulsive" rows are chained
+    #   seizures annotated as one block (reviewer, 2026-10-06: "real convulsive
+    #   seizures are never minutes long"), and a 150-240 s block centred in a 60 s
+    #   window fills it edge to edge, so per-channel z-scoring leaves no
+    #   event-vs-baseline contrast to learn from. Measured: 0 of 13 events over
+    #   120 s were ever detected. Capped events stay in the interval lists, so a
+    #   window overlapping one is still labelled seizure and background is never
+    #   sampled from it -- only the "centre a window on it" step is skipped.
+    hard_neg_exclude_methods: tuple = ()  # `features.detection_method` values whose
+    #   `rejected` rows are NOT used as hard negatives, while their regions are still
+    #   honoured by bg_avoid_rejected. Use ("mir_candidate",) for RAM_GDNF: Mir's
+    #   `rejected` means "not a convulsive/behavioural seizure" and contains real
+    #   non-convulsive activity, so it is wrong as a negative -- but it is exactly
+    #   right as a region to keep background out of. Deleting those rows from the
+    #   sidecars (as refresh_training_tree.py did) destroys that second use.
+    bg_avoid_rejected: bool = False  # random background windows avoid regions
+    #   annotated `rejected` as well as `confirmed`. Mir's `rejected` means "not a
+    #   convulsive/behavioural seizure" and was shown to contain real
+    #   non-convulsive activity (2026-10-07, a 180 s block of clear bursting on UI
+    #   Ch6), so drawing background there trains the detector to suppress real
+    #   events -- the same reason those rows are excluded as hard negatives.
+    #   Default False so runs predating this flag reproduce exactly.
     cache_windows: bool = True  # keep each window's read+resampled signal in RAM
     #   after the first read, so no epoch re-reads from disk. (Compute, not I/O,
     #   was the real bottleneck — see mixed precision in train.py — but the cache
@@ -318,6 +341,12 @@ def build_window_specs(
                 and a.get("event_type") == "seizure"
                 and a.get("channel") == eeg_ch
             ]
+            # Rejections that may block background but must not become negatives.
+            _skip = set(config.hard_neg_exclude_methods or ())
+            ch_rejected_neg = [
+                a for a in ch_rejected
+                if (a.get("features") or {}).get("detection_method") not in _skip
+            ] if _skip else ch_rejected
 
             if not ch_confirmed and not ch_rejected:
                 continue  # no annotations on this channel
@@ -333,7 +362,16 @@ def build_window_specs(
             ]
 
             # --- Positive windows (centred on confirmed seizures) ---
-            for ann in ch_confirmed:
+            # Only events at or under the cap get a window centred on them; see
+            # DatasetConfig.max_positive_sec. The long ones remain in
+            # ch_seizure_intervals above, so they are still labelled wherever they
+            # fall inside another window, and still block background sampling.
+            cap = config.max_positive_sec
+            ch_positive = [
+                a for a in ch_confirmed
+                if cap <= 0 or (a["offset_sec"] - a["onset_sec"]) <= cap
+            ]
+            for ann in ch_positive:
                 onset = ann["onset_sec"]
                 offset = ann["offset_sec"]
 
@@ -375,7 +413,7 @@ def build_window_specs(
             # many to keep based on config.neg_pos_ratio.  Skipped entirely in
             # random-background mode, where rejected labels are ignored and all
             # negatives are sampled from the recording instead.
-            for ann in (ch_rejected if config.use_hard_negatives else []):
+            for ann in (ch_rejected_neg if config.use_hard_negatives else []):
                 onset = ann["onset_sec"]
                 offset = ann["offset_sec"]
                 centre = (onset + offset) / 2
@@ -398,13 +436,21 @@ def build_window_specs(
             # Remember this channel so random background can be sampled later if
             # hard negatives alone don't meet the requested ratio.
             if rec_duration > config.window_sec:
+                # Regions random background must not be drawn from: confirmed
+                # seizures always, plus rejected regions when bg_avoid_rejected
+                # (see DatasetConfig). Includes capped long events, which is the
+                # point -- a 240 s chain must not become 4 background windows.
+                ch_avoid = list(ch_seizure_intervals)
+                if config.bg_avoid_rejected:
+                    ch_avoid += [(a["onset_sec"], a["offset_sec"])
+                                 for a in ch_rejected]
                 neg_ctx.append({
                     "edf_path": edf_path,
                     "eeg_channel": eeg_ch,
                     "act_channel": act_ch,
                     "animal_id": animal_id,
                     "rec_duration": rec_duration,
-                    "seizure_intervals": list(ch_seizure_intervals),
+                    "avoid_intervals": ch_avoid,
                 })
 
     # ── Global negative balancing ────────────────────────────────────
@@ -446,19 +492,28 @@ def _balance_negatives(
     # Keep all hard negatives, then add random background to reach the target.
     out.extend(hard_neg_specs)
     n_random = target - len(hard_neg_specs)
+    n_unplaceable = 0
     if n_random > 0 and neg_ctx:
         for _ in range(n_random):
             ctx = neg_ctx[rng.integers(len(neg_ctx))]
             max_start = ctx["rec_duration"] - config.window_sec
-            start = 0.0
+            start, clean = 0.0, False
             for _attempt in range(50):
                 start = float(rng.uniform(0, max_start))
                 end = start + config.window_sec
                 if not any(
                     s[1] > start and s[0] < end
-                    for s in ctx["seizure_intervals"]
+                    for s in ctx["avoid_intervals"]
                 ):
+                    clean = True
                     break
+            if not clean:
+                # Every draw on this channel landed on an annotated region.
+                # Emitting it anyway would label a known event as background,
+                # which is the exact failure this avoid-list exists to prevent,
+                # so drop the window and accept a slightly lower ratio.
+                n_unplaceable += 1
+                continue
             out.append(WindowSpec(
                 edf_path=ctx["edf_path"],
                 start_sec=start,
@@ -469,6 +524,9 @@ def _balance_negatives(
                 seizure_intervals=[],
                 animal_id=ctx["animal_id"],
             ))
+    if n_unplaceable:
+        print(f"  background sampling: dropped {n_unplaceable} of {n_random} draws "
+              f"that could not avoid an annotated region (50 attempts each)")
     return out
 
 
@@ -893,9 +951,16 @@ def build_convulsive_specs(
                 if (a.get("features") or {}).get("convulsive", False)
             ]
 
+            # Same cap as the detector path: a 150-240 s chained block cropped to
+            # a 60 s window is edge-to-edge event, which teaches the classifier
+            # nothing about convulsive morphology. They stay in
+            # ch_convulsive_intervals so the split strata are unaffected.
+            cap = config.max_positive_sec
             for ann in ch_confirmed:
                 onset = ann["onset_sec"]
                 offset = ann["offset_sec"]
+                if cap > 0 and (offset - onset) > cap:
+                    continue
                 is_conv = bool((ann.get("features") or {}).get("convulsive", False))
 
                 centre = (onset + offset) / 2
