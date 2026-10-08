@@ -140,7 +140,41 @@ within a single file across channels:
 Same recording, same 90 minutes, same model. It matches the cohort-wide asymmetry (UI ch8:
 52 detections against 107 confirmed seizures; UI ch4: 15,291 against 8).
 
-**What determines whether a channel or recording is in the silent set is unresolved.** Two
+### Signal quality does NOT explain the silence (closed, 2026-10-08)
+
+Across all channels, those the detector fires on look very different from the silent ones:
+`acorr_peak` 0.232 vs 0.110 (p=4e-196), `baseline_iqr` 0.0235 vs 0.0140, `rms` 0.069 vs
+0.052. That comparison is **circular**: the detector fires where rhythmic activity exists,
+and seizures are rhythmic.
+
+Conditioning on channels **known to contain at least one seizure** (Mir's confirmed plus the
+exhaustive manual review) removes the circularity — 71 channels where it fires against 199
+where it is silent, all containing real seizures:
+
+| metric | fires | silent | p |
+|---|---|---|---|
+| `acorr_peak` | 0.184 | 0.180 | **0.51** |
+| `rms` | 0.067 | 0.055 | **0.61** |
+| `prominence_db` | 5.16 | 5.34 | 0.64 |
+| `line_noise_ratio` | 0.621 | 0.642 | 0.25 |
+| `rhythmic_duty_cycle` | 0.283 | 0.350 | 0.90 |
+| `baseline_iqr` | 0.033 | 0.023 | 0.02 (weak, AUC 0.41) |
+
+**No meaningful difference.** Signal amplitude, periodicity, spectral prominence, line noise
+and rhythmic duty cycle do not distinguish the channels where the detector finds seizures
+from those where it misses them. This is the **third** metric-based attempt to explain the
+silence and the third failure; the line of enquiry is closed.
+
+**What that leaves:** the difference is most likely in the **events**, not the channels.
+Consistent with the duration gradient (3% recall below 10 s rising to 19% at 60-120 s) and
+with the reviewer's direct observation that caught events look like textbook seizures while
+missed ones look atypical. So the explanation returns to training composition — but at the
+level of **event morphology** rather than channel properties. It also means harvesting
+positives from silent recordings targets exactly the gap, which is what the annotation
+strategy does.
+
+**What determines whether a channel or recording is in the silent set remains unresolved at
+the signal level.** Two
 signal-quality metrics were built to explain it and both failed their pre-registered tests
 (`EXCLUSION_CRITERIA.md`). This is the single biggest open question in the analysis, and it
 is the right target for Phase 2 — because a detector that is 92% precise where it works has
