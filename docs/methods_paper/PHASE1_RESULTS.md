@@ -160,6 +160,32 @@ detections (CI 64-100%). Three manual events below the 5 s criterion were exclud
 manual events matched pending detection boundaries almost exactly, so adjudicating the
 pendings was necessary to avoid double-counting; that has been done.
 
+## Phase 2, first result: retraining did NOT improve convulsive recall
+
+Batch 3 held out from training, each pipeline at **its own** validated detection threshold:
+
+| pipeline | operating point | detections | fires on | convulsive recall |
+|---|---|---|---|---|
+| frozen cascade | 0.5 / boundary 0.1 / conv 0.45 | 559 | 197/341 files (58%) | **8/153 = 5.2%** |
+| arm A U-Net + retrained Stage 2 | 0.9 / boundary 0.5 / conv 0.55 | 155 | 112/341 files (33%) | **5/153 = 3.3%** |
+
+The retrained cascade is **worse**, and the mechanism is visible: at its validated threshold
+it is more selective, so it **fires on 33% of recordings against the frozen model's 58%**.
+Events are otherwise well-formed — median 6.4 s, maximum 38 s, 0.01% of recorded time, with
+median confidence 0.812 — so this is not the runaway-event problem seen when arm A was run
+at the frozen operating point (72% of time flagged).
+
+**This is consistent with, and corroborates, the central result above.** If the defect is
+per-recording silence rather than discrimination, then making the discriminator better and
+more selective moves it in the **wrong direction**: more silence, fewer detections, lower
+recall. Retraining a discriminator cannot fix a localisation problem.
+
+**Honest limitation on this comparison:** arm A's detection threshold (0.9) came from its own
+validation, but the hysteresis **boundary (0.5) was chosen by hand, not validated** — the
+trainer reports an optimal threshold but no optimal boundary. Tuning it on Batch 3 would be
+test-set fitting and was not done. A legitimate next step is to select the boundary on
+held-in data and apply it to Batch 3 once.
+
 ## Precision, on the retained set
 
 Retained = all batches except 4, minus Batch 2 UI ch3/ch4 and the dead electrode 449382.
