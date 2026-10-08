@@ -407,6 +407,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model-name", default="conv_v1")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop entirely, e.g. --exclude-animals 355676")
+    p.add_argument("--conv-neg-from-rejected", action="store_true",
+                   help="emit `rejected` events as NON-convulsive windows. Stage 2 is "
+                        "trained on confirmed seizures but deployed on every detection, "
+                        "most of which are false positives, so without this it has never "
+                        "seen a non-seizure and its precision contribution vanishes after "
+                        "retraining (flat 11% at every threshold on RAM_GDNF). Mir's "
+                        "rejected rows are the right source: video-adjudicated 'not a "
+                        "convulsive/behavioural seizure'.")
+    p.add_argument("--conv-neg-method", nargs="*", default=[], metavar="M",
+                   help="restrict those negatives to these detection_method values; "
+                        "empty = every rejected event. e.g. 'mir_candidate'")
+    p.add_argument("--conv-neg-pos-ratio", type=float, default=5.0,
+                   help="cap on TOTAL negatives per convulsive positive (default 5). "
+                        "Non-convulsive seizures are always kept in full; rejected events "
+                        "fill the remaining room. <=0 keeps every rejected event (~1:17).")
+    p.add_argument("--max-positive-sec", type=float, default=0.0,
+                   help="drop confirmed events longer than this (0 = no cap). Mir's long "
+                        "rows are chained seizures; a 240 s block fills a 60 s window edge "
+                        "to edge. Suggested: 100.")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--lr", type=float, default=3e-4,
@@ -429,7 +448,17 @@ def main(argv: list[str] | None = None) -> int:
     dataset_config = DatasetConfig(
         include_activity=False,
         exclude_animals=tuple(args.exclude_animals),
+        conv_neg_from_rejected=args.conv_neg_from_rejected,
+        conv_neg_methods=tuple(args.conv_neg_method),
+        conv_neg_pos_ratio=args.conv_neg_pos_ratio,
+        max_positive_sec=args.max_positive_sec,
     )
+    if args.conv_neg_from_rejected:
+        print(f"Stage-2 negatives from rejected events "
+              f"(methods={list(args.conv_neg_method) or 'all'}, "
+              f"cap {args.conv_neg_pos_ratio}:1)")
+    if args.max_positive_sec > 0:
+        print(f"Positive-window cap: dropping events over {args.max_positive_sec:.0f} s")
     if args.exclude_animals:
         print(f"Excluding animals from dataset: {list(args.exclude_animals)}")
     train_config = TrainConfig(
