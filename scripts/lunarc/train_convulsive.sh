@@ -26,7 +26,9 @@
 # ============================================================
 
 #SBATCH -p gpua100
-#SBATCH -t 00:30:00
+#SBATCH -t 02:00:00
+# 2 h, not 30 min: the model is small but with SV2A + RAM_GDNF the dataset scan
+# and window extraction dominate, and 1,216 annotated EDFs is 7x the original.
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH -J conv_train
@@ -65,7 +67,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
-    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS
+    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS EDF_DIR
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -79,6 +81,7 @@ echo "Node:        $(hostname)"
 echo "Start time:  $(date)"
 echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
+echo "Data dir:    $EDF_DIR"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR / the U-Net job)
@@ -93,7 +96,15 @@ cd $HOME/NED-Net
 mkdir -p logs
 
 # EDF data + their *_ned_annotations.json sidecars live in project storage.
-EDF_DIR="/lunarc/nobackup/projects/lu2026-2-60/edf_data"
+# Overridable, same as train_unet.sh:
+#   SV2A only              : .../lu2026-2-60/edf_data
+#   SV2A + RAM_GDNF (arm A) : .../lu2026-2-60          <- the parent
+#   RAM_GDNF only           : .../lu2026-2-60/RAM_GDNF_2025
+# The scan is recursive on *_ned_annotations.json, so the data-dir choice IS the
+# dataset. Mir's RAM_GDNF labels carry features.convulsive from his
+# candidate_type (368 convulsive, 51 behaviour), which is exactly what Stage 2
+# needs -- so the parent is the right choice for a convulsive retrain.
+: "${EDF_DIR:=/lunarc/nobackup/projects/lu2026-2-60/edf_data}"
 
 # Space-separated IDs -> multiple --exclude-animals values (intentionally unquoted).
 EXCLUDE_ARG=()
