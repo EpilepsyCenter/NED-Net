@@ -130,13 +130,35 @@ composition and the apparent non-convulsive success to a reference that could no
 events. Both were over-interpretation of class-stratified numbers; the simple reading is
 correct and the earlier one is withdrawn.
 
-### Seizure burden
+### Seizure burden — and a comparison NOT to make
 
-45 seizures in 48 animal-hours = **~22 per animal-day**, against the reference's rate of
-0.64 (430 events over 16,114 animal-hours). The true burden is roughly **35x** what the
-automated-candidate-plus-video reference captured. That is why nothing was ever going to
-validate cleanly against it, and it is the strongest single argument in this paper for
-exhaustive manual review as the anchor for any detector validation.
+45 seizures in 48 animal-hours = **~22 per animal-day** for **non-convulsive** events.
+Mir's reference rate is 0.64/animal-day for **convulsive** events.
+
+**These must not be divided.** An earlier version of this section reported the ratio as
+"the true burden is 35x what the reference captured", which is wrong: the two figures are
+different seizure classes. The correct statement is that **non-convulsive burden exceeds
+convulsive burden by roughly 35-fold in this cohort**, which is unremarkable — non-convulsive
+events are expected to be far more numerous — and says nothing about the reference's
+completeness for the class it was built to capture.
+
+### Detection is channel-selective, not uniformly insensitive
+
+Within a single recording (`B3_W3_D7_06022026(4)`, 90 min, one model):
+
+| channel | manual seizures | caught |
+|---|---|---|
+| UI ch3 | 6 | **4** |
+| UI ch8 | 3 | 1 |
+| UI ch1 | 5 | **0** |
+| UI ch6 | 4 | **0** |
+
+All of that file's U-Net output sits on three channels; on the others it produced nothing.
+This matches the cohort-wide asymmetry (UI ch8: 52 detections against 107 confirmed
+seizures; UI ch4: 15,291 against 8). So the ~15% aggregate recall is not a uniform
+sensitivity figure — it is the average of channels where the detector works and channels
+where it is silent. **What varies per channel, and why, is unresolved**; the two
+signal-quality metrics built to explain it both failed their pre-registered tests.
 
 **Caveats:** 45 events from 4 recordings, all Batch 3. The U-Net detections in both
 stratum-A files were left `pending`, so **precision is not computable from this sample** —
