@@ -565,6 +565,87 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-08 — RESULT: retraining beats the frozen model IN-SAMPLE — jobs 3823858-61
+script:   `scripts/local/operating_point_table.py` (new), `scripts/lunarc/detect_ramgdnf_unet.sbatch`
+inputs:   `ramgdnf_armA3_holdB3` over **Batch 1 + Batch 2** (held IN, never the test fold)
+          at four (threshold / boundary) points; frozen `UNetv2_20260615` through the
+          **identical** code path for the paired baseline.
+          Retained channels only (no B4, no B2 UI ch3/ch4, no 449382). Convulsive ground
+          truth, n = **68** for every row, so the comparison is properly paired.
+outputs:  `~/.eeg_seizure_analyzer/projects/armA3_tune_t{0.5,0.7,0.8,0.9}_b{0.1,0.3,0.5,0.5}.db`
+
+| | det | recall | precision (vs Mir) | fired on | med IoU | med det dur |
+|---|---|---|---|---|---|---|
+| **frozen UNetv2** | 1,844 | **38.2%** | 33% | **51%** | **0.36** | **10 s** |
+| A3 thr 0.5 / bnd 0.1 | 32,713 | 72.1% | 2% | 100% | 0.66 | 13 s |
+| A3 thr 0.7 / bnd 0.3 | 11,448 | 60.3% | 4% | 97% | 0.58 | 13 s |
+| A3 thr 0.8 / bnd 0.5 | 5,911 | 52.9% | 7% | 87% | 0.60 | 17 s |
+| **A3 thr 0.9 / bnd 0.5 (SELECTED)** | 3,692 | **50.0%** | 10% | **77%** | **0.60** | **19 s** |
+
+operating point selected: **thr 0.9 / bnd 0.5.** The trade is monotone with no knee, so take
+          the conservative end: it still beats frozen on recall and coverage, keeps the
+          output reviewable, and has the best precision and boundaries.
+coverage is the unconfounded win:
+          per-recording **silence** was the defect — the frozen model fired on only 51% of
+          reviewed recordings, so half the data had no detector at all. A3 fires on 77% at
+          the strictest point. This does not depend on the precision metric.
+truncation resolves, and it was NOT a threshold artefact:
+          median IoU 0.36 -> 0.60, matched duration 10 s -> 19 s against a ~37 s
+          ground-truth median. Within A3 it barely moves across boundary 0.1/0.3/0.5
+          (0.66/0.58/0.60), so the hysteresis boundary was **not** causing the 9 s
+          fragments — the retraining fixed them. Answers the open question from the
+          match-rule entry above.
+precision is CONFOUNDED, do not report 33% -> 10% as a regression:
+          it is measured against Mir's convulsive candidates, which structurally cannot
+          credit a non-convulsive detection. A3 inherited SV2A's non-convulsive class and
+          so produces more of exactly what this metric cannot score. Unresolvable without
+          review sampling.
+
+**PER-ANIMAL PAIRED COMPARISON** — `review/frozen_vs_A3_per_animal_B1B2.csv`
+
+| batch | animal | UI ch | gt | frozen | % | det | A3 | % | det |
+|---|---|---|---|---|---|---|---|---|---|
+| B1 | 449381 | 1 | 14 | 4 | 29 | 34 | 6 | 43 | 54 |
+| B1 | 449385 | 5 | 10 | 1 | 10 | 792 | 4 | 40 | 729 |
+| B1 | **449387** | 7 | 5 | 0 | **0** | **0** | 1 | 20 | 118 |
+| B1 | 449388 | 8 | 26 | 15 | 58 | 31 | 18 | 69 | 69 |
+| B2 | 450095 | 5 | 1 | 1 | 100 | 2 | 1 | 100 | 117 |
+| B2 | 450096 | 6 | 11 | 4 | 36 | 295 | 4 | 36 | 685 |
+| B2 | 450097 | 7 | 1 | 1 | 100 | 376 | 0 | 0 | 138 |
+| | **total** | | **68** | **26** | **38.2** | 1,530 | **34** | **50.0** | 1,910 |
+
+          4 improved, 2 unchanged, 1 worse. Three specifics carry more weight than the total:
+          * **449387 was wholly silent — 0 detections over 5 seizures — and now fires.**
+            The starkest single failure in Phase 1. Not fixed (1/5), but a detector now
+            exists on that channel.
+          * **449385 improved while firing LESS**: 792 -> 729 detections, 1 -> 4 caught. The
+            frozen model's 792 were essentially noise. This is the cleanest evidence the
+            gain is real and not a volume effect.
+          * **efficiency is better than the batch table implies**: on the 7 channels that
+            actually contain convulsive seizures, +25% detections buys +31% recall
+            (1,530 -> 1,910 det, 26 -> 34 hits). The "2x detections" reading came from
+            counting all retained channels; A3's extra output sits on channels with **no**
+            convulsive ground truth, which is either non-convulsive events or false
+            positives and Mir's reference cannot tell them apart.
+          The single regression (450097, 100% -> 0%) is one seizure — noise.
+CAVEATS that must travel with this result:
+          * **IN-SAMPLE.** B1 and B2 were in A3's training, so Mir's labels there were seen.
+            This is the "what you get after annotating the cohort" number — the direct
+            analogue of SV2A's 93.6% — **not** a generalisation claim. The out-of-sample
+            claim stays with A3-on-held-out-B3.
+          * n = 7 channels / 68 events. Enough to separate 0% from 20%, not to rank
+            adjacent animals.
+          * A3 trained on the **stale tree** (see the defect entry below), so it has none of
+            the 52 manual additions or 344 adjudicated detections. `ramgdnf_all_prod`
+            should do better still, and its operating point must be re-swept rather than
+            inheriting 0.9/0.5 blindly.
+what this does for the paper:
+          **This is the first retrained arm to beat the frozen model on anything.** It makes
+          the paper's central claim concrete and quantified: a model that fails on a new
+          cohort (15.3% convulsive recall, firing on half the recordings) recovers to 50%
+          recall and 77% coverage once that cohort is annotated and folded back in — using
+          the same UI and pipeline, with no code changes.
+
 ### 2026-10-08 — Two training-set corrections (reviewer-requested)
 request:  (1) exclude Mir's very long events — "everything above 100 s" — from the new
           training; (2) sample random background only from areas not already annotated
