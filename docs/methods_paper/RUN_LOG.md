@@ -565,6 +565,62 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-08 — Stage-2 threshold was mis-set after retraining (no compute needed)
+script:   `scripts/local/conv_threshold_sweep.py` (new)
+method:   `events.convulsive_confidence` is stored per event and Stage 2 only **labels**,
+          never filters (`_apply_convulsive_classifier`, `predict.py:242`). So the whole
+          CONV_THRESHOLD sweep is arithmetic on an existing DB — **no SLURM job, no
+          re-detection.** Re-deriving `type` from the stored probability reproduces exactly
+          what a re-run at that threshold would give.
+B1+B2 retained, convulsive ground truth (n=68):
+
+**A3 @ thr 0.9 / bnd 0.5 — Stage 2 is pure loss at the inherited threshold**
+
+| conv_thr | det | recall | precision | fired on |
+|---|---|---|---|---|
+| none (Stage 1) | 3,692 | **50.0%** | 10% | 77% |
+| 0.10 | 3,593 | **50.0%** | 11% | 75% |
+| **0.30 (recommended)** | 3,224 | **47.1%** | 11% | 73% |
+| 0.45 (as deployed) | 2,868 | 38.2% | 11% | 71% |
+| 0.60 | 2,233 | 35.3% | 13% | 67% |
+| 0.80 | 1,044 | 29.4% | 16% | 54% |
+| 0.95 | 672 | 20.6% | 17% | 36% |
+
+**frozen UNetv2 + `Convulsive_v4LUNARC` — Stage 2 earns its place**
+
+| conv_thr | det | recall | precision | fired on |
+|---|---|---|---|---|
+| none (Stage 1) | 1,844 | 38.2% | 33% | 51% |
+| 0.20 | 623 | 35.3% | 52% | 35% |
+| 0.45 | 189 | 27.9% | **61%** | 16% |
+| 0.80 | 64 | 20.6% | **81%** | 5% |
+
+headline: going 0.30 -> 0.45 on A3 costs **6 of 32 correct detections and buys zero
+          precision** (11% -> 11%). The earlier "Stage 2 destroys ~25% of correct
+          detections" finding is real but is a **mis-set threshold, not an intrinsic
+          defect** — most of it is recoverable for free at 0.30.
+mechanism — a calibration shift:
+          `convulsive_confidence` p50 is **0.12** for the frozen classifier and **0.66**
+          for the retrained one. `conv_armA_holdB3` drew **48%** of its positive class from
+          Mir's convulsive events, and `build_convulsive_window_specs` takes **no**
+          negatives from rejected rows — its only negatives are non-convulsive *confirmed*
+          seizures. So the class balance tilted convulsive and the classifier largely
+          stopped discriminating. The 0.45 inherited from the frozen pipeline is simply
+          wrong for it.
+RULE: **re-tune CONV_THRESHOLD after every Stage-2 retrain; never inherit it.** It is free
+          to sweep post-hoc, so detection runs can use any value and be re-scored later.
+this settles the reporting scope, on evidence rather than preference:
+          Stage 2 is an **informative** type filter for the frozen model and **not** for A3
+          (precision flat at 11% across 0.10-0.45). Filtering A3 by it therefore does not
+          achieve type-matching against Mir's convulsive reference — it deletes detections
+          near-randomly. **Report Stage 1 as detection capability for both models, and
+          Stage 2 separately with this asymmetry stated.** The cascade tables above remain
+          valid as "the pipeline as deployed", which is a different and also reportable thing.
+also fixes the headline comparison:
+          at a properly tuned Stage 2 (A3 @ 0.30 vs frozen @ 0.45), recall is
+          **47.1% vs 27.9%** and coverage **73% vs 16%** — a larger gap than the 38.2% vs
+          27.9% reported from the inherited threshold.
+
 ### 2026-10-08 — RESULT: retraining beats the frozen model IN-SAMPLE — jobs 3823858-61
 script:   `scripts/local/operating_point_table.py` (new), `scripts/lunarc/detect_ramgdnf_unet.sbatch`
 inputs:   `ramgdnf_armA3_holdB3` over **Batch 1 + Batch 2** (held IN, never the test fold)
