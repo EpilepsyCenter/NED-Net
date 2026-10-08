@@ -28,10 +28,18 @@ to Stage 2.
 | `ramgdnf_armA2_holdB3_randneg` | SV2A + RAM_GDNF, background negatives only | 865 | random | 0.595 @ ep14 | 0.532 @ ep15 |
 | `ramgdnf_armA3_holdB3` | symlink tree, **no Mir negatives** | 864 | 1,371 SV2A hard + ~10,800 background | _pending_ | _pending_ |
 
-**armA2 is unusable** — it timed out at epoch 17 of 50 (1,220 s/epoch; `--neg-source random`
-reads scattered background windows, 6x slower) and never wrote `metadata.json`, so detection
-cannot load it. Its epoch-14 `best_model.pt` exists but is orphaned. It is kept only as
-evidence that removing Mir's negatives lowers val loss (0.595 against arm A's 0.676).
+**armA2 was rescued** (2026-10-08). It timed out at epoch 17 of 50 (1,220 s/epoch;
+`--neg-source random` reads scattered background windows, 6x slower than reusing
+rejected-event windows) and never wrote `metadata.json`, orphaning its epoch-14
+`best_model.pt`. Since only five fields matter for inference —
+`architecture`, `target_fs`, `window_sec`, `include_activity`, `n_classes` — plus
+`train_config`'s `base_filters`/`depth`/`dropout` for reconstructing the network, and arm A2
+used flags identical to `UNetv2_20260615`, a metadata file was written by hand from that
+model's. It loads with **23,421,826 params**, matching exactly, so the weights are usable.
+The file carries a `RECONSTRUCTED` field: **training metrics are absent and must not be
+quoted from it** — the real numbers live only in the job log (best val_loss 0.5945 at epoch
+14, the best of any arm; event_f1 0.5323 at epoch 15, though that metric swung 0.056-0.532
+epoch to epoch and is not trustworthy from a single epoch).
 
 **armA3 is the clean version of that experiment** — same positives and split as arm A, one
 variable changed, at arm A's speed. Trained against `~/train_nomirneg`, a flat directory of
