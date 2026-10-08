@@ -173,8 +173,46 @@ level of **event morphology** rather than channel properties. It also means harv
 positives from silent recordings targets exactly the gap, which is what the annotation
 strategy does.
 
+### Per-channel amplitude scaling differs markedly between batches (2026-10-08)
+
+Median demeaned `rms` per UI channel, as a ratio to the SV2A training cohort:
+
+| UI ch | SV2A | B1 | B2 | B3 | B4 |
+|---|---|---|---|---|---|
+| 1 | 0.081 | 1.15x | 0.36x | 0.78x | 0.31x |
+| **2** | 0.067 | **0.00x** (0.0002) | 0.41x | 0.69x | 0.62x |
+| 3 | 0.065 | 0.81x | **2.45x** | 0.94x | 0.33x |
+| 4 | 0.083 | 1.19x | **3.54x** | 0.74x | 0.35x |
+| 5 | 0.105 | **0.13x** | 0.36x | 0.52x | 0.14x |
+| 6 | 0.056 | 1.92x | 1.62x | 1.60x | 0.86x |
+| 7 | 0.111 | 1.32x | 1.12x | 0.70x | 0.58x |
+| 8 | 0.051 | **0.24x** | 1.21x | 0.81x | 0.51x |
+
+Four observations, each independently useful:
+
+* **Batch 1 UI ch2 is a dead channel** — rms 0.0002, 400x below SV2A, `baseline_iqr`
+  exactly 0.0000. This is animal **449382**, already excluded on the pre-demeaning metrics
+  (rms 2.44 with the cohort's highest line noise, i.e. a DC offset with no signal beneath).
+  Two independent measurements, same conclusion.
+* **Batch 1 ch5 and ch8 are 4-8x low and flat** (`baseline_iqr` 0.0047 and 0.0018 against
+  ch4's 0.0338). Low amplitude *and* little variation, so those channels are plausibly
+  **genuinely quiet** rather than concealing events — consistent with the reviewer finding
+  almost nothing real in eight silent Batch-1 recordings.
+* **Batch 2's ch3 and ch4 are the HIGH-amplitude channels** (2.45x, 3.54x) and are exactly
+  the two excluded on visual review as noisy. "Noisy" here means high-amplitude, and the
+  visual call is quantitatively corroborated.
+* **Batch 3's scaling most resembles SV2A** (mostly 0.7-0.95x), and it is the batch retained
+  as clean — an independent check on that choice. Batch 4 is uniformly ~0.3x and was
+  excluded wholesale.
+
+**Practical consequence:** harvesting annotations from Batch-1 silent recordings is poor
+value — those channels are quiet. Batch 3 yields ~12 seizures per recording in exhaustive
+review and its amplitude scaling matches the training cohort.
+
 **What determines whether a channel or recording is in the silent set remains unresolved at
-the signal level.** Two
+the signal level** — the per-channel scaling above distinguishes batches, but not firing
+from silent channels *within* the set that contains seizures (see the conditioned test
+above). Two
 signal-quality metrics were built to explain it and both failed their pre-registered tests
 (`EXCLUSION_CRITERIA.md`). This is the single biggest open question in the analysis, and it
 is the right target for Phase 2 — because a detector that is 92% precise where it works has
