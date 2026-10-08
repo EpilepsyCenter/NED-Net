@@ -71,6 +71,22 @@ class DatasetConfig:
     #   120 s were ever detected. Capped events stay in the interval lists, so a
     #   window overlapping one is still labelled seizure and background is never
     #   sampled from it -- only the "centre a window on it" step is skipped.
+    conv_neg_from_rejected: bool = False  # convulsive-classifier path only: emit
+    #   `rejected` events as NON-convulsive windows. Stage 2 is trained on confirmed
+    #   seizures but deployed on every detection, most of which are false positives, so
+    #   it has never seen a non-seizure. With the frozen classifier that failed safely
+    #   (RAM_GDNF noise was unfamiliar, scored low, precision 33% -> 61%); after
+    #   retraining on RAM_GDNF convulsive events the same noise resembles them and
+    #   precision is flat at 11% at EVERY threshold. Negatives, not tuning, fix that.
+    #   Mir's `rejected` rows are the right source: video-adjudicated "not a
+    #   convulsive/behavioural seizure", i.e. wrong for the detector and exactly right
+    #   here (`build_merged_sidecars.py:76`).
+    conv_neg_methods: tuple = ()  # restrict those negatives to these
+    #   `features.detection_method` values; empty = every rejected event.
+    conv_neg_pos_ratio: float = 5.0  # cap on TOTAL negatives per convulsive positive.
+    #   Non-convulsive *seizures* are always kept in full and rejected events only fill
+    #   the remaining room, so the convulsive-vs-non-convulsive-seizure boundary is not
+    #   swamped by easy noise. <= 0 keeps every rejected event (~1:17 here).
     hard_neg_exclude_methods: tuple = ()  # `features.detection_method` values whose
     #   `rejected` rows are NOT used as hard negatives, while their regions are still
     #   honoured by bg_avoid_rejected. Use ("mir_candidate",) for RAM_GDNF: Mir's
@@ -899,7 +915,11 @@ def build_convulsive_specs(
     event's ``features.convulsive`` flag.  ``convulsive_intervals`` is also
     populated so the convulsive-aware strata in :func:`split_by_animal` work.
 
-    Rejected events are ignored here — rejection is the detector's job.
+    Rejected events are ignored here by default — rejection is the detector's job.
+    Set ``config.conv_neg_from_rejected`` to include them as NON-convulsive windows,
+    which aligns training with deployment (Stage 2 runs on every detection, most of
+    which are false positives) and is the only way to restore its precision
+    contribution after retraining. See ``DatasetConfig.conv_neg_from_rejected``.
 
     Parameters
     ----------
@@ -912,6 +932,7 @@ def build_convulsive_specs(
     """
     exclude_set = set(config.exclude_animals or ())
     specs: list[WindowSpec] = []
+    rej_specs: list[WindowSpec] = []
 
     for file_entry in dataset_def.get("files", []):
         edf_path = file_entry["edf_path"]
@@ -943,7 +964,19 @@ def build_convulsive_specs(
                 and a.get("event_type") == "seizure"
                 and a.get("channel") == eeg_ch
             ]
-            if not ch_confirmed:
+            # Rejected events as non-convulsive windows (see conv_neg_from_rejected).
+            ch_rejected = []
+            if config.conv_neg_from_rejected:
+                _only = set(config.conv_neg_methods or ())
+                ch_rejected = [
+                    a for a in annotations
+                    if a.get("label") == "rejected"
+                    and a.get("event_type") == "seizure"
+                    and a.get("channel") == eeg_ch
+                    and (not _only
+                         or (a.get("features") or {}).get("detection_method") in _only)
+                ]
+            if not ch_confirmed and not ch_rejected:
                 continue
 
             ch_convulsive_intervals = [
@@ -989,6 +1022,47 @@ def build_convulsive_specs(
                     animal_id=animal_id,
                     center_convulsive=is_conv,
                 ))
+
+            # Rejected events -> non-convulsive windows. Collected separately so the
+            # global cap below can subsample them without touching real seizures.
+            for ann in ch_rejected:
+                onset, offset = ann["onset_sec"], ann["offset_sec"]
+                centre = (onset + offset) / 2
+                half_win = config.window_sec / 2
+                win_start = max(0, centre - half_win)
+                win_end = min(rec_duration, win_start + config.window_sec)
+                win_start = max(0, win_end - config.window_sec)
+                rej_specs.append(WindowSpec(
+                    edf_path=edf_path,
+                    start_sec=win_start,
+                    duration_sec=config.window_sec,
+                    eeg_channel=eeg_ch,
+                    act_channel=act_ch,
+                    is_positive=True,     # it IS a sample; the label is center_convulsive
+                    seizure_intervals=[],
+                    convulsive_intervals=[],
+                    animal_id=animal_id,
+                    center_convulsive=False,
+                ))
+
+    # ── Cap the rejected negatives ───────────────────────────────────
+    # Keep every non-convulsive SEIZURE, then let rejected events fill up to
+    # conv_neg_pos_ratio total negatives per convulsive positive.
+    if rej_specs:
+        n_conv = sum(1 for s in specs if s.center_convulsive)
+        n_seiz_neg = len(specs) - n_conv
+        ratio = config.conv_neg_pos_ratio
+        if ratio > 0 and n_conv:
+            room = max(0, int(round(n_conv * ratio)) - n_seiz_neg)
+            if len(rej_specs) > room:
+                rng = np.random.default_rng(config.seed)
+                idx = rng.choice(len(rej_specs), size=room, replace=False)
+                rej_specs = [rej_specs[i] for i in sorted(idx)]
+        print(f"  convulsive negatives: {n_conv} convulsive positives, "
+              f"{n_seiz_neg} non-convulsive seizures, "
+              f"{len(rej_specs)} rejected events kept "
+              f"(cap {ratio if ratio > 0 else 'none'}:1)")
+        specs.extend(rej_specs)
 
     return specs
 

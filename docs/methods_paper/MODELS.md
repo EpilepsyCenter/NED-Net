@@ -33,6 +33,45 @@ Stage 2 was never tested by it. Threshold-validation sweeps likewise do not need
 ground-truth event, what fraction does Stage 2 label convulsive? Frozen: 4 of 8. Retrained:
 3 of 5. Both near 50-60% on single-digit counts.
 
+**Amendment, 2026-10-08 — the label is usable as a filter, and what that measures.**
+Everything above still holds: Stage 2 only labels. But because the label *can* be used to
+filter when reporting, a CONV_THRESHOLD sweep on an existing DB is meaningful — and free,
+since `events.convulsive_confidence` is stored per event, so no re-detection is needed
+(`scripts/local/conv_threshold_sweep.py`). That sweep found, on retained B1+B2 against
+Mir's convulsive reference:
+
+| | frozen + `Convulsive_v4LUNARC` | A3 + `conv_armA_holdB3` |
+|---|---|---|
+| precision, Stage 1 only | 33% | 10% |
+| precision @ 0.45 | **61%** | 11% |
+| precision @ 0.80 | **81%** | 16% |
+| `convulsive_confidence` p50 | 0.12 | **0.66** |
+
+So Stage 2 is an **informative** type filter for the frozen model and **effectively
+uninformative** for the retrained one — precision is flat across 0.10-0.45, and raising
+0.30 -> 0.45 costs 6 of 32 correct detections for nothing.
+
+**Why, and this is the actionable part:** Stage 2 is trained on *confirmed seizures only*
+(`build_convulsive_specs` ignored rejected rows — "rejection is the detector's job") yet it
+is **deployed on every detection**, most of which are false positives. It had therefore
+never seen a non-seizure. For the frozen classifier that failed safely: RAM_GDNF noise was
+unfamiliar, scored low, and precision rose. After retraining on 368 of Mir's RAM_GDNF
+convulsive seizures, the same noise resembles them, so it scores high. **No threshold can
+separate classes the classifier was never shown.**
+
+Fixed by `--conv-neg-from-rejected` (2026-10-08), which emits rejected events as
+non-convulsive windows, capped at `--conv-neg-pos-ratio` total negatives per convulsive
+positive (default 5; non-convulsive *seizures* are kept in full and rejected events fill
+the rest). Mir's rejected rows are the right source and the asymmetry is deliberate:
+**video-adjudicated "not a convulsive/behavioural seizure" is wrong as a DETECTION negative
+and exactly right as a Stage-2 negative** (`build_merged_sidecars.py:76`). They are excluded
+from the detector by `--hard-neg-exclude-method mir_candidate` and trained on here — same
+rows, opposite role, because the two stages answer different questions.
+
+This changes Stage 2's question from "given a seizure, is it convulsive?" to "is this
+detection a convulsive seizure at all?" — which is what deployment actually asks. It still
+only labels; it never filters.
+
 ## The cascade has two stages, trained separately
 
 | | Stage 1 — U-Net | Stage 2 — convulsive classifier |

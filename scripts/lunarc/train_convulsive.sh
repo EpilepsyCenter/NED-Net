@@ -46,6 +46,21 @@
 : "${LR:=3e-4}"
 : "${PATIENCE:=10}"
 : "${EXCLUDE_ANIMALS:=355676}"   # space-separated IDs to drop; 355676 is noisy
+: "${CONV_NEG_FROM_REJECTED:=0}"  # 1 = train on `rejected` events as NON-convulsive.
+#   Stage 2 is trained on confirmed seizures but DEPLOYED on every detection, most of
+#   which are false positives -- so by default it has never seen a non-seizure. With the
+#   frozen classifier that failed safely (RAM_GDNF noise was unfamiliar, scored low,
+#   precision 33% -> 61%); after retraining on RAM_GDNF convulsive events the same noise
+#   resembles them and precision is FLAT AT 11% at every threshold. Negatives fix that,
+#   tuning cannot. Mir's rejected rows are the right source: video-adjudicated "not a
+#   convulsive/behavioural seizure" -- wrong for the detector, exactly right here
+#   (`build_merged_sidecars.py:76`).
+: "${CONV_NEG_METHODS:=}"      # restrict those negatives to these detection_method
+#   values (space-separated); empty = every rejected event. e.g. "mir_candidate"
+: "${CONV_NEG_POS_RATIO:=5}"   # cap on TOTAL negatives per convulsive positive.
+#   Non-convulsive SEIZURES are kept in full; rejected events fill the rest, so the
+#   convulsive-vs-non-convulsive-seizure boundary is not swamped by easy noise.
+: "${MAX_POSITIVE_SEC:=0}"     # 0 = no cap; 100 drops Mir's chained blocks.
 
 # ============================================================
 # Phase 1: not under SLURM -> prompt, then submit this script.
@@ -62,12 +77,18 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask BATCH_SIZE "Batch size"
     ask LR         "Learning rate"
     ask PATIENCE   "Patience"
-    read -r -p "Exclude animal IDs (space-separated, blank = none) [$EXCLUDE_ANIMALS]: " ans
-    [ -n "$ans" ] && EXCLUDE_ANIMALS="$ans"
+    ask EXCLUDE_ANIMALS         "Exclude animal IDs (space-separated, blank = none)"
+    ask CONV_NEG_FROM_REJECTED  "Train rejected events as non-convulsive (1/0)"
+    ask CONV_NEG_METHODS        "Restrict those to detection_methods (blank = all)"
+    ask CONV_NEG_POS_RATIO      "Total negatives per convulsive positive"
+    ask MAX_POSITIVE_SEC        "Max positive duration in s (0 = no cap)"
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
-    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS EDF_DIR
+    echo "            neg_from_rejected=$CONV_NEG_FROM_REJECTED methods=${CONV_NEG_METHODS:-all}"
+    echo "            neg/pos cap=$CONV_NEG_POS_RATIO max_positive_sec=$MAX_POSITIVE_SEC"
+    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS EDF_DIR \
+           CONV_NEG_FROM_REJECTED CONV_NEG_METHODS CONV_NEG_POS_RATIO MAX_POSITIVE_SEC
     sbatch --export=ALL "$0"
     exit $?
 fi
@@ -81,6 +102,8 @@ echo "Node:        $(hostname)"
 echo "Start time:  $(date)"
 echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
+echo "             neg_from_rejected=$CONV_NEG_FROM_REJECTED methods=${CONV_NEG_METHODS:-all}"
+echo "             neg/pos cap=$CONV_NEG_POS_RATIO max_positive_sec=$MAX_POSITIVE_SEC"
 echo "Data dir:    $EDF_DIR"
 echo "========================================="
 
@@ -110,9 +133,17 @@ mkdir -p logs
 EXCLUDE_ARG=()
 [ -n "$EXCLUDE_ANIMALS" ] && EXCLUDE_ARG=(--exclude-animals $EXCLUDE_ANIMALS)
 
+NEG_ARG=()
+[ "$CONV_NEG_FROM_REJECTED" = "1" ] && NEG_ARG=(--conv-neg-from-rejected)
+# Intentionally unquoted: space-separated values -> multiple argparse values.
+[ -n "$CONV_NEG_METHODS" ] && NEG_ARG+=(--conv-neg-method $CONV_NEG_METHODS)
+
 python -m eeg_seizure_analyzer.ml.train_convulsive \
     --data-dir "$EDF_DIR" \
     --model-name "$MODEL_NAME" \
+    "${NEG_ARG[@]}" \
+    --conv-neg-pos-ratio "$CONV_NEG_POS_RATIO" \
+    --max-positive-sec "$MAX_POSITIVE_SEC" \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \
     --lr "$LR" \
