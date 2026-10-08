@@ -101,6 +101,47 @@ are predominantly non-convulsive. The model learned that morphology. This is a
 the whole recording and is not restricted to any band, so missing convulsive seizures is a
 genuine sensitivity failure for that class.
 
+## Non-convulsive recall, from exhaustive manual review (2026-10-08)
+
+Four Batch-3 recordings reviewed exhaustively — every event >=5 s on all 8 channels,
+independent of what the detector reported. Two strata, randomly drawn within stratum:
+files **with** a conf>=0.5 detection (43% of full-length B3 files) and files **without**
+(57%). ~48 animal-hours. Manual additions carry `source="manual"` in the sidecars.
+
+| stratum | file | manual seizures | U-Net detections in file | caught |
+|---|---|---|---|---|
+| B | `B3_W2_D2_22012026(7)` | 9 | **0** | 0 |
+| B | `B3_W2_D3_23012026(9)` | 13 | **0** | 0 |
+| A | `B3_W3_D3_02022026(12)` | 5 | 7 | 3 |
+| A | `B3_W3_D7_06022026(4)` | 18 | 8 | 5 |
+
+**Non-convulsive recall: 15.0% (weighted 43/57)**; 8/45 unweighted; stratum A 34.8%,
+stratum B **0%**. In both stratum-B files the U-Net produced **no output whatsoever** — not
+merely nothing above threshold — while 22 real seizures were present.
+
+### This collapses the class-specific explanation
+
+**15.0% non-convulsive against 15.3% convulsive.** Two independent references (Mir's
+video-adjudicated convulsive set; exhaustive manual review for all types), two seizure
+classes, the same answer. So there is no instrument mismatch, no band mismatch and no
+convulsive-vs-non-convulsive asymmetry: **the frozen detector finds about 15% of seizures,
+of any type.** Earlier drafts of this document attributed the convulsive failure to training
+composition and the apparent non-convulsive success to a reference that could not see those
+events. Both were over-interpretation of class-stratified numbers; the simple reading is
+correct and the earlier one is withdrawn.
+
+### Seizure burden
+
+45 seizures in 48 animal-hours = **~22 per animal-day**, against the reference's rate of
+0.64 (430 events over 16,114 animal-hours). The true burden is roughly **35x** what the
+automated-candidate-plus-video reference captured. That is why nothing was ever going to
+validate cleanly against it, and it is the strongest single argument in this paper for
+exhaustive manual review as the anchor for any detector validation.
+
+**Caveats:** 45 events from 4 recordings, all Batch 3. The U-Net detections in both
+stratum-A files were left `pending`, so **precision is not computable from this sample** —
+recall only. Three manual events fell below the 5 s inclusion criterion and were excluded.
+
 ## Precision, on the retained set
 
 Retained = all batches except 4, minus Batch 2 UI ch3/ch4 and the dead electrode 449382.
