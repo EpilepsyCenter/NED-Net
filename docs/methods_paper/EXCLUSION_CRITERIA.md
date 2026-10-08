@@ -150,6 +150,31 @@ not a units or gain artefact. The shifts are consistent but **moderate** (AUC 0.
 the distributions overlap heavily. There is no subset to exclude because the whole cohort
 sits further along the same axis.
 
+## THE CRITERIA (stated 2026-10-08)
+
+A (recording, channel) is excluded if expert visual review of the raw trace shows any of:
+
+1. **Regular ~10 Hz spiking noise** — rhythmic, persistent, and showing **no evolution of
+   the signal**, which is what distinguishes it from ictal activity. Evolution in frequency
+   and amplitude across the event is the discriminator, and it needs no video.
+2. **Prominent artefacts** — high-amplitude non-physiological excursions, movement or
+   electrical contamination dominating the trace.
+3. **Dead or saturated electrodes** — measurable rather than visual: demeaned `rms` below
+   0.001 or above 0.5. This is the only criterion an automated metric handles reliably.
+
+Applied per channel, not per batch; a batch is excluded only when most of its channels fail.
+
+**Disclosure that must accompany these in the paper:** criteria 1 and 2 were applied by the
+experimenter *after* seeing detector output, so the exclusions are
+performance-informed in origin. Two automated metrics were built to replace that judgement
+and both failed their pre-registered tests (below). The protection is therefore procedural,
+not statistical: **every stratum is reported** — retained, excluded, and the full cohort —
+so a reader can accept or reject the exclusion with the numbers in front of them.
+
+**What would make this independent**, and is worth doing if a reviewer presses: rate each
+animal's recording quality from raw traces against criteria 1-3 with detections **not
+displayed**, then stratify on that rating. A few minutes per animal across 32.
+
 ## FINAL EXCLUSIONS (decided 2026-10-07 by expert visual review)
 
 After two signal-quality metrics failed to separate noisy from seizure-bearing recordings,
