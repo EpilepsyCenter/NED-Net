@@ -15,6 +15,8 @@ tracked. Separate from the SV2A biology manuscript, whose record lives in
 | File | What it is |
 |---|---|
 | `NEXT_STEPS.md` | **Current state and what to do next. Start here.** |
+| `PHASE1_RESULTS.md` | **Phase-1 results.** Supersedes the 2026-10-02 version, now in `archive/`. |
+| `MODELS.md` | Every model trained, what it saw, what it scored. |
 | `NEDNet_validation_HANDOFF.md` | The full plan (v2) — background, data, architecture facts. |
 | `PHASE1_RESULTS_20261002.md` | Frozen-model validation: it fails, 9.1% recall, heterogeneous by batch. |
 | `PHASE2_STRATEGY.md` | Retraining plan — LOCO by `--exclude-animals`, two arms, learning curve. |
