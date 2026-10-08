@@ -599,14 +599,29 @@ headline: going 0.30 -> 0.45 on A3 costs **6 of 32 correct detections and buys z
           precision** (11% -> 11%). The earlier "Stage 2 destroys ~25% of correct
           detections" finding is real but is a **mis-set threshold, not an intrinsic
           defect** — most of it is recoverable for free at 0.30.
-mechanism — a calibration shift:
+mechanism — CORRECTED (the first explanation written here was wrong):
           `convulsive_confidence` p50 is **0.12** for the frozen classifier and **0.66**
-          for the retrained one. `conv_armA_holdB3` drew **48%** of its positive class from
-          Mir's convulsive events, and `build_convulsive_window_specs` takes **no**
-          negatives from rejected rows — its only negatives are non-convulsive *confirmed*
-          seizures. So the class balance tilted convulsive and the classifier largely
-          stopped discriminating. The 0.45 inherited from the frozen pipeline is simply
-          wrong for it.
+          for the retrained one. That is **not** a class-imbalance artefact:
+          `train_convulsive.py:204` sets `pos_weight = n_nonconv / n_conv` automatically,
+          so the loss was balanced in both runs (SV2A alone 430 conv / 706 non-conv ->
+          pos_weight 1.64; `conv_armA_holdB3` 451 / 383 -> 0.85). The composition flipped
+          from 38% to 54% convulsive, but the weighting compensates for exactly that.
+          The real cause is **domain familiarity**, as `MODELS.md:102-104` already stated:
+          the frozen Stage 2 had never seen a RAM_GDNF convulsive seizure; `conv_armA_holdB3`
+          has seen 368 of them. So RAM_GDNF activity now scores high — including RAM_GDNF
+          activity that is noise.
+          **The deeper defect is a train/inference mismatch.**
+          `build_convulsive_window_specs` emits one window per *confirmed* seizure and
+          explicitly ignores rejected rows ("rejection is the detector's job"), so Stage 2
+          **has never seen a non-seizure** — yet it is applied to every U-Net detection,
+          most of which are false positives. For the frozen classifier this failed safely:
+          RAM_GDNF noise was unfamiliar, scored low, and precision rose 33% -> 61%. For the
+          retrained classifier the same noise resembles the RAM_GDNF convulsive seizures it
+          just learned, so it scores high and **precision is flat at 11% at every
+          threshold**. No threshold can fix that; it needs negatives.
+note:     the documented operating point for `conv_armA_holdB3` is **0.55** (`MODELS.md:115`),
+          not the 0.45 inherited from the frozen pipeline. At 0.60 the sweep gives recall
+          35.3% / precision 13% — still worse than 0.30 on both axes for this classifier.
 RULE: **re-tune CONV_THRESHOLD after every Stage-2 retrain; never inherit it.** It is free
           to sweep post-hoc, so detection runs can use any value and be re-scored later.
 this settles the reporting scope, on evidence rather than preference:
