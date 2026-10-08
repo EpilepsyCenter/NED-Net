@@ -16,6 +16,19 @@ The primary analysis runs on **good channels**; the precision cost on poor chann
 secondary finding, reported because "recording quality matters" is worth backing with
 numbers rather than asserting.
 
+## Inclusion criteria
+
+**A seizure is defined as an event lasting at least 5 seconds.** This is a stated
+inclusion criterion for the analysis, not a detector limitation: it is how this lab defines
+a seizure when analysing a cohort, it is configured as `min_duration` in the detector, and
+it applies identically to the ground truth, the automated detections and the manual review.
+Shorter rhythmic discharges are not counted as seizures under this definition; NED-Net has a
+separate spike detector for that class.
+
+Consistency check: **0 of the 222 retained convulsive ground-truth events fall below 5 s**
+(minimum 5.4 s, median 28.9 s), so the criterion excludes nothing from the convulsive
+reference and the recall figures are unaffected by it.
+
 ## The data
 
 4 batches x 8 animals x ~21 days, 90-minute EDFs tiling the protocol continuously:
