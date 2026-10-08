@@ -565,6 +565,63 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-08 — A3 on held-out Batch 3, validated operating point — job 3825993
+script:   `scripts/lunarc/detect_ramgdnf_unet.sbatch` @ `466c4d3`
+config:   `MODEL=ramgdnf_armA3_holdB3`, `CONV_MODEL=conv_armA_holdB3`,
+          **THRESHOLD=0.9 / BOUNDARY=0.5** (selected on held-in B1+B2, see the sweep entry),
+          `CONV_THRESHOLD=0.3`, `PATH_INCLUDE=Batch_3_Recordings`
+outputs:  `~/.eeg_seizure_analyzer/projects/armA3_on_B3_t0.9_b0.5.db`
+purpose:  **the out-of-sample number.** Batch 3 was held out of A3's training. Frozen
+          managed **5.2%** convulsive recall there. In-sample A3 reaches 47.1% recall /
+          73% coverage at a tuned Stage 2, so B3 gives the gap between "annotate this
+          cohort" and "transfer to the next batch" — the quantity the paper's thesis rests on.
+note:     `CONV_THRESHOLD` does not bind — `convulsive_confidence` is stored per event, so
+          any Stage-2 threshold can be re-scored post-hoc with `conv_threshold_sweep.py`.
+          Only `THRESHOLD` and `BOUNDARY_THRESHOLD` are fixed at detection time.
+result:   _pending_
+
+### 2026-10-08 — PLAN: retrain Stage 2 with Mir's rejections as negatives
+the finding that motivates it:
+          `build_merged_sidecars.py:76` already records the asymmetry and we never acted on
+          it — Mir's `False` rows are **"Valid as convulsive-CLASSIFIER negatives,
+          contaminated as DETECTION negatives."** They are video-adjudicated "not a
+          convulsive/behavioural seizure" labels: wrong for the detector, *exactly right*
+          for Stage 2. **11,415 of them, in the deployment domain.**
+          Note the symmetry with the Stage-1 work: the rows just excluded from the
+          detector's negatives via `--hard-neg-exclude-method mir_candidate` are the rows
+          Stage 2 should train on. Same data, opposite role, because the stages answer
+          different questions.
+what it fixes:
+          1. **train/inference mismatch** — `build_convulsive_window_specs` emits one window
+             per *confirmed* seizure and ignores rejected rows, so Stage 2 has never seen a
+             non-seizure, yet it is applied to every detection (mostly false positives).
+          2. **domain gap** — its only negatives today are SV2A non-convulsive seizures.
+          3. **label quality** — the convulsive question can only be answered on video, and
+             these were.
+          Together these explain why precision is flat at 11% for A3 at every Stage-2
+          threshold: no threshold can separate classes the classifier was never shown.
+design decisions (TO CONFIRM):
+          * **Stage 2's question changes** from "given a seizure, is it convulsive?" to
+            "is this detection a convulsive seizure at all?", since the negative class would
+            then hold noise as well as non-convulsive seizures. That is what deployment asks
+            and what would restore the precision contribution. Stage 2 would still only
+            label, never filter — but the label becomes usable as a filter, which
+            `MODELS.md`'s "READ THIS FIRST" section will need updating to reflect.
+          * **negative cap**: positives ~783 convulsive after the 100 s cap (430 SV2A +
+            353 Mir). Available negatives 768 non-convulsive confirmed + ~11,415 Mir
+            rejections + ~1,382 SV2A rejections = ~13,565, i.e. 1:17. `pos_weight`
+            auto-compensates (`train_convulsive.py:204`) but recommend capping at ~5:1 —
+            keep every non-convulsive *seizure* and sample rejections to fill — so the
+            convulsive-vs-non-convulsive-seizure boundary is not swamped by easy noise.
+implementation:
+          `build_convulsive_window_specs` gains a rejected-negative option (with a
+          `detection_method` filter and a ratio cap), plumbed through `train_convulsive.py`
+          and `scripts/lunarc/train_convulsive.sh`. `max_positive_sec` already applies there.
+validation:
+          hold out Batch 3 again so the Stage-2 result is comparable with A3's, and ensure
+          the val split contains both RAM_GDNF convulsive events and RAM_GDNF rejections —
+          otherwise the metric cannot see the thing being fixed.
+
 ### 2026-10-08 — Stage-2 threshold was mis-set after retraining (no compute needed)
 script:   `scripts/local/conv_threshold_sweep.py` (new)
 method:   `events.convulsive_confidence` is stored per event and Stage 2 only **labels**,
