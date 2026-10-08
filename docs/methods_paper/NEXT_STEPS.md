@@ -10,7 +10,7 @@ in `RUN_LOG.md`; commands in `LUNARC_CHEATSHEET.md`; models in `MODELS.md`. The
 |---|---|---|---|
 | **3825989** | `ramgdnf_all_prod` — U-Net on ALL retained batches, no hold-out | gpua100 | `grep -E "Best event_f1|background sampling" logs/unet_train_3825989.out` |
 | **3825993** | A3 on **held-out Batch 3** at thr 0.9 / bnd 0.5 | lu48 | `operating_point_table.py --batches 3` |
-| **(submitted)** | `conv_rejneg_holdB3` — Stage 2 **with rejected negatives** | gpua100 | `grep "convulsive negatives" logs/conv_train_*.out` |
+| **3825994** | `conv_rejneg_holdB3` — Stage 2 **with rejected negatives** | gpua100 | `grep "convulsive negatives" logs/conv_train_3825994.out` |
 
 ## The story, as it now stands
 

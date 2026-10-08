@@ -565,6 +565,33 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-08 — Stage 2 retrained WITH rejected negatives — job 3825994
+script:   `scripts/lunarc/train_convulsive.sh` @ `d04001a`
+config:   `EDF_DIR=~/train_nomirneg`, `MODEL_NAME=conv_rejneg_holdB3`,
+          **`CONV_NEG_FROM_REJECTED=1`**, `CONV_NEG_POS_RATIO=5`, `CONV_NEG_METHODS=`
+          (blank = every rejected event), `MAX_POSITIVE_SEC=100`;
+          exclude 355676 + Batch 3 (459657-459664) so it is comparable with A3
+why:      Stage 2 was trained on *confirmed seizures only* yet is deployed on every
+          detection, most of which are false positives — so it had never seen a
+          non-seizure. For the frozen classifier that failed safely (RAM_GDNF noise was
+          unfamiliar, scored low, precision 33% -> 61%); after retraining on 368 of Mir's
+          RAM_GDNF convulsive seizures the same noise resembles them and **precision is
+          flat at 11% at every threshold**. Negatives fix that; tuning cannot.
+          Source: Mir's rejected rows — video-adjudicated "not a convulsive/behavioural
+          seizure", **contaminated as DETECTION negatives and exactly right here**
+          (`build_merged_sidecars.py:76`, written a week earlier and not acted on).
+expected dataset (verify in the log):
+          `convulsive negatives: ~700 convulsive positives, ~740 non-convulsive seizures,
+          ~2800 rejected events kept (cap 5.0:1)`. **0 rejected = the flag did not take;
+          ~12,800 = the cap did not.**
+THE TEST, and it is a clean one:
+          re-detect B1+B2 with `CONV_MODEL=conv_rejneg_holdB3` (cheap, lu48) then run
+          `conv_threshold_sweep.py`. The symptom was precision **flat at 11%** across
+          0.10-0.45. The fix is a curve that **rises**. If it is still flat, the missing
+          negatives were not the cause and the Stage-2 line should be written up as a
+          limitation rather than pursued.
+result:   _pending_
+
 ### 2026-10-08 — A3 on held-out Batch 3, validated operating point — job 3825993
 script:   `scripts/lunarc/detect_ramgdnf_unet.sbatch` @ `466c4d3`
 config:   `MODEL=ramgdnf_armA3_holdB3`, `CONV_MODEL=conv_armA_holdB3`,
