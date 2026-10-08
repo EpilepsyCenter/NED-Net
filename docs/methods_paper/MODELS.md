@@ -46,10 +46,21 @@ to Stage 2.
 
 ## Stage 1 — U-Net
 
-**Read the metrics correctly:** the checkpoint is selected on **`val_f1` first**, with
-`val_loss` only as a tiebreak (`ml/train.py:655`). So the log line "Best val loss" is the
-val loss **at the best-f1 epoch**, not the minimum val loss across epochs. Compare arms on
-`event_f1`; a lower val_loss at some other epoch is not the saved model.
+**Read the metrics correctly — this has caused three errors already.** `ml/train.py:654`
+selects the checkpoint on **`best_event_f1`**: the event f1 at the *optimal* threshold found
+by `_best_threshold_metrics`, with `val_loss` only as a tiebreak. Three different numbers
+appear in the logs and they are not interchangeable:
+
+| in the log | what it is | is it the criterion? |
+|---|---|---|
+| per-epoch `event_f1:` | f1 at the **default** threshold | **no** |
+| `Best val loss:` | val loss **at the selected epoch**, not the minimum | no |
+| `Best event_f1:` | `event_f1` at the selected epoch, default threshold | no |
+| `best_metrics['best_event_f1']` | f1 at the **optimal** threshold | **YES** |
+
+Worked example: arm A3's saved checkpoint is **epoch 3** (per-epoch `event_f1` 0.262) and
+not epoch 7 (0.410), because epoch 3's `best_event_f1` was 0.4847 and higher. The code is
+right; the log is just easy to misread.
 
 | model | trained on | positives | negatives | val_loss @ best-f1 | **event_f1** |
 |---|---|---|---|---|---|
@@ -112,20 +123,32 @@ this, and could easily mistake it for high sensitivity if they looked only at re
 
 ## Ranking on the selection criterion
 
-| arm | negatives | **event_f1** |
-|---|---|---|
-| **A2** | random background only | **0.532** |
-| A3 | SV2A hard + background | 0.410 |
-| A | includes Mir's `False` rows | 0.329 |
-| B | RAM_GDNF only, 184 positives | 0.012 |
+| arm | negatives | `event_f1` @ default | **`best_event_f1`** (the criterion) |
+|---|---|---|---|
+| A | includes Mir's `False` rows | 0.329 | **0.512** |
+| A3 | SV2A hard + background | 0.262 | **0.485** |
+| A2 | random background only | 0.532 | **unknown** — timed out, no summary written |
+| B | RAM_GDNF only, 184 positives | 0.012 | 0.127 |
 
-Both arms that exclude Mir's rejections beat arm A, A2 by 62%. That is the contamination
-result, and it is robust to which of the two clean recipes is used.
+### The contamination claim is NOT supported on this metric
 
-**A correction on record:** an earlier version of this table compared arms on "best val
-loss", mixing per-epoch minima for A2/A3 with the summary value for arm A. Since the
-checkpoint is chosen on f1, that comparison was both inconsistent and measuring the wrong
-thing. The conclusion was unchanged.
+Arm A (0.512) and arm A3 (0.485) are **essentially tied, marginally favouring the
+contaminated arm**. Two earlier versions of this document claimed that removing Mir's
+`False` rows improved performance; both compared A2's *default-threshold* f1 (0.532) against
+arm A's *default-threshold* f1 (0.329). That comparison is internally consistent but is on a
+metric neither model was selected for, and A2's value on the actual criterion was never
+written because the job timed out. **Claim withdrawn pending a comparable number for A2.**
+
+What remains true independently of this: Mir's `False` rows **do** contain real
+non-convulsive activity (visually confirmed, including a 180 s block of clear bursting), so
+they are mislabelled as seizure-detection negatives whatever the training effect turns out
+to be. The data defect is established; the performance consequence is not.
+
+### Getting a comparable number for A2
+Its checkpoint loads and works, but `best_event_f1` is only computed during training. Either
+rerun A2 (~17 h at `--neg-source random` speeds, or faster with the symlink-tree recipe), or
+accept that A2 can be compared on held-out Batch-3 detection performance but not on the
+training criterion.
 
 ## Comparisons the paper needs
 
