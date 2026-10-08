@@ -14,6 +14,7 @@ tracked. Separate from the SV2A biology manuscript, whose record lives in
 
 | File | What it is |
 |---|---|
+| `LUNARC_CHEATSHEET.md` | **Commands: conda env, srun vs sbatch, paths, queue, the training loop.** |
 | `PAPER_OUTLINE.md` | **The paper: framing, results, discussion, and what is still missing.** |
 | `NEXT_STEPS.md` | **Current state and what to do next. Start here.** |
 | `PHASE1_RESULTS.md` | **Phase-1 results.** Supersedes the 2026-10-02 version, now in `archive/`. |
