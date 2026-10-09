@@ -88,6 +88,13 @@ def _set_analysis_store(state, data: dict):
     state.extra["store_analysis"] = data
 
 
+def _effective_output(output, det_type) -> str:
+    """Output target for a run: spikes always go to the DB."""
+    if det_type == "spike" or output not in analysis.OUTPUT_TARGETS:
+        return "db"
+    return output
+
+
 def _parse_boundary(val, threshold: float):
     """U-Net hysteresis boundary threshold: float below ``threshold``, else None.
 
@@ -123,6 +130,7 @@ def layout(sid: str | None) -> html.Div:
     prev_hpd_freq = store.get("hpd_min_freq_hz", 15.0)
     prev_hpd_hfi = store.get("hpd_min_hf_index", 0.3)
     prev_mode = store.get("mode", "single")
+    prev_output = store.get("output", "db")
 
     # Pre-populated file path (from currently loaded recording)
     loaded_path = ""
@@ -300,10 +308,36 @@ def layout(sid: str | None) -> html.Div:
                 ], width=4),
             ], className="g-3 mb-3"),
 
+            # ── Where detections are written ──────────────────────
+            html.Label("Save detections to",
+                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
+                              "marginBottom": "4px"}),
+            dbc.RadioItems(
+                id="an-output",
+                options=[
+                    {"label": " Project database", "value": "db"},
+                    {"label": " Annotation sidecars (for review → training)",
+                     "value": "sidecar"},
+                    {"label": " Both", "value": "both"},
+                ],
+                value=prev_output,
+                inline=True,
+                style={"fontSize": "0.85rem"},
+            ),
+            html.Div(
+                "Database: feeds Results and statistics. Sidecars: events are "
+                "merged into each EDF's _ned_annotations.json as pending — "
+                "confirm/reject them in the Annotation tab and they become "
+                "training data. Existing human labels are never changed. "
+                "Seizure detection only (spikes always go to the database).",
+                style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                       "margin": "2px 0 10px"},
+            ),
+
             dbc.Checklist(
                 id="an-overwrite",
                 options=[{
-                    "label": " Re-analyze files already in the database "
+                    "label": " Re-analyze files already processed "
                              "(overwrite previous results for this detector)",
                     "value": "overwrite",
                 }],
@@ -790,6 +824,21 @@ def update_conv_model_list(det_type):
     return _convulsive_model_options(), False
 
 
+@callback(
+    Output("an-output", "options"),
+    Input("an-detection-type", "value"),
+)
+def update_output_options(det_type):
+    """Sidecar output exists for seizure detection only."""
+    spike = det_type == "spike"
+    return [
+        {"label": " Project database", "value": "db"},
+        {"label": " Annotation sidecars (for review → training)",
+         "value": "sidecar", "disabled": spike},
+        {"label": " Both", "value": "both", "disabled": spike},
+    ]
+
+
 # ── Model info card ────────────────────────────────────────────────────
 
 
@@ -971,16 +1020,18 @@ def download_live_template(n_clicks):
 @callback(
     Output("an-single-warning", "children"),
     Input("an-single-path", "value"),
+    Input("an-output", "value"),
+    State("an-detection-type", "value"),
     prevent_initial_call=True,
 )
-def check_single_processed(path):
+def check_single_processed(path, output, det_type):
     if not path:
         return html.Div()
     try:
-        processed = db.get_processed_paths()
-        if str(path) in processed:
+        if analysis.is_processed(path, _effective_output(output, det_type)):
             return alert(
-                "This file has already been analysed. Run again to overwrite.",
+                "This file has already been analysed. Tick 'Re-analyze' to "
+                "run it again.",
                 "warning",
             )
     except Exception:
@@ -1010,12 +1061,13 @@ def check_single_processed(path):
     State("an-hpd-hfi", "value"),
     State("an-detection-type", "value"),
     State("an-overwrite", "value"),
+    State("an-output", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
                conv_threshold, bnd_threshold, min_dur, merge_gap, hvsw_freq,
-               hvsw_swi, hpd_freq, hpd_hfi, det_type, overwrite_val, sid):
+               hvsw_swi, hpd_freq, hpd_hfi, det_type, overwrite_val, output, sid):
     if not n_clicks:
         return no_update, no_update, no_update
 
@@ -1030,6 +1082,7 @@ def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
     conv_model_name = conv_model_name or None
     overwrite = bool(overwrite_val and "overwrite" in overwrite_val)
     is_spike = det_type == "spike"
+    output = _effective_output(output, det_type)
 
     cls_params = ClassificationParams(
         hvsw_max_freq_hz=float(hvsw_freq or 4.0),
@@ -1050,6 +1103,7 @@ def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
         "convulsive_threshold": conv_threshold,
         "boundary_threshold": bnd_threshold,
         "single_file_path": edf_path,
+        "output": output,
         "min_duration_sec": min_dur,
         "merge_gap_sec": merge_gap,
         "hvsw_max_freq_hz": hvsw_freq,
@@ -1100,13 +1154,14 @@ def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
                     progress_callback=_prog,
                     overwrite=overwrite,
                     convulsive_model_name=conv_model_name,
+                    output=output,
                 )
             if res and res.get("skipped"):
                 analysis._update_status(
                     running=False, processed_files=0,
-                    last_error="This file is already in the database. "
-                               "Tick 'Re-analyze files already in the database' "
-                               "to overwrite.",
+                    last_error="This file has already been analysed. "
+                               "Tick 'Re-analyze files already processed' "
+                               "to run it again.",
                 )
             else:
                 analysis._update_status(running=False, processed_files=1)
@@ -1139,13 +1194,16 @@ def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
     Input("an-batch-scan", "n_clicks"),
     State("an-batch-folder", "value"),
     State("an-batch-sub", "value"),
+    State("an-output", "value"),
+    State("an-detection-type", "value"),
     prevent_initial_call=True,
 )
-def scan_batch_folder(n, folder, include_sub):
+def scan_batch_folder(n, folder, include_sub, output, det_type):
     if not folder or not os.path.isdir(folder):
         return alert("Select a valid folder.", "warning")
 
-    scan = analysis.scan_folder(folder, include_sub)
+    scan = analysis.scan_folder(folder, include_sub,
+                                output=_effective_output(output, det_type))
     return html.Div([
         html.Span(f"Found: {scan['total']} EDF files", style={"fontWeight": "600"}),
         html.Br(),
@@ -1182,12 +1240,14 @@ def scan_batch_folder(n, folder, include_sub):
     State("an-detection-type", "value"),
     State("an-batch-meta-path", "value"),
     State("an-overwrite", "value"),
+    State("an-output", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
               conv_threshold, bnd_threshold, min_dur, merge_gap, hvsw_freq,
-              hvsw_swi, hpd_freq, hpd_hfi, det_type, meta_path, overwrite_val, sid):
+              hvsw_swi, hpd_freq, hpd_hfi, det_type, meta_path, overwrite_val,
+              output, sid):
     if not n:
         return no_update, no_update, no_update, no_update, no_update
     if not model_name:
@@ -1200,6 +1260,7 @@ def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
     bnd = _parse_boundary(bnd_threshold, threshold)
     conv_model_name = conv_model_name or None
     is_spike = det_type == "spike"
+    output = _effective_output(output, det_type)
 
     cls_params = ClassificationParams(
         hvsw_max_freq_hz=float(hvsw_freq or 4.0),
@@ -1228,6 +1289,7 @@ def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
         "batch_folder": folder,
         "batch_include_sub": include_sub,
         "batch_metadata_path": meta_path or "",
+        "output": output,
     })
     _set_analysis_store(state, store)
 
@@ -1245,6 +1307,7 @@ def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
         batch_kwargs["classification_params"] = cls_params
         batch_kwargs["convulsive_model_name"] = conv_model_name
         batch_kwargs["boundary_threshold"] = bnd
+        batch_kwargs["output"] = output
     if meta_path and os.path.isfile(meta_path):
         batch_kwargs["metadata_path"] = meta_path
 
@@ -1317,12 +1380,14 @@ def cancel_batch(n):
     State("an-hpd-hfi", "value"),
     State("an-detection-type", "value"),
     State("an-live-template", "value"),
+    State("an-output", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
                threshold, conv_threshold, bnd_threshold, min_dur, merge_gap,
-               hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi, det_type, template_path, sid):
+               hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi, det_type, template_path,
+               output, sid):
     if not n:
         return no_update, no_update, no_update
     if not model_name or not folder:
@@ -1332,6 +1397,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
     conv_threshold = float(conv_threshold or 0.5)
     bnd = _parse_boundary(bnd_threshold, threshold)
     conv_model_name = conv_model_name or None
+    output = _effective_output(output, det_type)
     cls_params = ClassificationParams(
         hvsw_max_freq_hz=float(hvsw_freq or 4.0),
         hvsw_min_slow_wave_index=float(hvsw_swi or 0.5),
@@ -1359,6 +1425,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
         "live_wait_sec": wait_sec or 30,
         "live_process_backlog": bool(backlog),
         "live_template_path": template_path or "",
+        "output": output,
     })
     _set_analysis_store(state, store)
 
@@ -1387,6 +1454,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
         classification_params=cls_params,
         live_template=live_template,
         convulsive_model_name=conv_model_name,
+        output=output,
     )
 
     hide = {"display": "none"}
