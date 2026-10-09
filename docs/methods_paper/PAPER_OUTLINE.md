@@ -133,7 +133,7 @@ error and no warning.
 ### R5 — Annotating the cohort and retraining recovers most of the loss
 Retained B1+B2, convulsive reference (n=68), frozen and retrained scored through the
 identical code path so the comparison is paired. Stage 2 tuned per model, which is itself a
-finding (R7).
+finding (R8.3).
 
 | | convulsive recall | fires on | median IoU | median event |
 |---|---|---|---|---|
@@ -168,7 +168,7 @@ scores 7.3x better on B1+B2 than on B3.
 **_pending_** — the `temporal` split result (jobs 3831662/3831663), which is the primary
 design: hold out each animal's **later recordings**, every animal represented. That matches
 the real workflow — annotate as the experiment starts, let the model handle the rest — and
-replaces the figures above as R4's headline when it lands.
+replaces the figures above as R5's headline when it lands.
 
 ### R6 — What the available references can and cannot measure
 Three references exist and they measure different things. Being explicit about this is
@@ -204,7 +204,7 @@ detections at the tuned operating point and catches 0 of 10 reference seizures.
 **The floor is in the high hundreds of annotated seizures. A single cohort can clear it** —
 SV2A did. RAM_GDNF's annotated subset did not, because its seizure frequency was lower, so
 the same annotation effort yielded fewer events. The requirement is a count of seizures, not
-a count of cohorts. Because the unit of variability is the animal (R3), the useful form of
+a count of cohorts. Because the unit of variability is the animal (R4), the useful form of
 this question is **how many animals must be annotated**, not how many batches.
 
 ### R8 — Five pitfalls anyone repeating this will hit
@@ -270,9 +270,19 @@ zero detections over hours is a flag anyone can compute. A channel that fires st
 is never right is not, and is the dangerous case: it produces plausible output volume while
 contributing nothing.
 
+**Live detection changes WHEN the loop can run, which is the point of the software.**
+These measurements were made retrospectively, on 1,377 recordings already acquired — and
+retrospectively there is nothing to be done about the finding that a third of implants
+returned nothing. Live mode moves the loop inside the experiment: detect as files land,
+review the first days, retrain on those animals, deploy a cohort-calibrated model for the
+rest of the protocol. The per-animal result (R4) is what makes this more than a convenience
+— the thing a researcher most needs to know early is *which of my implants is this model
+useless on*, and live mode can answer it from the first days because it attributes events
+per channel from the first file.
+
 **The pipeline is not specific to seizures.** It learns whatever humans mark as `confirmed`
 or `rejected`; the same machinery already runs an interictal-spike detector. The pitfalls in
-R7 therefore apply to anyone training an event detector on annotated electrophysiology.
+R8 therefore apply to anyone training an event detector on annotated electrophysiology.
 
 **Validation methodology determines the conclusion.** The same detector on the same data
 read as 0.12% precision (pooled, unthresholded), 100% (files chosen for high confidence),
@@ -286,7 +296,7 @@ pre-registered sampling in detector validation, and it belongs in the paper.
 
 ## Limitations
 
-* **Precision of the retrained model is unmeasured** (R5). This is the largest gap.
+* **Precision of the retrained model is unmeasured** (R6). This is the largest gap.
 * Recall beyond 48 animal-hours in one batch is not exhaustively measured. The 92%
   where-it-fires precision rests on 13 adjudicated detections (95% CI 64-100%).
 * The convulsive reference is automated-candidate-derived with video adjudication, and
@@ -318,11 +328,25 @@ pre-registered sampling in detector validation, and it belongs in the paper.
 ## What is needed to finish
 
 1. **The temporal pair** — jobs 3831662 (`ramgdnf_temporal`) + 3831663 (`conv_temporal`),
-   then detection over B1-B3 and its own operating-point sweep. This becomes R4's headline.
-2. **R5: precision of the retrained model** — pre-registered stratified review sample.
+   then detection over B1-B3 and its own operating-point sweep. This becomes R5's headline.
+2. **R6: precision of the retrained model** — pre-registered stratified review sample.
    The single most valuable remaining measurement.
 3. **Does the stage-2 fix work?** Re-detect with `conv_temporal` and sweep. Flat 11% means
-   stage 2 is written up as a limitation (R7.3); rising means the cascade gains a usable
+   stage 2 is written up as a limitation (R8.3); rising means the cascade gains a usable
    precision filter.
-4. Optionally **more exhaustive review** — the only method that gave a stable answer.
+4. **R7's table needs re-deriving.** Its arm figures (f1 0.012 / 0.532) come from models
+   trained on the stale label tree (R8.5), so they understate the pipeline. Recompute from
+   the temporal pair.
+5. **A figure for R1.** A software paper has to *show* the UI and the loop, not only
+   describe it: annotation view, review queue, live-monitoring panel, and a loop diagram
+   (rule-based bootstrap -> annotate -> train -> detect -> review -> retrain).
+6. Optionally **more exhaustive review** — the only method that gave a stable answer.
    Twelve recordings instead of four would turn wide intervals into estimates.
+
+## Author-facing note on framing
+
+Keep the detector numbers subordinate. Every table in R3-R9 answers "is the refinement loop
+necessary, and does it work?" — not "how good is this detector?". Read as a detection
+benchmark, R3 and R4 look like a negative result; read as a software paper they are the
+justification for the design. The ordering — software first, evidence second — is deliberate
+and should survive revision.
