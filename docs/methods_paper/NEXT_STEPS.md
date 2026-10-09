@@ -77,6 +77,35 @@ Earlier jobs today: 3831663 `conv_temporal` done (F1 0.604 @ 0.75); 3831584 canc
 6. Every old-recipe number in DRAFT/PAPER_OUTLINE (A3 47.1% / 73%, out-of-sample B3, and
    the arm ranking) is replaced by its _pr counterpart, or explicitly labelled old-recipe.
 
+### Monday: try the validation speed-up (NOT before all six _pr jobs have STARTED)
+
+**Do not `git pull` on LUNARC until 3832977-82 are all running.** Pending jobs run whatever
+code is in `~/NED-Net` when they start.
+
+**Finding (2026-10-09):** epoch time is almost all validation. Least squares over the eight
+A100 runs fits **~0.175 s per validation window, ~0 per training window**, within ~2% for
+every run. The same rate predicts the Mac production run exactly (1,561 val windows ->
+273 s). That is why the A100 is no faster than the Mac, why bf16 bought nothing, and why
+47%-val arms were slow.
+
+**Cause:** `_segments()` in `eeg_seizure_analyzer/ml/train.py` (inside `_compute_metrics`)
+walks every sample in a Python loop. Each val window is 15,000 samples, and the function
+runs twice per window per metric pass: once at 0.5, plus 19 thresholds in
+`_best_threshold_metrics`, for each of the two channels.
+
+**Plan:**
+1. Rewrite `_segments` with NumPy (`np.diff` on the padded binary mask for starts/ends,
+   then the same merge-gap rule). Keep the matching logic unchanged.
+2. **Equivalence test before use.** On saved val predictions (dump `all_preds`/`all_targets`
+   from one epoch, or run a `_pr` model over its val set), assert that old and new
+   `_compute_metrics` / `_best_threshold_metrics` return **identical** dicts at every
+   threshold. Exact equality, not approximate: `best_event_f1` picks the saved
+   checkpoint, so any difference changes which model is kept.
+3. Time one epoch before/after. Expect validation to drop from minutes to seconds and the
+   epoch to reach the GPU's real training time.
+4. Only then use it, for the LOCO folds and later retraining rounds. Record the commit in
+   RUN_LOG so that runs before and after it stay distinguishable.
+
 ### Facts about training that are easy to re-discover the hard way
 
 * **`best_model.pt` is written during training**, every time validation improves
