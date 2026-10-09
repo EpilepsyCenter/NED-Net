@@ -407,6 +407,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model-name", default="conv_v1")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop entirely, e.g. --exclude-animals 355676")
+    p.add_argument("--val-mode", choices=["animal", "recording", "temporal"],
+                   default="animal",
+                   help="how the train/val split is drawn; must MATCH the Stage-1 run or "
+                        "the cascade's validation is incoherent. 'animal' holds out whole "
+                        "animals (TRANSFER). 'recording'/'temporal' keep every animal on "
+                        "both sides (DEPLOYMENT: having annotated some of this animal's "
+                        "convulsive seizures, can it classify the rest?); 'temporal' holds "
+                        "out each animal's latest recordings.")
     p.add_argument("--conv-neg-from-rejected", action="store_true",
                    help="emit `rejected` events as NON-convulsive windows. Stage 2 is "
                         "trained on confirmed seizures but deployed on every detection, "
@@ -452,7 +460,11 @@ def main(argv: list[str] | None = None) -> int:
         conv_neg_methods=tuple(args.conv_neg_method),
         conv_neg_pos_ratio=args.conv_neg_pos_ratio,
         max_positive_sec=args.max_positive_sec,
+        val_mode=args.val_mode,
     )
+    if args.val_mode != "animal":
+        print(f"Split mode: {args.val_mode} — every animal in BOTH train and val. "
+              f"Measures deployment, NOT generalisation to a new animal.")
     if args.conv_neg_from_rejected:
         print(f"Stage-2 negatives from rejected events "
               f"(methods={list(args.conv_neg_method) or 'all'}, "

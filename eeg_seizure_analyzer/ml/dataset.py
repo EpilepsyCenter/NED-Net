@@ -766,6 +766,7 @@ def split_by_recording(
     val_fraction: float = 0.2,
     seed: int = 42,
     temporal: bool = True,
+    balance_on: str = "is_positive",
 ) -> tuple[list[WindowSpec], list[WindowSpec]]:
     """Split by whole RECORDING, keeping every animal on both sides.
 
@@ -788,6 +789,12 @@ def split_by_recording(
     animal's **positive** windows is reached, so each animal contributes positives
     to both sides where it can. An animal with a single recording cannot be split
     and stays in train.
+
+    ``balance_on`` names the spec attribute that defines "positive" for balancing.
+    The detector path uses ``is_positive``; the convulsive path must pass
+    ``center_convulsive``, because there *every* window is ``is_positive=True`` and
+    the label of interest is the convulsive flag — balancing on ``is_positive``
+    there would silently balance on total window count instead.
     """
     rng = random.Random(seed)
     by_animal: dict[str, dict[str, list[WindowSpec]]] = {}
@@ -812,7 +819,7 @@ def split_by_recording(
             rng.shuffle(paths)
 
         def _npos(p: str) -> int:
-            return sum(1 for s in recs[p] if s.is_positive)
+            return sum(1 for s in recs[p] if getattr(s, balance_on, False))
 
         total_pos = sum(_npos(p) for p in paths)
         taken = 0
@@ -1255,9 +1262,17 @@ def build_convulsive_datasets(
                          "Check that the dataset has confirmed seizure "
                          "annotations.")
 
-    train_specs, val_specs = split_by_animal(
-        specs, seed=config.seed, stable_convulsive_val=True
-    )
+    if config.val_mode in ("recording", "temporal"):
+        # balance_on='center_convulsive': in this path every window is is_positive,
+        # so the convulsive flag is what the val share must be measured against.
+        train_specs, val_specs = split_by_recording(
+            specs, seed=config.seed,
+            temporal=config.val_mode == "temporal",
+            balance_on="center_convulsive")
+    else:
+        train_specs, val_specs = split_by_animal(
+            specs, seed=config.seed, stable_convulsive_val=True
+        )
 
     train_ds = ConvulsiveDataset(train_specs, config, augment=config.augment)
     val_ds = ConvulsiveDataset(val_specs, config, augment=False)
