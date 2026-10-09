@@ -23,13 +23,16 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import sys
+from pathlib import Path
 
 from eeg_seizure_analyzer.io.dataset_store import scan_annotation_files
 from eeg_seizure_analyzer.ml.dataset import (
     DatasetConfig,
     build_window_specs,
     split_by_animal,
+    split_by_recording,
 )
 from eeg_seizure_analyzer.ml.train import TrainConfig, train_model
 
@@ -43,7 +46,9 @@ def _build_dataset_def(data_dir: str, name: str) -> dict:
 def analyze(dataset_def: dict, exclude_animals: tuple = (),
             stable_val_split: bool = False, max_positive_sec: float = 0.0,
             bg_avoid_rejected: bool = False,
-            hard_neg_exclude_methods: tuple = ()) -> dict:
+            hard_neg_exclude_methods: tuple = (),
+            val_mode: str = "animal",
+            dump_val_split: str | None = None) -> dict:
     """Report class balance + the per-animal train/val split, and recommend a
     neg/pos ratio and pos_weight.  Returns the recommendation dict.
 
@@ -67,7 +72,8 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
                         exclude_animals=tuple(exclude_animals),
                         max_positive_sec=max_positive_sec,
                         bg_avoid_rejected=bg_avoid_rejected,
-                        hard_neg_exclude_methods=tuple(hard_neg_exclude_methods))
+                        hard_neg_exclude_methods=tuple(hard_neg_exclude_methods),
+                        val_mode=val_mode)
     specs = build_window_specs(dataset_def, cfg)
     pos = [s for s in specs if s.is_positive]
     neg = [s for s in specs if not s.is_positive]
@@ -88,13 +94,45 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
 
     # Simulate the split the real run will use -- including the stable-stratum
     # option, or --analyze reports a split training will not produce.
-    train_specs, val_specs = split_by_animal(
-        specs, val_fraction=0.2, seed=42,
-        stable_convulsive_val=stable_val_split)
+    if val_mode in ("recording", "temporal"):
+        train_specs, val_specs = split_by_recording(
+            specs, val_fraction=0.2, seed=42, temporal=val_mode == "temporal")
+    else:
+        train_specs, val_specs = split_by_animal(
+            specs, val_fraction=0.2, seed=42,
+            stable_convulsive_val=stable_val_split)
+    # Record the held-out side so detection can be scored on it alone. The split is
+    # deterministic in (specs, seed, val_fraction, val_mode), so re-running --analyze
+    # with the same flags reproduces exactly what training used.
+    if dump_val_split:
+        val_keys = sorted({(s.animal_id, s.edf_path) for s in val_specs})
+        trn_keys = {(s.animal_id, s.edf_path) for s in train_specs}
+        payload = {
+            "val_mode": val_mode,
+            "seed": 42,
+            "val_fraction": 0.2,
+            "exclude_animals": list(exclude_animals),
+            "max_positive_sec": max_positive_sec,
+            "n_val_positives": sum(s.is_positive for s in val_specs),
+            # (animal, recording) pairs: the unit the split guarantees is unbroken
+            "val_pairs": [{"animal_id": a, "edf": p} for a, p in val_keys],
+            "overlap_with_train": sorted(
+                f"{a}|{p}" for a, p in set(val_keys) & trn_keys),
+        }
+        Path(dump_val_split).write_text(json.dumps(payload, indent=2))
+        print(f"\nWrote held-out split to {dump_val_split}: "
+              f"{len(val_keys)} (animal, recording) pairs, "
+              f"{payload['n_val_positives']} positives, "
+              f"{len(payload['overlap_with_train'])} overlaps with train (must be 0)")
+
     tp = sum(s.is_positive for s in train_specs)
     vp = sum(s.is_positive for s in val_specs)
-    print(f"\nSplit (val_fraction=0.2, by animal, "
-          f"stable_convulsive_val={stable_val_split}):")
+    if val_mode in ("recording", "temporal"):
+        print(f"\nSplit (val_fraction=0.2, by {val_mode} — every animal in BOTH sides; "
+              f"measures DEPLOYMENT, not generalisation to a new animal):")
+    else:
+        print(f"\nSplit (val_fraction=0.2, by animal — whole animals held out; "
+              f"stable_convulsive_val={stable_val_split}):")
     print(f"  train: {len(train_specs):5} windows, {tp} positive")
     print(f"  val:   {len(val_specs):5} windows, {vp} positive")
     if vp == 0:
@@ -149,6 +187,24 @@ def main(argv: list[str] | None = None) -> int:
                         "animals first, keeping the dominant ones in train. Positives "
                         "are heavily concentrated, so a random draw can put half of "
                         "them in val. Use for any run compared against another.")
+    p.add_argument("--dump-val-split", metavar="PATH",
+                   help="with --analyze, write the held-out (animal, recording) pairs to "
+                        "PATH as JSON. The split is deterministic, so this reproduces "
+                        "exactly what a training run with the same flags used — needed to "
+                        "score detection on the held-out side only.")
+    p.add_argument("--val-mode", choices=["animal", "recording", "temporal"],
+                   default="animal",
+                   help="how the train/val split is drawn. 'animal' (default) holds out "
+                        "whole animals = the TRANSFER question. 'recording' holds out "
+                        "whole recordings with every animal on both sides = the DEPLOYMENT "
+                        "question, which is what a lab faces since every animal gets some "
+                        "annotation. 'temporal' is the same but holds out each animal's "
+                        "LATEST recordings, matching annotate-early-deploy-on-the-rest. "
+                        "Recording is the finest safe unit: splitting individual events "
+                        "leaks, because events in one 90-min file share electrode state, "
+                        "noise and often one seizure cluster. 'recording'/'temporal' "
+                        "numbers are optimistic vs a new animal and must not be quoted as "
+                        "generalisation, nor compared with 'animal'-split runs.")
     p.add_argument("--max-positive-sec", type=float, default=0.0,
                    help="drop confirmed events LONGER than this from the positive "
                         "windows (0 = no cap). Mir's long 'convulsive' rows are "
@@ -195,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.analyze:
         analyze(dataset_def, tuple(args.exclude_animals), args.stable_val_split,
                 args.max_positive_sec, args.bg_avoid_rejected,
-                tuple(args.hard_neg_exclude_method))
+                tuple(args.hard_neg_exclude_method), args.val_mode,
+                args.dump_val_split)
         return 0
 
     use_hard = args.neg_source == "hard"
@@ -226,7 +283,11 @@ def main(argv: list[str] | None = None) -> int:
         max_positive_sec=args.max_positive_sec,
         bg_avoid_rejected=args.bg_avoid_rejected,
         hard_neg_exclude_methods=tuple(args.hard_neg_exclude_method),
+        val_mode=args.val_mode,
     )
+    if args.val_mode != "animal":
+        print(f"Split mode: {args.val_mode} — every animal appears in BOTH train and val. "
+              f"This measures deployment, NOT generalisation to a new animal.")
     if args.hard_neg_exclude_method:
         print(f"Not using as hard negatives: rejected rows from "
               f"{list(args.hard_neg_exclude_method)}")
