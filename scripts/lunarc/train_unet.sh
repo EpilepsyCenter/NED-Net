@@ -25,15 +25,19 @@
 # ============================================================
 
 #SBATCH -p gpua100
-#SBATCH -t 24:00:00
-# 24 h, overridable with WALL_TIME (the self-submit passes -t, which beats this
-# directive). History: 02:00 was too short, then 06:00 was too short — job
-# 3825989 (`ramgdnf_all_prod`, 14,805 windows) ran **1,165 s/epoch** and was
-# killed by the time limit at epoch 18 of 50 with event_f1 still rising
-# (0.425 ep7 -> 0.428 ep13 -> 0.468 ep18). 50 epochs at that rate is ~16 h.
-# Epoch cost scales with the dataset, and the dataset keeps growing as reviews
-# are folded in, so set this from the window count rather than from habit:
-#   epochs x (train+val windows) / ~13 windows/s, then add 50%.
+#SBATCH -t 14:00:00
+# Size this from the window count, not from habit:
+#   epochs x (train+val windows) / ~13 windows/s, then add ~35% margin.
+# Overridable with WALL_TIME (the self-submit passes -t, which beats this directive).
+# History: 02:00 was too short; 06:00 was too short (job 3825989 at NEG_POS_RATIO=10,
+# 14,805 windows, ran 1,165 s/epoch and was killed at epoch 18 of 50 with event_f1
+# still rising); 24:00 was over-insurance. At NEG_POS_RATIO=6 the dataset is ~9,400
+# windows => ~740 s/epoch => ~10.3 h for 50 epochs, and patience normally stops sooner.
+# NOTE on queueing: a longer request does NOT lower SLURM priority here. `sprio` on
+# gpua100 (2026-10-09) showed QOS 60000 + FAIRSHARE 5534 dominating, with only AGE
+# differing between jobs, and cutting 24 h -> 14 h on two pending jobs moved neither
+# start estimate. The partition has 6 nodes; waiting is node contention, not wall clock.
+# Size honestly anyway — it costs nothing and avoids holding a node longer than needed.
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH -J unet_train
@@ -87,7 +91,7 @@
 #   some of this animal, does the model find its other seizures?) — the question a lab
 #   actually faces, since in practice every animal gets some annotation. Those numbers are
 #   optimistic relative to a new animal and are NOT comparable with `animal`-split runs.
-: "${WALL_TIME:=24:00:00}"   # passed to sbatch as -t, overriding the directive above.
+: "${WALL_TIME:=14:00:00}"   # passed to sbatch as -t, overriding the directive above.
 : "${STABLE_VAL_SPLIT:=1}"  # 1 = keep the dominant convulsive animals in train.
 #   Positives are heavily concentrated (355675 alone carries ~1/3 of all convulsive
 #   events), so a random split can land half of them in validation -- which wastes
