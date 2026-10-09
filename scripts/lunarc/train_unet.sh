@@ -25,7 +25,7 @@
 # ============================================================
 
 #SBATCH -p gpua100
-#SBATCH -t 14:00:00
+#SBATCH -t 24:00:00
 # Size this from the window count, not from habit:
 #   epochs x (train+val windows) / ~13 windows/s, then add ~35% margin.
 # Overridable with WALL_TIME (the self-submit passes -t, which beats this directive).
@@ -38,6 +38,9 @@
 # differing between jobs, and cutting 24 h -> 14 h on two pending jobs moved neither
 # start estimate. The partition has 6 nodes; waiting is node contention, not wall clock.
 # Size honestly anyway — it costs nothing and avoids holding a node longer than needed.
+# 2026-10-09: the defaults moved to the production recipe (batch 8, fp32), which is slower
+# per epoch than the bf16/batch-32 figures above and has not been timed on the A100 yet.
+# 24 h until the first such run gives a real s/epoch; then resize.
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH -J unet_train
@@ -51,9 +54,16 @@
 # ---- Defaults (used if the var isn't already set / left blank) ----
 : "${MODEL_NAME:=unet_kaha_v1}"
 : "${EPOCHS:=50}"
-: "${BATCH_SIZE:=32}"   # A100 + fp16 has plenty of headroom; bigger batch keeps
-#                         the tensor cores fed. Bump to 64 if memory allows.
-: "${LR:=3e-4}"
+: "${BATCH_SIZE:=8}"
+: "${LR:=1e-3}"
+: "${POS_WEIGHT:=5}"   # "auto" = match NEG_POS_RATIO (train_unet's own rule).
+: "${FP32:=1}"         # 1 = no bf16 autocast, no TF32.
+# PRODUCTION RECIPE. lr 1e-3 / batch 8 / pos_weight 5 / fp32 is how UNetv2_20260615 was
+# trained (its metadata.json; on MPS, so fp32). From 85ce836 (2026-06-16) until 2026-10-09
+# these defaults were batch 32 / lr 3e-4 / bf16, a throughput choice that was never
+# compared against production. Every retraining arm before 2026-10-09 used it, so
+# frozen-vs-retrained mixed a data change with an optimiser change. Keep the
+# defaults matched to the model being compared against.
 : "${PATIENCE:=10}"
 : "${NEG_POS_RATIO:=8}"
 : "${EXCLUDE_ANIMALS:=}"   # space-separated animal IDs to drop, e.g. "355676"
@@ -97,7 +107,7 @@
 #   events), so a random split can land half of them in validation -- which wastes
 #   training data and makes the result a lottery on the seed. Set to 0 only to
 #   reproduce a run from before this flag existed.
-# POS_WEIGHT left unset/blank => auto (train_unet sets it to NEG_POS_RATIO).
+# POS_WEIGHT=auto => train_unet sets it to NEG_POS_RATIO.
 
 # ---- Guard: refuse to submit from a checkout that is behind origin ----
 # Four runs were lost to one failure mode: an env var is set, the checked-out script
@@ -141,7 +151,8 @@ if [ -z "$SLURM_JOB_ID" ]; then
     # silently destroys a preset passed in the environment. That is how job
     # 3795249 was submitted with exclude=none despite EXCLUDE_ANIMALS being set,
     # which would have trained a leave-one-batch-out fold on its own test set.
-    ask POS_WEIGHT      "Pos weight (Enter keeps current; unset = auto = neg/pos ratio)"
+    ask POS_WEIGHT      "Pos weight (number, or auto = neg/pos ratio)"
+    ask FP32            "fp32, no mixed precision (1/0)"
     ask EXCLUDE_ANIMALS "Exclude animal IDs (space-separated)"
     ask MAX_POSITIVE_SEC  "Max positive duration in s (0 = no cap)"
     ask BG_AVOID_REJECTED "Background avoids rejected regions (1/0)"
@@ -153,10 +164,10 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            exclude=${EXCLUDE_ANIMALS:-none}"
     echo "            max_positive_sec=${MAX_POSITIVE_SEC} bg_avoid_rejected=${BG_AVOID_REJECTED}"
     echo "            hard_neg_exclude=${HARD_NEG_EXCLUDE_METHODS:-none}"
-    echo "            wall time=$WALL_TIME val_mode=$VAL_MODE"
+    echo "            wall time=$WALL_TIME val_mode=$VAL_MODE fp32=$FP32"
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
-    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
+    export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT FP32 \
            EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT NEG_SOURCE \
            MAX_POSITIVE_SEC BG_AVOID_REJECTED HARD_NEG_EXCLUDE_METHODS WALL_TIME VAL_MODE
     sbatch --export=ALL -t "$WALL_TIME" "$0"
@@ -177,6 +188,7 @@ echo "Data dir:    $EDF_DIR"
 echo "Stable val split: $STABLE_VAL_SPLIT   neg-source: $NEG_SOURCE"
 echo "max_positive_sec: $MAX_POSITIVE_SEC   bg_avoid_rejected: $BG_AVOID_REJECTED"
 echo "hard_neg_exclude: ${HARD_NEG_EXCLUDE_METHODS:-none}   val_mode: $VAL_MODE"
+echo "fp32: $FP32"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -201,7 +213,9 @@ mkdir -p logs
 # Optional pos-weight: only pass the flag if the user set it (else train_unet
 # auto-picks pos_weight = neg/pos ratio).
 POS_WEIGHT_ARG=()
-[ -n "$POS_WEIGHT" ] && POS_WEIGHT_ARG=(--pos-weight "$POS_WEIGHT")
+[ -n "$POS_WEIGHT" ] && [ "$POS_WEIGHT" != "auto" ] && POS_WEIGHT_ARG=(--pos-weight "$POS_WEIGHT")
+FP32_ARG=()
+[ "$FP32" = "1" ] && FP32_ARG=(--fp32)
 
 # Space-separated IDs -> multiple --exclude-animals values (intentionally unquoted).
 EXCLUDE_ARG=()
@@ -231,6 +245,7 @@ python -m eeg_seizure_analyzer.ml.train_unet \
     "${STABLE_ARG[@]}" \
     "${BG_ARG[@]}" \
     "${HNX_ARG[@]}" \
+    "${FP32_ARG[@]}" \
     --max-positive-sec "$MAX_POSITIVE_SEC" \
     --val-mode "$VAL_MODE" \
     --weight-decay 1e-4 \

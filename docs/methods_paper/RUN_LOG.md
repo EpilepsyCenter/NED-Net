@@ -701,6 +701,60 @@ implications for the experimental design:
 caveat:   B2 contributes only one animal with >=5 events, so its pooled 36.4% rests on a
           single implant. The between-batch comparison is weak on that side.
 
+### 2026-10-09 — DECISION: retrain every U-Net arm at the production recipe
+why:      see "OPTIMISER ≠ PRODUCTION" under 3831662 below. Frozen-vs-retrained has to
+          change the data alone, so the arms are retrained to match `UNetv2_20260615`.
+recipe:   **lr 1e-3, batch 8, pos_weight 5, fp32 (no bf16 autocast, TF32 off)**. Weight
+          decay 1e-4, dropout 0.2, base_filters 32, depth 4, patience 10 and 50 epochs
+          were already identical. Each arm keeps its own neg/pos ratio, because that is
+          part of its data design. fp32 needed a new `--fp32` flag (`FP32=1`): on Ampere,
+          cuDNN uses TF32 for convolutions by default, so that is switched off as well.
+          These are now the defaults in `train_unet.sh`.
+arms:     temporal, A3 (hold out B3), all_prod, and Round-0 A, A2 and B (stable split).
+          **None of these is an exact repeat.** The training tree was refreshed on
+          2026-10-08, so every rerun also picks up the manual and adjudicated labels.
+          Only `ramgdnf_temporal` (3831662, old recipe) against its rerun differs in
+          the recipe alone, which is why 3831662 was left to finish.
+Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was trained on
+          LUNARC with the same launcher defaults it has now (lr 3e-4, batch 16, dropout
+          0.3, wd 1e-4, 30 epochs, patience 10, CUDA bf16, since AMP landed in 88b1c6f
+          an hour before the convulsive trainer did). Its metadata's `pos_weight` 5.0 is an
+          unused default: `train_convulsive.py` always uses n_nonconv/n_conv.
+consequence: every operating-point sweep and detection on the old-recipe arms has to be
+          redone for the new models. Operating points do not transfer between models.
+
+### 2026-10-09 — U-Net, temporal split — job 3831662 (RUNNING)
+started:  2026-10-09 14:22:59 on cg12, ~a day ahead of the 2026-10-10 14:57 estimate.
+config verified from the log header (the post-3825994 check):
+          `val_mode: temporal`, neg/pos 6, pos_weight 6.0, `max_positive_sec: 100`,
+          `bg_avoid_rejected: 1`, `hard_neg_exclude: mir_candidate`, data dir
+          `train_nomirneg`, exclusions = 449382 + 450093/450094 + all eight B4 animals
+          (the retained set). 1,219 EDFs; 42 animals on both sides, no
+          single-recording animals.
+dataset:  **6,272 train / 3,150 val = 33% in validation**, 9,422 windows total (the ~9,400
+          predicted for ratio 6). The 33% is not a config error. `split_by_recording`
+          moves each animal's latest recordings into val until >= 20% of its
+          *positive* windows are reached, so every animal overshoots by up to one
+          whole recording, and that recording's negatives follow it. It is lower than
+          the by-animal split's 47%. **Do not compare** it with `conv_temporal`'s 24%:
+          that split balances on `center_convulsive` over a different window set.
+speed:    **~531 s/epoch** (cache 97 s; bf16), against the 740 s estimate. 50 epochs ≈ 7.4 h,
+          well inside the 14 h limit.
+early:    event_f1 0.143 / 0.118 / 0.186 / 0.334 / 0.221 over epochs 1-5, a normal
+          early swing. **Not comparable** with A3's 0.485, which was scored on a
+          different val set (by-animal split).
+OPTIMISER ≠ PRODUCTION (checked against `UNetv2_20260615/metadata.json`):
+          production was trained on the Mac (MPS, fp32) at **lr 1e-3, batch 8**, which
+          are `train_unet.py`'s CLI defaults. Every LUNARC run, including arms A, A2, A3 and
+          B and this job, uses **lr 3e-4, batch 32**, the `train_unet.sh` defaults
+          introduced in `85ce836` (2026-06-16, the day after production was trained). That
+          was a throughput choice and was never compared. The result is ~4x fewer
+          optimiser steps per epoch, each at a ~3x lower lr. Architecture, weight decay
+          1e-4, dropout 0.2, augment, window 60 s and patience 10 are identical. The
+          ratio and pos_weight differ deliberately (production: neg/pos 4, pos_weight 5).
+          The arms are internally consistent with each other, but **frozen-vs-retrained
+          confounds data with optimiser settings**. Methods must state both recipes.
+
 ### 2026-10-09 — Stage 2, temporal split + rejected negatives — job 3831663 (DONE)
 script:   `scripts/lunarc/train_convulsive.sh` @ `dcc7b46`
 config:   `EDF_DIR=~/train_nomirneg`, `MODEL_NAME=conv_temporal`, **`VAL_MODE=temporal`**,

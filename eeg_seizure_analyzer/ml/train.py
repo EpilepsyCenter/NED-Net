@@ -267,6 +267,8 @@ class TrainConfig:
     depth: int = 4
     dropout: float = 0.2
     num_workers: int = 0  # DataLoader workers (0 = main process)
+    mixed_precision: bool = True  # bf16 autocast on CUDA. False = true fp32 (TF32
+    #   off too), which is how the production UNetv2_20260615 was trained (on MPS).
 
     # Architecture selection: "unet" or "bendr"
     architecture: str = "unet"
@@ -411,7 +413,13 @@ def train_model(
     # in fp16 (bf16 where available — no GradScaler needed), typically a 2–4×
     # speed-up on the A100 with no accuracy loss. MPS/CPU keep fp32 (use_amp
     # False → autocast is a no-op), so the Mac path is unchanged.
-    use_amp = device.type == "cuda"
+    use_amp = device.type == "cuda" and train_config.mixed_precision
+    if device.type == "cuda" and not use_amp:
+        # Ampere runs cuDNN convolutions in TF32 by default, which is not fp32.
+        # Turn it off so an fp32 run here matches one on MPS/CPU.
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+        print("Mixed precision: OFF (fp32, TF32 disabled)")
     amp_dtype = (
         torch.bfloat16
         if use_amp and torch.cuda.is_bf16_supported()

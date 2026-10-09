@@ -240,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--patience", type=int, default=10)
     p.add_argument("--num-workers", type=int, default=0)
+    p.add_argument("--fp32", action="store_true",
+                   help="disable bf16 mixed precision (and TF32) on CUDA, matching how "
+                        "the production model was trained")
     args = p.parse_args(argv)
 
     dataset_def = _build_dataset_def(args.data_dir, args.model_name)
@@ -310,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         dropout=args.dropout,
         patience=args.patience,
         num_workers=args.num_workers,
+        mixed_precision=not args.fp32,
     )
 
     print(f"Training U-Net '{args.model_name}' on {len(dataset_def['files'])} EDFs "

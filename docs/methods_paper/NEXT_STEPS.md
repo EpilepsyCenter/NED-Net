@@ -24,18 +24,20 @@ So:
 
 ## STATE AS OF 2026-10-09 18:00 — start here tomorrow
 
-**One job outstanding: `3831662` (`ramgdnf_temporal`), PENDING on gpua100, 14 h limit.**
-Estimated start 2026-10-10 ~14:57. Everything else today is finished or cancelled.
+**One job outstanding: `3831662` (`ramgdnf_temporal`), RUNNING on gpua100 (cg12) since
+2026-10-09 14:23, 14 h limit.** ~531 s/epoch, so 50 epochs ≈ 7.4 h → done by ~21:50 tonight
+(earlier if patience 10 stops it). Config verified from the log header — see RUN_LOG.
+Everything else today is finished or cancelled.
 
 ```bash
 squeue -u $USER                                    # is 3831662 running / done?
-grep -E "Best event_f1|background sampling|Split mode|train:|val:" \
-     logs/unet_train_3831662.out
+grep -E "Best event_f1|Early stopping|Training samples" logs/unet_train_3831662.out
+grep -nE "^Epoch" logs/unet_train_3831662.out | tail -5
 ```
 
 | job | what | status |
 |---|---|---|
-| **3831662** | `ramgdnf_temporal` — U-Net, **temporal split**, ratio 6, cap 100 s | **PENDING — the one to read** |
+| **3831662** | `ramgdnf_temporal` — U-Net, **temporal split**, ratio 6, cap 100 s | **RUNNING since 14:23 — the one to read** |
 | 3831663 | `conv_temporal` — Stage 2, temporal split, rejected negatives | **done**, F1 0.604 @ 0.75 |
 | 3831584 | `ramgdnf_all_prod` (animal split) | **cancelled** to free its queue slot for 3831662 |
 | 3825993 | A3 on held-out Batch 3 | done, scored (see RUN_LOG 2026-10-09) |
