@@ -42,14 +42,16 @@ echo "checkout: $(git log --oneline -1)"
 # dataset. ad_edf_data sits under the root too, so it must contain no sidecars.
 echo
 echo "== sidecars per top-level folder under $PROJ (arms A, A2 scan all of these) =="
-find "$PROJ" -name '*_ned_annotations.json' 2>/dev/null \
+# `|| true` throughout: under pipefail a find error (missing dir, one unreadable
+# subdir) would otherwise end the script silently.
+{ find "$PROJ" -name '*_ned_annotations.json' 2>/dev/null || true; } \
     | sed "s|^$PROJ/||" | cut -d/ -f1 | sort | uniq -c
-n_ad=$(find "$PROJ/ad_edf_data" -name '*_ned_annotations.json' 2>/dev/null | wc -l)
+n_ad=$({ find "$PROJ/ad_edf_data" -name '*_ned_annotations.json' 2>/dev/null || true; } | wc -l)
 if [ "$n_ad" -gt 0 ]; then
     echo "ERROR: $n_ad sidecars under ad_edf_data would join arms A/A2. Resolve first." >&2
     exit 1
 fi
-echo "== $TREE: $(find -L "$TREE" -maxdepth 1 -name '*_ned_annotations.json' | wc -l) sidecars =="
+echo "== $TREE: $({ find -L "$TREE" -maxdepth 1 -name '*_ned_annotations.json' 2>/dev/null || true; } | wc -l) sidecars =="
 echo
 echo "== refresh_training_tree --dry-run (record the manual/adjudicated counts in RUN_LOG) =="
 python scripts/lunarc/refresh_training_tree.py --dry-run --keep-mir-rejections 2>&1 | tail -15 \
