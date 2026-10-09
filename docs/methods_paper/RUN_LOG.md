@@ -723,6 +723,40 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
+### 2026-10-09 — PRE-REGISTERED: operating-point rule for the _pr sweeps (before any result)
+rule:     `scripts/local/select_operating_point.py`. Joint grid = 6 Stage-1 points (0.5/0.1,
+          0.7/0.3, 0.8/0.5, 0.9/0.3, 0.9/0.5, 0.95/0.5) x Stage-2 thresholds (0, 0.1, 0.2, 0.3,
+          0.45, 0.6, 0.8, 0.95; 0 = Stage 2 off). Score in **cascade scope** against Mir's
+          convulsive reference (retained channels, reviewed recordings) on the held-in
+          batches: B1-B3 for temporal/all_prod, B1+B2 for A3. **Pick max convulsive-event F1.**
+          Ties go to higher thr, then higher bnd, then higher conv thr. Coverage, IoU and
+          duration are reported, never selected on. A3's winner is then read on held-out
+          B3 from the same sweep DB. The frozen pipeline is scored on the same batches at
+          0.5/0.1/0.45.
+primary comparison: the full precision-recall frontier for frozen (its Stage-2 sweep)
+          against each _pr model (the joint grid). It needs no single point. The F1
+          winner is the one point carried into B3, the per-animal tables and the precision
+          sample.
+precision caveat: `precision()` is **subset precision**. It counts only detections
+          overlapping a candidate Mir adjudicated, and the rest are unknown. His
+          candidates were automated and confirmed on video. "False" includes real
+          non-convulsive activity, which in cascade scope is a fair convulsive-labelling
+          error. True precision comes from the precision sample.
+why this rule. The script was validated on the OLD A3 sweep DBs, and the old models
+          show the problem it fixes:
+          the script reproduces the logged numbers (A3 0.9/0.5: Stage 1 50.0%; conv 0.30
+          -> 47.1%; conv 0.45 -> 38.2%; frozen 27.9% @ 61% precision).
+          Under max F1 the old A3 picks 0.9/0.5/conv 0.80: recall 29.4%, precision 16%,
+          F1 0.211. **The frozen cascade scores F1 0.383 on the same B1+B2.** The old
+          headline (27.9 -> 47.1% recall, 16 -> 73% coverage) sits at a recall-favouring
+          point where subset precision is **11% vs frozen's 61%**. At matched Stage-2
+          thresholds the frozen cascade is more precise everywhere: 0.45 -> 61% vs 11%;
+          0.80 -> 81% vs 16%.
+          So the old "retraining recovers" claim was a recall-for-precision trade
+          that the text never stated. Whether the _pr models plus `conv_temporal`
+          (trained with rejected negatives) change that is the question these sweeps
+          answer. Do not re-pick the rule after seeing them.
+
 ### 2026-10-09 — Production-recipe reruns SUBMITTED — jobs 3832977-82
 script:   `scripts/lunarc/submit_prodrecipe_arms.sh`. Each arm takes its data flags from
           its own log header and changes only the recipe (lr 1e-3, batch 8, pos_weight 5,

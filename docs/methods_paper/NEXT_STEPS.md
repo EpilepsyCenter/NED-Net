@@ -61,21 +61,61 @@ Earlier jobs today: 3831663 `conv_temporal` done (F1 0.604 @ 0.75); 3831584 canc
 
 ### Monday-Tuesday, once the _pr models land
 
-1. **Recipe effect first:** compare `ramgdnf_temporal` and `ramgdnf_temporal_pr` on the
-   same val set (identical split). That is the only clean measurement of the recipe.
-2. **Operating-point sweep for every _pr model** used in the paper (lu48), on its
-   held-in batches. **No model inherits another's threshold/boundary.** That includes
-   0.9/0.5 from the old A3.
-3. **Detect** at each winning point. Temporal and all_prod use `CONV_MODEL=conv_temporal`;
-   A3 on held-out B3 uses `conv_armA_holdB3`, as before.
-4. **`conv_threshold_sweep.py`**, the stage-2 verdict. With the old classifier, precision
-   was **flat at 11%** across thresholds. If it now rises, the rejected-negatives fix
-   worked. If it is still flat, Stage 2 goes in as a limitation.
-5. **`draw_precision_sample.py --seed <n>`**: record the seed in `RUN_LOG.md` **before**
-   opening any event, review every event, then run `score_precision_sample.py`. This is
-   the paper's last substantive gap.
-6. Every old-recipe number in DRAFT/PAPER_OUTLINE (A3 47.1% / 73%, out-of-sample B3, and
-   the arm ranking) is replaced by its _pr counterpart, or explicitly labelled old-recipe.
+**Rule fixed in advance:** RUN_LOG 2026-10-09 "PRE-REGISTERED". Max cascade F1 over the
+joint grid, with the full P-R frontier as the primary comparison. **Do not change it after
+seeing results.** On the old models, F1 shows the frozen cascade (0.383) beating every A3
+point (<= 0.211). The old 47.1% / 73% headline was at 11% vs 61% subset precision.
+
+1. **Recipe effect:** compare `ramgdnf_temporal` (3831662) and `ramgdnf_temporal_pr`
+   (3832977) on the identical val split: best_event_f1, best epoch, curve shape.
+2. **Sweeps (lu48, 18 jobs: 3 models x 6 points, each over B1-B3):**
+   ```bash
+   cd ~/NED-Net && git diff --stat HEAD origin/main -- eeg_seizure_analyzer   # must be empty
+   git pull                                        # only once no training code changes
+   bash scripts/lunarc/submit_pr_sweeps.sh --dry-run
+   bash scripts/lunarc/submit_pr_sweeps.sh         # or DEPEND=1 to queue after training
+   ```
+   Models: temporal + all_prod with `conv_temporal`; A3 with `conv_armA_holdB3`. DBs:
+   `<key>_pr_sweep_t<thr>_b<bnd>.db`. Record the job IDs.
+3. **Select and score (Mac, after copying the DBs back):**
+   ```bash
+   P=~/.eeg_seizure_analyzer/projects
+   for k in temporal all_prod; do
+     python scripts/local/select_operating_point.py $(ls $P/${k}_pr_sweep_t*.db | sed 's/^/--db /') \
+       --select-batches 123 --report-batches 123 --out review/opsel_${k}_pr.csv; done
+   python scripts/local/select_operating_point.py $(ls $P/A3_pr_sweep_t*.db | sed 's/^/--db /') \
+     --select-batches 12 --report-batches 3 --out review/opsel_A3_pr.csv
+   ```
+   Then `conv_threshold_sweep.py` and `operating_point_table.py --det-conv-only` on each
+   winner, for the Stage-2 verdict and IoU/duration. Then plot the P-R frontier from the
+   `--out` CSVs against frozen.
+4. **Per-animal tables:** there is NO script yet. The old CSVs (commits 9f38421, 1a3b279)
+   were built ad hoc. Write `scripts/local/per_animal_table.py` before regenerating them.
+5. **Precision sample:** `draw_precision_sample.py --db <winning DB> --n 180 --seed <n>`.
+   Seed goes in RUN_LOG first. Which model is unsettled: all_prod (NEXT_STEPS), temporal
+   (the script's example) or A3 (docstring). **Decide before drawing.** Its convulsive
+   split uses the detection-time `type` (CONV_THRESHOLD 0.45). If the winner's Stage-2
+   threshold differs, re-detect at it, or score on `convulsive_confidence`.
+6. **Paper numbers to replace** (map made 2026-10-09; the frozen-only numbers are unaffected):
+   * R5 / DRAFT:41,145 / OUTLINE:147-164 / HANDOFF:56-57. Coverage 16->73%, recall
+     27.9->47.1% (cascade) and 38.2->50.0% (Stage 1), IoU 0.36->0.60/0.66, 19 s / 26 s,
+     boundary-IoU 0.66/0.58/0.60. **All need their precision stated.**
+   * Per-animal 3/4/0, 449387 now fires, 449385 792->729 / 1->4 (DRAFT:147-149; OUTLINE:152-156,200).
+   * Out-of-sample B3: 5.2->8.5%, 2.6->7.8%, fires 58->90%, 1.31x/1.63x (OUTLINE:169-173), and
+     the B3 Stage-2 "flat at 4%".
+   * Pitfall 3, conf p50 0.66 and flat 11% (OUTLINE:247-249; MODELS:43-52), if conv_temporal changes it.
+   * Training-log numbers from `_pr` metadata: pitfall 2, R7 rows, and the MODELS.md arm
+     tables (event_f1 per arm, ranking). Pitfall 1 (72% of time, 1,713 s) stays as
+     old-model history and is labelled as such.
+7. **Fix in the outline regardless:**
+   * OUTLINE:200 says 459658, but RUN_LOG has 449385.
+   * R5 "cascade @ 0.30" takes its IoU/duration from 0.45.
+   * The per-animal 3/4/0 is at 0.45, and 449385's 1->4 is Stage-1 scope.
+   * OUTLINE:394 credits 0.532 to arm A; it is A2's.
+   * Pitfall 2 (0.329 vs 0.532) was withdrawn in MODELS:179-186.
+   * The 7.3x framing was withdrawn (RUN_LOG:678) but OUTLINE:172-173 still uses it.
+   * Methods should now state ONE recipe.
+   * Job 3820427 and the 72% / 0.01% figures have no RUN_LOG entry (only PHASE1_RESULTS).
 
 ### Monday: try the validation speed-up (NOT before all six _pr jobs have STARTED)
 
