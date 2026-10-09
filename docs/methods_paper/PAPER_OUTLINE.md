@@ -11,35 +11,75 @@ measured. Previous version in `archive/PAPER_OUTLINE_20261008.md`.
 
 ## What the paper is about
 
-**NED-Net is software for building seizure-detection models from human annotations** —
-annotate in the UI, train, detect, review, retrain. The paper is not "here is a good
-detector". It is: what does a model built this way actually do on new animals, what does it
-cost to keep it working, and how many annotations does that take.
+**This is a software paper.** NED-Net is a tool for building and maintaining event-detection
+models from human annotations: annotate in the UI, train, detect, review, retrain. The
+contribution is the software and the workflow it implements.
 
-Working claim: **a trained model does not carry over to a new batch of animals, let alone
-another lab — you refine it as each batch arrives, and the pipeline is built to make that
-loop cheap.** Electrode position, impedance and noise change between implants, so the model
-is maintained, not delivered.
+The validation numbers exist to support a **design claim**, not to advertise a detector:
+**a model cannot be delivered once and left alone.** It does not carry over to a new batch
+of animals, let alone another lab, because electrode position, impedance and noise differ
+per implant — so the software is built around continual refinement rather than one-shot
+training. Every feature described in R1 exists for that reason, and the measurements in
+R2-R8 are the evidence that it is needed and that it works.
+
+What the paper is NOT: a benchmark claiming state-of-the-art detection, or a comparison
+against other detectors on public data.
 
 ## Introduction
 
-1. Automated rodent EEG seizure detection is necessary at scale — 16,114 animal-hours in
-   this cohort alone. Published detectors report 90%+ performance; what happens on the next
-   cohort is rarely measured.
-2. We built a first model on one cohort (SV2A, 867 annotated seizures) and reached
-   **93.6% precision** on human spot-check (160/171 adjudicated events, 30 files).
-3. We applied it unchanged to a second cohort of different animals on the same rig. It
-   failed — and the failure was not uniform, it was per-animal.
-4. We annotated the new animals, retrained, measured the recovery, quantified the cost, and
-   note that nothing in the pipeline is seizure-specific.
+1. Automated rodent EEG event detection is necessary at scale — 16,114 animal-hours in this
+   cohort alone. Published detectors report 90%+ performance; what happens on the next
+   cohort, in another lab, with other electrodes, is rarely measured, and published weights
+   are rarely usable as-is.
+2. The practical need is therefore not a better detector but **a tool that lets a lab build
+   its own and keep it current**. We present NED-Net, which implements that loop end to end:
+   annotation UI, training, batch and live detection, review, retraining.
+3. To show the loop is necessary we built a model on one cohort (SV2A, 867 annotated
+   seizures, **93.6% precision**), applied it unchanged to a second cohort on the same rig,
+   and measured what happened. It failed — and not uniformly: **per implant**.
+4. We then annotated the new animals through the UI, retrained, and measured the recovery.
+   We report the annotation cost, five pitfalls the exercise exposed, and the fact that
+   nothing in the pipeline is seizure-specific.
 
 ## Results
 
-### R1 — The source model works
+### R1 — The software and the loop it implements
+The unit of work is a **sidecar annotation file** (`*_ned_annotations.json`) beside each EDF,
+holding per-event `confirmed` / `rejected` / `pending` labels, the channel, and a `features`
+dict. Human labels and model proposals live in the same format, which is what makes the loop
+closed: model output becomes a review queue, and reviewed output becomes training data.
+
+| component | what it does |
+|---|---|
+| **Load / montage** | per-channel animal, cohort and group IDs (`*_ned_channels.json`); one recording = 8 animals, so everything downstream is per-animal |
+| **Detection (rule-based)** | parameter-driven detectors (autocorrelation, spectral band, amplitude) to bootstrap a first annotation set with no model at all |
+| **Training** | U-Net seizure detector (stage 1) and convulsive classifier (stage 2), trained from the sidecars; animal-, recording- or time-based validation splits |
+| **Analysis** | trained-cascade inference: single file, **batch**, or **live** |
+| **Review** | queue of `pending` events with boundary editing; confirm/reject writes straight back to the sidecar |
+| **Results** | per-project SQLite DB aggregating every run, per animal and group |
+| **HPC path** | the same training and detection entry points run unattended under SLURM |
+
+**Live detection mode is the feature this paper's argument is built on**
+(`analysis.py:1089`). It watches an acquisition folder, waits a configurable delay (default
+30 s) so the recorder has finished writing, and runs the **full cascade** on each new file as
+it lands, writing events to the project database. A `live_template` keys the montage **by
+channel** rather than by filename, because live files arrive with unknown names and a session
+runs a fixed montage — so events are attributed to individual animals from the first file.
+Optional backlog processing covers files recorded before monitoring started.
+
+**Why that matters for the design claim:** it makes the refinement loop concurrent with the
+experiment. A researcher can annotate during the first recording days, retrain on their own
+animals, and have a model calibrated to that cohort ready before the bulk of the protocol is
+recorded — instead of discovering after the fact that an inherited model returned nothing for
+a third of the implants (R3). The alternative — record everything, then analyse — provides no
+opportunity to correct the model while the data that would fix it is being produced.
+
+### R2 — A model built in the UI works on the cohort it was built from
+
 SV2A: **93.6% precision** (160/171, human spot-check); event recall 87%, event_f1 0.78 on
 its validation split (0.81 at its own best threshold of 0.7).
 
-### R2 — On a new cohort, recall collapses while precision holds
+### R3 — On a new cohort, recall collapses while precision holds
 1,377 recordings, 16,114 animal-hours, same rig, different animals.
 
 | | SV2A (source) | RAM_GDNF (new) |
@@ -51,7 +91,7 @@ its validation split (0.81 at its own best threshold of 0.7).
 **Precision is statistically indistinguishable between cohorts. Recall collapses.** The
 model has not forgotten what a seizure looks like; it has stopped finding them.
 
-### R3 — The failure is silence, and it is per-animal not per-batch
+### R4 — The failure is silence, and it is per-animal not per-batch
 Exhaustive manual review of 4 recordings — every event >=5 s on all 8 channels, independent
 of detector output. 48 animal-hours, **50 real seizures**.
 
@@ -90,7 +130,7 @@ it trained on none of them):
 an inherited model unmodified gets **nothing** from roughly a third of its implants, with no
 error and no warning.
 
-### R4 — Annotating the cohort and retraining recovers most of the loss
+### R5 — Annotating the cohort and retraining recovers most of the loss
 Retained B1+B2, convulsive reference (n=68), frozen and retrained scored through the
 identical code path so the comparison is paired. Stage 2 tuned per model, which is itself a
 finding (R7).
@@ -130,14 +170,31 @@ design: hold out each animal's **later recordings**, every animal represented. T
 the real workflow — annotate as the experiment starts, let the model handle the rest — and
 replaces the figures above as R4's headline when it lands.
 
-### R5 — What is still unmeasured: precision of the retrained model
-Every precision figure available is scored against a convulsive-only candidate reference,
-which structurally cannot credit a non-convulsive detection — and most of the retrained
-output is non-convulsive. So **"fires more" is established and "finds more" is not.**
-A pre-registered stratified review sample is the remaining gap, and it matters: animal
-459658 produces 569 detections at the tuned operating point and catches 0 of 10 seizures.
+### R6 — What the available references can and cannot measure
+Three references exist and they measure different things. Being explicit about this is
+part of the methodological contribution.
 
-### R6 — The annotation requirement
+| reference | n | covers non-convulsive? | independent of detector output? |
+|---|---|---|---|
+| external candidate set, video-adjudicated | 430 | **no** — convulsive/behavioural only | yes |
+| **exhaustive review**, 4 recordings, every event >=5 s on all 8 channels | **50** | **yes** | **yes** |
+| **reviewer's manual additions in the UI** | **52** | **yes — all 52 are non-convulsive** | **no** — added while reviewing detector proposals |
+
+So it is **not** true that the non-convulsive arm has no reference. The exhaustive review is
+small but independent and is what produced the only stable numbers in the project
+(**92% precision where it fires, 43% recall, 0/22 where it does not**). The 52 manual
+additions confirm the cohort's real events are predominantly non-convulsive — which is
+itself a finding, since the external reference contains none of them — but recall measured
+against them would be biased upward, because they were added while looking at the detector's
+own proposals.
+
+**What remains unmeasured is precision of the *retrained* model.** The convulsive reference
+cannot credit its non-convulsive detections, and the exhaustive review predates it. So
+"fires more" is established and "finds more" is not. A pre-registered stratified review
+sample of retrained output is the remaining gap, and it matters: animal 459658 produces 569
+detections at the tuned operating point and catches 0 of 10 reference seizures.
+
+### R7 — The annotation requirement
 | training positives | source | outcome |
 |---|---|---|
 | 867 | SV2A alone, **one cohort** | working model, 93.6% precision |
@@ -150,7 +207,7 @@ the same annotation effort yielded fewer events. The requirement is a count of s
 a count of cohorts. Because the unit of variability is the animal (R3), the useful form of
 this question is **how many animals must be annotated**, not how many batches.
 
-### R7 — Five pitfalls anyone repeating this will hit
+### R8 — Five pitfalls anyone repeating this will hit
 Each cost us a measurable amount, and none is specific to seizures.
 
 1. **Operating points do not transfer.** The retrained model at the *source* model's
@@ -181,7 +238,7 @@ Each cost us a measurable amount, and none is specific to seizures.
    training tree had not been refreshed since before the review sessions. Nothing errored.
    Pipelines that re-scan a folder rather than pin a dataset definition will do this.
 
-### R8 — Recording quality costs precision, measurably
+### R9 — Recording quality costs precision, measurably
 Per-channel precision within one batch: **64%, 22%, 9%**. Two pre-registered automated
 quality metrics failed to predict which channels would be poor, so quality is reported as a
 per-channel precision figure rather than a binary verdict. Notably the
