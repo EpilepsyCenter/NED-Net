@@ -68,7 +68,8 @@ point (<= 0.211). The old 47.1% / 73% headline was at 11% vs 61% subset precisio
 
 1. **Recipe effect:** compare `ramgdnf_temporal` (3831662) and `ramgdnf_temporal_pr`
    (3832977) on the identical val split: best_event_f1, best epoch, curve shape.
-2. **Sweeps (lu48, 18 jobs: 3 models x 6 points, each over B1-B3):**
+2. **Sweeps: SUBMITTED 2026-10-09 as jobs 3833038-55** (`DEPEND=1`; each starts when its
+   training job ends). Kept for reference: how they were submitted (lu48, 3 models x 6 points over B1-B3):
    ```bash
    cd ~/NED-Net && git diff --stat HEAD origin/main -- eeg_seizure_analyzer   # must be empty
    git pull                                        # only once no training code changes

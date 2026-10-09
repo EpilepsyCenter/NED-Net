@@ -723,6 +723,19 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
+### 2026-10-09 — _pr operating-point sweeps SUBMITTED — jobs 3833038-55
+script:   `scripts/lunarc/submit_pr_sweeps.sh` @ `4d4ef75`, `DEPEND=1`, so each sweep waits
+          on its training job with `afterany`. lu48, B1-B3 (`Batch_[123]_Recordings`),
+          CONV_THRESHOLD 0.45 (labels only; Stage 2 is chosen post hoc).
+jobs:     points in order 0.5/0.1, 0.7/0.3, 0.8/0.5, 0.9/0.3, 0.9/0.5, 0.95/0.5.
+          temporal_pr + conv_temporal    3833038-43  (after 3832977)
+          all_prod_pr + conv_temporal    3833044-49  (after 3832978)
+          A3_pr + conv_armA_holdB3       3833050-55  (after 3832979)
+DBs:      `~/.eeg_seizure_analyzer/projects/<key>_pr_sweep_t<thr>_b<bnd>.db`
+note:     the training jobs went from `Resources` to `Priority` at submission. Still
+          node contention, not a fault.
+result:   _pending_. Score with `select_operating_point.py` under the pre-registered rule.
+
 ### 2026-10-09 — PRE-REGISTERED: operating-point rule for the _pr sweeps (before any result)
 rule:     `scripts/local/select_operating_point.py`. Joint grid = 6 Stage-1 points (0.5/0.1,
           0.7/0.3, 0.8/0.5, 0.9/0.3, 0.9/0.5, 0.95/0.5) x Stage-2 thresholds (0, 0.1, 0.2, 0.3,
