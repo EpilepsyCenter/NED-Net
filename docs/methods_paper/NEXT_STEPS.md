@@ -4,7 +4,25 @@
 in `RUN_LOG.md`; commands in `LUNARC_CHEATSHEET.md`; models in `MODELS.md`. The
 2026-10-06 version is in `archive/NEXT_STEPS_20261006.md` — its Phase-2 plan is superseded.
 
-## Running overnight (2026-10-08)
+## SCOPE — SETTLED, DO NOT RE-ARGUE
+
+**This paper measures in-sample performance: what a lab gets on its own data after
+annotating it.** That is the question the pipeline exists to answer, and it is how the
+source model's 93.6% was obtained. Generalisation to unannotated animals is NOT the target.
+
+So:
+* **Score in-sample.** Detection over the batches the model trained on is the intended
+  measurement, not a confound to apologise for.
+* Out-of-sample numbers (A3 on held-out B3, animal-split folds) are already recorded in
+  `RUN_LOG.md` and are **supporting context**, not the headline. Do not expand that line
+  of work or re-open it in reviews of results.
+* The `temporal` split exists because it matches the real workflow — annotate the early
+  recordings, let the model handle the later ones, every animal represented. That is still
+  an in-sample question and is the right primary design.
+* Stop restating "but this is in-sample" as a caveat on every number. State the scope once,
+  in Methods, and report the numbers.
+
+## Running (2026-10-09)
 
 | job | what | where | read it with |
 |---|---|---|---|
