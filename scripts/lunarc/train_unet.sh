@@ -81,6 +81,12 @@
 #   rows are wrong as negatives but right as regions to keep background out of.
 #   This supersedes deleting them from the sidecars -- deletion destroyed the
 #   region information, so the two settings could not both be honoured.
+: "${VAL_MODE:=animal}"    # animal | recording | temporal — see --val-mode.
+#   `animal` holds out whole animals (TRANSFER: a new, unannotated animal).
+#   `recording`/`temporal` keep every animal on both sides (DEPLOYMENT: having annotated
+#   some of this animal, does the model find its other seizures?) — the question a lab
+#   actually faces, since in practice every animal gets some annotation. Those numbers are
+#   optimistic relative to a new animal and are NOT comparable with `animal`-split runs.
 : "${WALL_TIME:=24:00:00}"   # passed to sbatch as -t, overriding the directive above.
 : "${STABLE_VAL_SPLIT:=1}"  # 1 = keep the dominant convulsive animals in train.
 #   Positives are heavily concentrated (355675 alone carries ~1/3 of all convulsive
@@ -114,18 +120,19 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask MAX_POSITIVE_SEC  "Max positive duration in s (0 = no cap)"
     ask BG_AVOID_REJECTED "Background avoids rejected regions (1/0)"
     ask HARD_NEG_EXCLUDE_METHODS "detection_methods NOT used as hard negatives"
+    ask VAL_MODE                 "Split mode (animal | recording | temporal)"
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE neg/pos=$NEG_POS_RATIO pos_weight=${POS_WEIGHT:-auto}"
     echo "            exclude=${EXCLUDE_ANIMALS:-none}"
     echo "            max_positive_sec=${MAX_POSITIVE_SEC} bg_avoid_rejected=${BG_AVOID_REJECTED}"
     echo "            hard_neg_exclude=${HARD_NEG_EXCLUDE_METHODS:-none}"
-    echo "            wall time=$WALL_TIME"
+    echo "            wall time=$WALL_TIME val_mode=$VAL_MODE"
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
            EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT NEG_SOURCE \
-           MAX_POSITIVE_SEC BG_AVOID_REJECTED HARD_NEG_EXCLUDE_METHODS WALL_TIME
+           MAX_POSITIVE_SEC BG_AVOID_REJECTED HARD_NEG_EXCLUDE_METHODS WALL_TIME VAL_MODE
     sbatch --export=ALL -t "$WALL_TIME" "$0"
     exit $?
 fi
@@ -143,7 +150,7 @@ echo "             exclude=${EXCLUDE_ANIMALS:-none}"
 echo "Data dir:    $EDF_DIR"
 echo "Stable val split: $STABLE_VAL_SPLIT   neg-source: $NEG_SOURCE"
 echo "max_positive_sec: $MAX_POSITIVE_SEC   bg_avoid_rejected: $BG_AVOID_REJECTED"
-echo "hard_neg_exclude: ${HARD_NEG_EXCLUDE_METHODS:-none}"
+echo "hard_neg_exclude: ${HARD_NEG_EXCLUDE_METHODS:-none}   val_mode: $VAL_MODE"
 echo "========================================="
 
 # Activate environment (same conda env as BENDR)
@@ -199,6 +206,7 @@ python -m eeg_seizure_analyzer.ml.train_unet \
     "${BG_ARG[@]}" \
     "${HNX_ARG[@]}" \
     --max-positive-sec "$MAX_POSITIVE_SEC" \
+    --val-mode "$VAL_MODE" \
     --weight-decay 1e-4 \
     --base-filters 32 \
     --depth 4 \

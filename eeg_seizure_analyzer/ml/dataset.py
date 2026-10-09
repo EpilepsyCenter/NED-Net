@@ -12,6 +12,7 @@ import json
 import math
 import os
 import random
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,6 +72,21 @@ class DatasetConfig:
     #   120 s were ever detected. Capped events stay in the interval lists, so a
     #   window overlapping one is still labelled seizure and background is never
     #   sampled from it -- only the "centre a window on it" step is skipped.
+    val_mode: str = "animal"  # how the train/val split is drawn:
+    #   "animal"    — whole animals held out (the default, and what every run before
+    #                 2026-10-09 used). Answers "will this work on an animal I never
+    #                 annotated?" — the transfer question.
+    #   "recording" — whole RECORDINGS held out, every animal present on both sides.
+    #                 Answers "having annotated some of this animal, does the model find
+    #                 its other seizures?" — the deployment question, and the one a lab
+    #                 actually faces, since in practice every animal gets some annotation.
+    #   "temporal"  — as "recording", but the held-out recordings are the LATEST ones per
+    #                 animal by date. Matches the real workflow (annotate as the
+    #                 experiment starts, let the model handle the rest) and is the
+    #                 strictest leakage-safe version of the deployment question.
+    #   NEVER split individual events at random: events from one 90-minute recording share
+    #   electrode state, ambient noise and often the same seizure cluster, so a random
+    #   event split leaks and inflates the result. Recording is the finest safe unit.
     conv_neg_from_rejected: bool = False  # convulsive-classifier path only: emit
     #   `rejected` events as NON-convulsive windows. Stage 2 is trained on confirmed
     #   seizures but deployed on every detection, most of which are false positives, so
@@ -725,6 +741,103 @@ class SeizureDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 
+_DATE_RE = re.compile(r"(\d{8})")
+
+
+def _rec_date(path: str) -> str:
+    """Sortable ``YYYYMMDD`` parsed from a filename; ``""`` when absent.
+
+    Two conventions coexist and the field order differs, so disambiguate on which
+    half is a plausible year:
+      * SV2A      ``D36-20240408(5).edf``      -> YYYYMMDD
+      * RAM_GDNF  ``B2_W1_D1_27102025(9).edf`` -> DDMMYYYY
+    """
+    for m in _DATE_RE.finditer(Path(path).name):
+        d = m.group(1)
+        if 2000 <= int(d[:4]) <= 2035:
+            return d
+        if 2000 <= int(d[4:]) <= 2035:
+            return d[4:] + d[2:4] + d[:2]
+    return ""
+
+
+def split_by_recording(
+    specs: list[WindowSpec],
+    val_fraction: float = 0.2,
+    seed: int = 42,
+    temporal: bool = True,
+) -> tuple[list[WindowSpec], list[WindowSpec]]:
+    """Split by whole RECORDING, keeping every animal on both sides.
+
+    This measures the deployment question rather than the transfer question: given
+    that some of an animal's seizures were annotated, does the model find the
+    others?  In practice every animal gets some annotation, so this is the number
+    that describes real use — but it is **optimistic relative to a new animal**,
+    and must never be quoted as generalisation.
+
+    All windows from one EDF go to one side, so no recording is split. That is the
+    finest safe unit: events inside a single 90-minute file share electrode state,
+    ambient noise and often one seizure cluster, so holding out individual events
+    at random leaks and inflates the score.
+
+    With ``temporal`` the held-out recordings are the latest per animal by date
+    (see :func:`_rec_date`), which mirrors annotating early and deploying on the
+    rest; otherwise they are drawn at random.
+
+    Per animal, recordings are moved to validation until ~``val_fraction`` of that
+    animal's **positive** windows is reached, so each animal contributes positives
+    to both sides where it can. An animal with a single recording cannot be split
+    and stays in train.
+    """
+    rng = random.Random(seed)
+    by_animal: dict[str, dict[str, list[WindowSpec]]] = {}
+    for s in specs:
+        aid = s.animal_id or f"{s.edf_path}:ch{s.eeg_channel}"
+        by_animal.setdefault(aid, {}).setdefault(s.edf_path, []).append(s)
+
+    train_specs: list[WindowSpec] = []
+    val_specs: list[WindowSpec] = []
+    n_unsplittable = 0
+
+    for aid, recs in sorted(by_animal.items()):
+        paths = list(recs)
+        if len(paths) < 2:
+            n_unsplittable += 1
+            train_specs.extend(recs[paths[0]])
+            continue
+        if temporal:
+            # Latest first, so the most recent recordings fill validation.
+            paths.sort(key=lambda p: (_rec_date(p), p), reverse=True)
+        else:
+            rng.shuffle(paths)
+
+        def _npos(p: str) -> int:
+            return sum(1 for s in recs[p] if s.is_positive)
+
+        total_pos = sum(_npos(p) for p in paths)
+        taken = 0
+        val_paths: set[str] = set()
+        for p in paths:
+            # Stop once this animal's val share is met; with no positives at all,
+            # fall back to window count so the animal still contributes to val.
+            if total_pos:
+                if taken / total_pos >= val_fraction:
+                    break
+            elif len(val_paths) >= max(1, int(round(len(paths) * val_fraction))):
+                break
+            val_paths.add(p)
+            taken += _npos(p)
+        if len(val_paths) == len(paths):       # never starve train
+            val_paths.discard(paths[-1])
+        for p in paths:
+            (val_specs if p in val_paths else train_specs).extend(recs[p])
+
+    if n_unsplittable:
+        print(f"  split_by_recording: {n_unsplittable} animals had a single recording "
+              f"and stayed in train")
+    return train_specs, val_specs
+
+
 def split_by_animal(
     specs: list[WindowSpec],
     val_fraction: float = 0.2,
@@ -887,9 +1000,14 @@ def build_datasets(
         raise ValueError("No training windows could be extracted. "
                          "Check that the dataset has confirmed annotations.")
 
-    train_specs, val_specs = split_by_animal(
-        specs, seed=config.seed,
-        stable_convulsive_val=config.stable_convulsive_val)
+    if config.val_mode in ("recording", "temporal"):
+        train_specs, val_specs = split_by_recording(
+            specs, seed=config.seed,
+            temporal=config.val_mode == "temporal")
+    else:
+        train_specs, val_specs = split_by_animal(
+            specs, seed=config.seed,
+            stable_convulsive_val=config.stable_convulsive_val)
 
     train_ds = SeizureDataset(train_specs, config, augment=config.augment)
     val_ds = SeizureDataset(val_specs, config, augment=False)
