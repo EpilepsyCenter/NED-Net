@@ -565,6 +565,57 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-09 — BATCH IS NOT THE UNIT: per-animal variability dominates
+prompted by: reviewer's observation that batches are an artefact of how many animals can be
+          recorded at once, not a scientific grouping — another lab might record all animals
+          together — so **animal comparisons are the more meaningful unit**.
+test:     frozen model (which trained on **none** of these animals), retained B1-B3,
+          convulsive ground truth, animals with >=5 events. `review/frozen_per_animal_B1B2B3.csv`
+
+| batch | animal | gt | caught | recall | det |
+|---|---|---|---|---|---|
+| B1 | 449381 | 14 | 4 | 29% | 34 |
+| B1 | 449385 | 10 | 1 | 10% | 792 |
+| B1 | 449387 | 5 | 0 | **0%** | 0 |
+| B1 | 449388 | 26 | 15 | **58%** | 31 |
+| B2 | 450096 | 11 | 4 | 36% | 295 |
+| B3 | 459657 | 12 | 1 | 8% | 148 |
+| B3 | 459658 | 50 | 0 | **0%** | **82** |
+| B3 | 459659 | 25 | 0 | **0%** | 177 |
+| B3 | 459661 | 7 | 0 | **0%** | 6 |
+| B3 | 459662 | 8 | 2 | 25% | 18 |
+| B3 | 459663 | 51 | 5 | 10% | 111 |
+
+RESULT — **within-batch spread exceeds between-batch spread**:
+          * within B1: **0% -> 58%**, a **58-point** range across 4 animals
+          * between batches (pooled): B1 36.4%, B2 36.4%, B3 5.2% — a **31-point** range
+          * per-animal: median **10%**, IQR 0-27%, range 0-58%, **4 of 11 animals at exactly 0%**
+consequence — **the "7.3x batch difficulty" framing is WITHDRAWN as a primary finding.**
+          B3's apparent difficulty is largely two animals: 459658 and 459663 carry **101 of
+          its 153 events** at 0% and 10%. Pooling by batch hides this.
+          The defensible finding is **per-animal variability**, which also supports the
+          paper's thesis better: performance depends on the individual implant — electrode
+          position, local signal character — and batches matter only because that is how
+          animals arrive. A lab recording all animals at once would see the same spread.
+a failure mode distinct from silence:
+          **459658 has 50 ground-truth seizures, fires 82 times, and catches none.** Same for
+          459659 (25 events, 177 detections, 0 hits). The detector is *active* on these
+          channels and systematically wrong about **where**. That is different from the
+          silent channels (449387: 5 events, 0 detections) and should be reported as a
+          separate category — "firing but mislocalised" vs "mute".
+implications for the experimental design:
+          1. **Report per-animal throughout.** Pooled batch numbers are misleading.
+          2. **A leave-one-BATCH-out fold confounds held-out-ness with which animals happen
+             to be in that batch.** The B1 fold proposed earlier inherits this flaw.
+             Prefer a **difficulty-stratified animal holdout** — one zero-recall, one mid,
+             one high — so the test set spans the range instead of sampling one end of it.
+          3. `split_by_animal` already splits by animal, so an animal-level fold is
+             consistent with how internal validation already works.
+          4. Budget is not the constraint: **1,778 of 25,000 GPU-h/month used**, so several
+             folds are affordable.
+caveat:   B2 contributes only one animal with >=5 events, so its pooled 36.4% rests on a
+          single implant. The between-batch comparison is weak on that side.
+
 ### 2026-10-09 — OUT-OF-SAMPLE RESULT: A3 on held-out Batch 3 — job 3825993
 run:      341 files, **1,850 events**, 0 errors, 3,619 s on lu48.
 scored:   retained channels, 153 convulsive ground-truth events in Batch 3.
