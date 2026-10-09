@@ -63,9 +63,11 @@ python scripts/lunarc/refresh_training_tree.py --dry-run --keep-mir-rejections 2
 # 3809460, 3801062. A3's original tree had Mir's rejections DELETED. The tree now keeps
 # them, so A3 needs HNX=mir_candidate to stay "no Mir negatives". BG_AVOID stays 0, as
 # in the original, where background could fall in those regions.
-# Wall time: fp32/batch 8 is untimed on the A100. The originals ran 0.05-0.09 s/window
-# per epoch at bf16. Sized for ~2x that over the full 50 epochs. Patience usually stops sooner,
-# and metadata.json is now written every epoch, so a timeout still leaves a usable model.
+# Wall time: every run so far took 0.05-0.09 s/window/epoch, the Mac (MPS, fp32, batch 8)
+# and the A100 (fp32 or bf16, batch 16-32) alike, so the loop is not GPU-bound and fp32
+# should cost little. Expected: A/A2 ~1,200 s/epoch, ~17 h for 50 epochs. The walls are
+# generous (a longer request does not lower priority here), and metadata.json is now
+# written every epoch, so a timeout still leaves a usable model.
 ARMS=(
 "temporal|ramgdnf_temporal_pr|$TREE|6|$RETAINED_EXCL|hard|100|1|mir_candidate|temporal|24:00:00"
 "all_prod|ramgdnf_all_prod_pr|$TREE|6|$RETAINED_EXCL|hard|100|1|mir_candidate|animal|36:00:00"
