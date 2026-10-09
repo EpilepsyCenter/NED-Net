@@ -171,6 +171,7 @@ def save_annotations(
     annotator: str = "",
     animal_id: str = "",
     filter_settings: dict | None = None,
+    detector_runs: list[dict] | None = None,
 ) -> Path:
     """Serialise annotations to a JSON file next to the EDF.
 
@@ -178,9 +179,15 @@ def save_annotations(
     directory and then renamed, so a crash mid-write cannot corrupt the
     output.
 
+    ``detector_runs`` records the Analysis-tab detector passes written into
+    this file; when None, any runs already in the file are carried over so a
+    save from the Annotation tab doesn't erase them.
+
     Returns the path of the written JSON file.
     """
     out_path = annotation_json_path(edf_path)
+    if detector_runs is None:
+        detector_runs = _read_detector_runs(out_path)
 
     payload = {
         "version": _ANNOTATION_FORMAT_VERSION,
@@ -193,6 +200,8 @@ def save_annotations(
     }
     if filter_settings:
         payload["filter_settings"] = _sanitize(filter_settings)
+    if detector_runs:
+        payload["detector_runs"] = _sanitize(detector_runs)
 
     # Atomic write: write to temp then rename
     dir_name = str(out_path.parent)
@@ -212,6 +221,16 @@ def save_annotations(
         raise
 
     return out_path
+
+
+def _read_detector_runs(json_path: Path) -> list[dict]:
+    if not json_path.is_file():
+        return []
+    try:
+        with open(json_path, "r") as fp:
+            return list(json.load(fp).get("detector_runs") or [])
+    except (OSError, ValueError):
+        return []
 
 
 def load_annotations(edf_path: str) -> list[AnnotatedEvent] | None:
@@ -309,6 +328,7 @@ def merge_annotations(
     existing: list[AnnotatedEvent],
     new_from_detector: list[AnnotatedEvent],
     tolerance_sec: float = 1.0,
+    replace_methods: set[str] | None = None,
 ) -> list[AnnotatedEvent]:
     """Merge existing annotations with new detector-produced annotations.
 
@@ -320,6 +340,10 @@ def merge_annotations(
     * Existing annotations with no matching new detection are kept but
       flagged by appending ``"[orphaned]"`` to their notes (unless
       already flagged).
+    * Unreviewed (``pending``) existing events with no match are dropped, so
+      re-running replaces stale candidates. With *replace_methods* set, only
+      pending events whose ``features.detection_method`` is in it are
+      dropped; other methods' pending candidates are kept untouched.
     """
     merged: list[AnnotatedEvent] = []
     matched_new_indices: set[int] = set()
@@ -349,6 +373,13 @@ def merge_annotations(
                 or bool(ex.annotator)
             )
             if not human_reviewed:
+                ex_method = (ex.features or {}).get("detection_method", "")
+                if replace_methods is not None and ex_method not in replace_methods:
+                    merged.append(ex)  # another method's candidate — leave it
+                continue
+            # A manual event was never detector output — keep it unflagged.
+            if ex.source == "manual":
+                merged.append(ex)
                 continue
             # Orphaned human-reviewed event — keep, flag in notes.
             orphan = AnnotatedEvent(
@@ -372,6 +403,7 @@ def merge_annotations(
                     else (ex.notes + " [orphaned]").strip()
                 ),
                 annotated_at=ex.annotated_at,
+                event_id=ex.event_id,
             )
             merged.append(orphan)
 
@@ -383,6 +415,66 @@ def merge_annotations(
     # Sort by onset time for consistency
     merged.sort(key=lambda e: (e.channel, e.onset_sec))
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Analysis-tab detector output -> sidecar (for review, then training)
+# ---------------------------------------------------------------------------
+
+ML_DETECTION_METHODS = {"ml_unet", "ml_bendr"}
+
+
+def sidecar_has_detector_run(edf_path: str) -> bool:
+    """True if an Analysis-tab detector pass was already written to this
+    file's annotation sidecar (even one that found no events)."""
+    return bool(_read_detector_runs(annotation_json_path(edf_path)))
+
+
+def write_detections_to_sidecar(
+    edf_path: str,
+    events: list[DetectedEvent],
+    channel_ids: dict[int, str] | None = None,
+    run_info: dict | None = None,
+) -> dict:
+    """Merge model detections into the EDF's ``_ned_annotations.json``.
+
+    New events go in as ``pending`` detector candidates — they only become
+    training labels once confirmed/rejected in the Annotation tab. Human-
+    reviewed events are never changed (see ``merge_annotations``); stale
+    pending ML candidates from earlier runs are replaced, and pending
+    candidates from other (classical) detectors are left alone.
+
+    Returns counts: n_new (pending added), n_matched (already annotated),
+    n_total (events in the sidecar after the merge).
+    """
+    channel_ids = channel_ids or {}
+    new = detections_to_annotations(events, str(edf_path))
+    for a in new:
+        a.animal_id = a.animal_id or channel_ids.get(a.channel, "")
+        a.event_id = 0  # assigned below, after the merge
+
+    json_path = annotation_json_path(edf_path)
+    existing = load_annotations(edf_path) or []
+    runs = _read_detector_runs(json_path)
+
+    merged = merge_annotations(existing, new, tolerance_sec=1.0,
+                               replace_methods=ML_DETECTION_METHODS)
+    next_id = max((a.event_id for a in merged), default=0) + 1
+    for a in merged:
+        if a.event_id <= 0:
+            a.event_id = next_id
+            next_id += 1
+
+    n_new = sum(1 for a in merged if any(a is n for n in new))
+    runs.append({
+        **(run_info or {}),
+        "run_at": datetime.now(timezone.utc).isoformat(),
+        "n_detections": len(new),
+        "n_new_pending": n_new,
+    })
+    save_annotations(str(edf_path), merged, detector_runs=runs)
+    return {"n_new": n_new, "n_matched": len(new) - n_new,
+            "n_total": len(merged)}
 
 
 # ---------------------------------------------------------------------------

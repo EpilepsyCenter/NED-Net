@@ -4,7 +4,8 @@ All three modes (single, batch, live) call ``process_chunk()`` which:
   1. Loads the EDF file
   2. Runs CNN sliding-window detection via the existing ``predict_seizures()``
   3. Classifies events (convulsive/non-convulsive, HVSW/HPD subtypes)
-  4. Writes results to SQLite via ``db`` module
+  4. Writes results to SQLite via ``db`` module and/or merges them into the
+     per-EDF annotation sidecars as pending events (``output``)
 
 No CNN logic is reimplemented here — we only wrap ``ml.predict.predict_seizures``.
 """
@@ -29,8 +30,38 @@ from eeg_seizure_analyzer.io.edf_reader import (
     read_edf_window,
 )
 from eeg_seizure_analyzer.io.channel_ids import load_channel_ids, load_channel_tags
+from eeg_seizure_analyzer.io.annotation_store import (
+    sidecar_has_detector_run, write_detections_to_sidecar,
+)
 from eeg_seizure_analyzer.ml.predict import predict_seizures
 from eeg_seizure_analyzer.ml.train import list_models
+
+
+# Where seizure detections go: the project DB (Results / statistics), the
+# per-EDF ``_ned_annotations.json`` sidecars (pending events to review in the
+# Annotation tab — reviewed ones become training labels), or both.
+OUTPUT_TARGETS = ("db", "sidecar", "both")
+
+
+def _writes_db(output: str) -> bool:
+    return output in ("db", "both")
+
+
+def _writes_sidecar(output: str) -> bool:
+    return output in ("sidecar", "both")
+
+
+def is_processed(edf_path: str, output: str = "db",
+                 processed_paths: set[str] | None = None) -> bool:
+    """True when every target in *output* already holds this file."""
+    if _writes_db(output):
+        if processed_paths is None:
+            processed_paths = db.get_processed_paths()
+        if str(edf_path) not in processed_paths:
+            return False
+    if _writes_sidecar(output) and not sidecar_has_detector_run(edf_path):
+        return False
+    return True
 
 
 def _arch_source(detection_method: str | None, kind: str) -> str:
@@ -332,11 +363,12 @@ def process_chunk(
     convulsive_model_name: str | None = None,
     boundary_threshold: float | None = None,
     reranker_model: str | None = None,
+    output: str = "db",
 ) -> dict:
     """Master detection function shared by all three analysis modes.
 
-    Loads EDF, runs CNN detection, classifies events, writes to SQLite.
-    Does not know or care how the file arrived.
+    Loads EDF, runs CNN detection, classifies events, writes to SQLite
+    and/or the annotation sidecar. Does not know or care how the file arrived.
 
     Parameters
     ----------
@@ -363,6 +395,9 @@ def process_chunk(
     file_metadata : dict, optional
         From batch_metadata Excel: {cohort, group_id, channel_ids}.
         Overrides cohort/group_id params and supplements channel IDs.
+    output : str
+        'db' (project database), 'sidecar' (merge into
+        ``<edf>_ned_annotations.json`` as pending events), or 'both'.
 
     Returns
     -------
@@ -377,9 +412,14 @@ def process_chunk(
         cohort = file_metadata.get("cohort", "") or cohort
         group_id = file_metadata.get("group_id", "") or group_id
 
+    if output not in OUTPUT_TARGETS:
+        raise ValueError(f"output must be one of {OUTPUT_TARGETS}, got {output!r}")
+    write_db = _writes_db(output)
+
     # Skip if already processed (unless overwriting — write_chunk then deletes
-    # and replaces the existing chunk + its events).
-    if not overwrite and str(edf_path) in db.get_processed_paths():
+    # and replaces the existing chunk + its events; the sidecar merge replaces
+    # stale pending ML events and keeps every human label).
+    if not overwrite and is_processed(edf_path, output):
         return {"skipped": True, "reason": "already_processed"}
 
     # Get channel info
@@ -412,24 +452,27 @@ def process_chunk(
         for _k, _v in (file_metadata.get("channel_group") or {}).items():
             ch_group.setdefault(int(_k), _v)
 
-    # Write chunk record
-    chunk_id = db.write_chunk(edf_path, {
-        "cohort": cohort,
-        "group_id": group_id,
-        "date": parse_date_from_path(edf_path),
-        "chunk_start_sec": 0,
-        "chunk_end_sec": rec_duration,
-        "processed_at": datetime.now(timezone.utc).isoformat(),
-        "status": "ok",
-    }, mode)
+    chunk_id = None
+    if write_db:
+        # Write chunk record
+        chunk_id = db.write_chunk(edf_path, {
+            "cohort": cohort,
+            "group_id": group_id,
+            "date": parse_date_from_path(edf_path),
+            "chunk_start_sec": 0,
+            "chunk_end_sec": rec_duration,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "status": "ok",
+        }, mode)
 
-    # Record which animals were recorded in this file (independent of events)
-    # so per-animal recording time / coverage is exact even for quiet animals.
-    db.write_file_animals(
-        chunk_id,
-        _build_file_animals(eeg_idx, ch_ids, ch_cohort, ch_group,
-                            rec_duration, cohort, group_id),
-    )
+        # Record which animals were recorded in this file (independent of
+        # events) so per-animal recording time / coverage is exact even for
+        # quiet animals.
+        db.write_file_animals(
+            chunk_id,
+            _build_file_animals(eeg_idx, ch_ids, ch_cohort, ch_group,
+                                rec_duration, cohort, group_id),
+        )
 
     try:
         # Run CNN detection (wraps existing predict_seizures)
@@ -506,27 +549,42 @@ def process_chunk(
                 "channel": ev.channel,
             })
 
-        db.write_events(chunk_id, event_dicts, source="seizure_cnn")
+        if write_db:
+            db.write_events(chunk_id, event_dicts, source="seizure_cnn")
 
-        # Write per-animal summaries
-        for animal_id, animal_events in events_by_animal.items():
-            n_conv = sum(
-                1 for e in animal_events
-                if (e.features or {}).get("seizure_subtype") == "convulsive"
+            # Write per-animal summaries
+            for animal_id, animal_events in events_by_animal.items():
+                n_conv = sum(
+                    1 for e in animal_events
+                    if (e.features or {}).get("seizure_subtype") == "convulsive"
+                )
+                n_nonconv = len(animal_events) - n_conv
+                n_flagged = sum(1 for e in animal_events if e.movement_flag)
+                total_dur = sum(e.duration_sec for e in animal_events)
+
+                db.write_summary(chunk_id, animal_id or "", {
+                    "n_convulsive": n_conv,
+                    "n_nonconvulsive": n_nonconv,
+                    "n_flagged": n_flagged,
+                    "total_duration_sec": total_dur,
+                })
+
+        sidecar = None
+        if _writes_sidecar(output):
+            sidecar = write_detections_to_sidecar(
+                edf_path, events, channel_ids=ch_ids,
+                run_info={
+                    "model": model_name,
+                    "convulsive_model": convulsive_model_name or "",
+                    "threshold": confidence_threshold,
+                    "boundary_threshold": boundary_threshold,
+                    "mode": mode,
+                },
             )
-            n_nonconv = len(animal_events) - n_conv
-            n_flagged = sum(1 for e in animal_events if e.movement_flag)
-            total_dur = sum(e.duration_sec for e in animal_events)
-
-            db.write_summary(chunk_id, animal_id or "", {
-                "n_convulsive": n_conv,
-                "n_nonconvulsive": n_nonconv,
-                "n_flagged": n_flagged,
-                "total_duration_sec": total_dur,
-            })
 
         processing_sec = time.time() - t_start
-        db.update_chunk_timing(chunk_id, processing_sec)
+        if write_db:
+            db.update_chunk_timing(chunk_id, processing_sec)
 
         # Build summary
         n_conv = sum(1 for d in event_dicts if d["type"] == "convulsive")
@@ -544,10 +602,12 @@ def process_chunk(
             "n_hpd": n_hpd,
             "n_flagged": sum(1 for d in event_dicts if d["movement_flag"]),
             "processing_sec": round(processing_sec, 1),
+            "sidecar": sidecar,
         }
 
     except Exception as e:
-        db.mark_chunk_error(chunk_id, str(e))
+        if chunk_id is not None:
+            db.mark_chunk_error(chunk_id, str(e))
         raise
 
 
@@ -911,6 +971,7 @@ def _get_file_start_hour(edf_path: str) -> int | None:
 def scan_folder(
     folder: str,
     include_subfolders: bool = True,
+    output: str = "db",
 ) -> dict:
     """Scan a folder for EDF files and check which are already processed.
 
@@ -929,8 +990,8 @@ def scan_folder(
         str(p) for p in folder_path.glob(pattern) if p.is_file()
     )
 
-    processed = db.get_processed_paths()
-    already = sum(1 for f in edf_files if str(f) in processed)
+    processed = db.get_processed_paths() if _writes_db(output) else set()
+    already = sum(1 for f in edf_files if is_processed(f, output, processed))
 
     return {
         "total": len(edf_files),
@@ -956,6 +1017,7 @@ def run_batch(
     detection_type: str = "seizure",
     convulsive_model_name: str | None = None,
     boundary_threshold: float | None = None,
+    output: str = "db",
 ):
     """Run batch analysis in the current thread.
 
@@ -977,12 +1039,15 @@ def run_batch(
         except Exception:
             pass
 
+    # Spike detection has no sidecar path — it always writes to the DB.
+    if detection_type == "spike":
+        output = "db"
     scan = scan_folder(folder, include_subfolders)
     files = scan["files"]
     processed_paths = db.get_processed_paths()
     # When overwriting, re-run every file; otherwise skip already-processed ones.
     to_process = files if overwrite else [
-        f for f in files if str(f) not in processed_paths]
+        f for f in files if not is_processed(f, output, processed_paths)]
 
     _update_status(
         running=True,
@@ -1061,6 +1126,7 @@ def run_batch(
                     file_metadata=file_meta,
                     overwrite=overwrite,
                     convulsive_model_name=convulsive_model_name,
+                    output=output,
                 )
         except Exception as e:
             _update_status(last_error=f"{Path(edf_path).name}: {e}")
@@ -1101,6 +1167,7 @@ def start_live_monitoring(
     live_template: dict | None = None,
     convulsive_model_name: str | None = None,
     boundary_threshold: float | None = None,
+    output: str = "db",
 ):
     """Start live monitoring in a background thread.
 
@@ -1123,6 +1190,7 @@ def start_live_monitoring(
             min_duration_sec, merge_gap_sec, wait_sec,
             process_backlog, cohort, group_id, classification_params,
             live_template, convulsive_model_name, boundary_threshold,
+            output,
         ),
         daemon=True,
     )
@@ -1145,6 +1213,7 @@ def _live_monitor_worker(
     min_duration_sec, merge_gap_sec, wait_sec,
     process_backlog, cohort, group_id, classification_params,
     live_template=None, convulsive_model_name=None, boundary_threshold=None,
+    output="db",
 ):
     """Background thread for live monitoring."""
     _update_status(
@@ -1161,7 +1230,8 @@ def _live_monitor_worker(
         _update_status(current_file="Processing backlog...")
         scan = scan_folder(watch_folder, include_subfolders=True)
         processed_paths = db.get_processed_paths()
-        backlog = [f for f in scan["files"] if str(f) not in processed_paths]
+        backlog = [f for f in scan["files"]
+                   if not is_processed(f, output, processed_paths)]
 
         for edf_path in backlog:
             if _live_stop_event.is_set():
@@ -1184,6 +1254,7 @@ def _live_monitor_worker(
                     classification_params=classification_params,
                     file_metadata=live_template,
                     convulsive_model_name=convulsive_model_name,
+                    output=output,
                 )
                 with _status_lock:
                     _analysis_status["processed_files"] += 1
@@ -1235,6 +1306,7 @@ def _live_monitor_worker(
                     classification_params=classification_params,
                     file_metadata=live_template,
                     convulsive_model_name=convulsive_model_name,
+                    output=output,
                 )
                 with _status_lock:
                     _analysis_status["processed_files"] += 1
