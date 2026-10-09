@@ -701,6 +701,55 @@ implications for the experimental design:
 caveat:   B2 contributes only one animal with >=5 events, so its pooled 36.4% rests on a
           single implant. The between-batch comparison is weak on that side.
 
+### 2026-10-09 — Stage 2, temporal split + rejected negatives — job 3831663 (DONE)
+script:   `scripts/lunarc/train_convulsive.sh` @ `dcc7b46`
+config:   `EDF_DIR=~/train_nomirneg`, `MODEL_NAME=conv_temporal`, **`VAL_MODE=temporal`**,
+          `CONV_NEG_FROM_REJECTED=1`, `CONV_NEG_POS_RATIO=5`, `MAX_POSITIVE_SEC=100`,
+          `CONV_LABEL_METHODS=` (blank — the provenance concern was corrected to 0.7%,
+          immaterial), exclude 355676 only (no batch held out: the temporal split holds out
+          each animal's later recordings instead)
+dataset:  `convulsive negatives: 723 convulsive positives, 766 non-convulsive seizures,
+          2849 rejected events kept (cap 5.0:1)`; train 550 convulsive / 2,405
+          non-convulsive; **pos_weight 4.37** (was 0.85 without rejected negatives);
+          val convulsive windows 173 = **24%** of 723, matching the designed temporal share
+result:   **Best convulsive F1 0.6040 @ threshold 0.75, best epoch 4 of 30.**
+          723 positives vs `conv_rejneg_holdB3`'s 571 because Batch 3 is no longer excluded.
+not comparable to earlier Stage-2 F1 figures:
+          `conv_armA_holdB3` scored 0.659 and `conv_rejneg_holdB3` 0.5628, but all three
+          answer different questions — adding rejected negatives changed the task from
+          "given a seizure, is it convulsive?" to "is this a convulsive seizure at all?",
+          and the split changed from by-animal to temporal. **Do not read 0.604 as a
+          regression.**
+flag:     **best epoch 4 of 30** — it converged almost immediately on 2,955 training
+          windows, which suggests an easy decision boundary. Whether it is the right one is
+          exactly what the threshold sweep on real output tests.
+THE TEST THIS EXISTS FOR (still pending):
+          re-detect B1+B2 with `CONV_MODEL=conv_temporal`, then `conv_threshold_sweep.py`.
+          The symptom was precision **flat at 11%** across 0.10-0.45 with the old
+          classifier. A **rising** curve means the missing negatives were the cause; still
+          flat means they were not, and Stage 2 is written up as a limitation.
+
+### 2026-10-09 — Job 3831584 cancelled; queue notes
+          `ramgdnf_all_prod` (animal split) **cancelled while pending**, to free its earlier
+          queue slot for `3831662` (`ramgdnf_temporal`) — which moved from an estimated
+          2026-10-12 17:01 start to 2026-10-10 14:57. `all_prod` produces no reportable
+          number under the settled in-sample scope (it is the final no-holdout production
+          model) and can be retrained at any time.
+queue diagnosis, so it is not repeated:
+          `sprio` on gpua100 showed QOS 60000 + FAIRSHARE 5534 dominating, with only AGE
+          differing between our jobs; cutting two pending jobs from 24 h to 14 h moved
+          **neither** start estimate. **Wall clock is not a priority lever here.** The
+          partition has 6 nodes (1 down), and the five higher-priority jobs ahead were
+          blocked on `AssocGrpGRES` — those users at their concurrent-GPU limit, one with a
+          4-day job 16 h in. Waiting is node contention. Budget is not the constraint:
+          1,778 of 25,000 GPU-h used this month.
+training-restart facts (checked in code, 2026-10-09):
+          `best_model.pt` **is** written during training whenever validation improves
+          (`train.py:666`), so a wall-clock kill leaves a usable model — but **there is no
+          resume**: no optimizer or scheduler state is saved and nothing loads a checkpoint
+          to continue, so a resubmitted job restarts from epoch 1. Chaining short jobs to
+          fit backfill windows would require adding that.
+
 ### 2026-10-09 — OUT-OF-SAMPLE RESULT: A3 on held-out Batch 3 — job 3825993
 run:      341 files, **1,850 events**, 0 errors, 3,619 s on lu48.
 scored:   retained channels, 153 convulsive ground-truth events in Batch 3.

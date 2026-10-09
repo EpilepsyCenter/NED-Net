@@ -137,6 +137,13 @@ the Batch-3 holdout.
 |---|---|---|---|---|
 | `Convulsive_v4LUNARC_20260616` | SV2A only | — | 0.885 (on SV2A) | 0.45 |
 | `conv_armA_holdB3` | SV2A + RAM_GDNF | 451 convulsive / 383 non-convulsive | **0.659** | **0.55** |
+| `conv_rejneg_holdB3` | + rejected events as negatives, hold out B3 | 451 / 383 (flags ignored — ran pre-pull) | 0.5628 | 0.85 |
+| **`conv_temporal`** | + rejected negatives, **temporal split**, no batch held out | **723 convulsive / 3,171 non-convulsive** (766 seizures + 2,849 rejected) | **0.6040** | **0.75** |
+
+**The three Stage-2 F1 figures above are NOT comparable with each other.** Adding
+rejected negatives changed the task from "given a seizure, is it convulsive?" to "is this a
+convulsive seizure at all?", and `conv_temporal` also changed the split from by-animal to
+temporal. Compare them only on a common test set, through the threshold sweep.
 
 The frozen Stage 2 labelled only **7 of 153** of Mir's Batch-3 convulsive seizures as
 convulsive (4.6%) — not because of bad negatives, but because it had never seen a RAM_GDNF

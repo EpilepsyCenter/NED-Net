@@ -22,13 +22,49 @@ So:
 * Stop restating "but this is in-sample" as a caveat on every number. State the scope once,
   in Methods, and report the numbers.
 
-## Running (2026-10-09)
+## STATE AS OF 2026-10-09 18:00 — start here tomorrow
 
-| job | what | where | read it with |
-|---|---|---|---|
-| **3825989** | `ramgdnf_all_prod` — U-Net on ALL retained batches, no hold-out | gpua100 | `grep -E "Best event_f1|background sampling" logs/unet_train_3825989.out` |
-| **3825993** | A3 on **held-out Batch 3** at thr 0.9 / bnd 0.5 | lu48 | `operating_point_table.py --batches 3` |
-| **3825994** | `conv_rejneg_holdB3` — Stage 2 **with rejected negatives** | gpua100 | `grep "convulsive negatives" logs/conv_train_3825994.out` |
+**One job outstanding: `3831662` (`ramgdnf_temporal`), PENDING on gpua100, 14 h limit.**
+Estimated start 2026-10-10 ~14:57. Everything else today is finished or cancelled.
+
+```bash
+squeue -u $USER                                    # is 3831662 running / done?
+grep -E "Best event_f1|background sampling|Split mode|train:|val:" \
+     logs/unet_train_3831662.out
+```
+
+| job | what | status |
+|---|---|---|
+| **3831662** | `ramgdnf_temporal` — U-Net, **temporal split**, ratio 6, cap 100 s | **PENDING — the one to read** |
+| 3831663 | `conv_temporal` — Stage 2, temporal split, rejected negatives | **done**, F1 0.604 @ 0.75 |
+| 3831584 | `ramgdnf_all_prod` (animal split) | **cancelled** to free its queue slot for 3831662 |
+| 3825993 | A3 on held-out Batch 3 | done, scored (see RUN_LOG 2026-10-09) |
+| 3825989 | `ramgdnf_all_prod`, first attempt | **TIMED OUT** at 6 h, epoch 18/50 |
+| 3825994 | `conv_rejneg_holdB3`, first attempt | ran **pre-pull**, flags ignored — superseded by 3831663 |
+
+### When 3831662 lands, in order
+
+1. **Operating-point sweep** for `ramgdnf_temporal` on B1-B3 — four lu48 jobs. **Do not
+   inherit 0.9/0.5**; it is a different stage 1.
+2. **Detect** at the winning point with `CONV_MODEL=conv_temporal` over B1-B3.
+3. **`conv_threshold_sweep.py`** — the stage-2 verdict. Precision was **flat at 11%** across
+   every threshold with the old classifier. Rising = the rejected-negatives fix worked;
+   still flat = write stage 2 up as a limitation.
+4. **`draw_precision_sample.py --seed <n>`** — record the seed in `RUN_LOG.md` **before**
+   opening any event, review every one, then `score_precision_sample.py`. This is the
+   paper's last substantive gap.
+
+### Facts about training that are easy to re-discover the hard way
+
+* **`best_model.pt` is written during training**, every time validation improves
+  (`train.py:666`) — so a wall-clock kill still leaves a usable model.
+* **There is NO resume.** No optimizer or scheduler state is saved and nothing loads a
+  checkpoint to continue; a resubmitted job restarts from epoch 1. Chaining short jobs
+  would need a code change.
+* **Wall clock is not a queueing lever** here — see the note in `train_unet.sh`'s header.
+* Unverified: whether `~/.eeg_seizure_analyzer/models/ramgdnf_all_prod/best_model.pt`
+  survived 3825989's timeout. Worth one `ls` — it would be the epoch-18 model at
+  `event_f1` 0.468.
 
 ## The story, as it now stands
 
