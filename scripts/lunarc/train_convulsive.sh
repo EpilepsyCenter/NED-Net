@@ -63,6 +63,8 @@
 #   Non-convulsive SEIZURES are kept in full; rejected events fill the rest, so the
 #   convulsive-vs-non-convulsive-seizure boundary is not swamped by easy noise.
 : "${MAX_POSITIVE_SEC:=0}"     # 0 = no cap; 100 drops Mir's chained blocks.
+: "${VAL_MODE:=animal}"    # animal | recording | temporal — **match the Stage-1 run**,
+#   or the cascade's two stages are validated on different questions. See train_unet.sh.
 : "${WALL_TIME:=06:00:00}"     # passed to sbatch as -t, overriding the directive above.
 
 # ============================================================
@@ -85,15 +87,16 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask CONV_NEG_METHODS        "Restrict those to detection_methods (blank = all)"
     ask CONV_NEG_POS_RATIO      "Total negatives per convulsive positive"
     ask MAX_POSITIVE_SEC        "Max positive duration in s (0 = no cap)"
+    ask VAL_MODE                "Split mode (animal | recording | temporal)"
     echo "-------------------------------------------------------------"
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
     echo "            neg_from_rejected=$CONV_NEG_FROM_REJECTED methods=${CONV_NEG_METHODS:-all}"
     echo "            neg/pos cap=$CONV_NEG_POS_RATIO max_positive_sec=$MAX_POSITIVE_SEC"
-    echo "            wall time=$WALL_TIME"
+    echo "            wall time=$WALL_TIME val_mode=$VAL_MODE"
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS EDF_DIR \
            CONV_NEG_FROM_REJECTED CONV_NEG_METHODS CONV_NEG_POS_RATIO MAX_POSITIVE_SEC \
-           WALL_TIME
+           WALL_TIME VAL_MODE
     sbatch --export=ALL -t "$WALL_TIME" "$0"
     exit $?
 fi
@@ -109,6 +112,7 @@ echo "Settings:    model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
 echo "             patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
 echo "             neg_from_rejected=$CONV_NEG_FROM_REJECTED methods=${CONV_NEG_METHODS:-all}"
 echo "             neg/pos cap=$CONV_NEG_POS_RATIO max_positive_sec=$MAX_POSITIVE_SEC"
+echo "             val_mode=$VAL_MODE"
 echo "Data dir:    $EDF_DIR"
 echo "========================================="
 
@@ -149,6 +153,7 @@ python -m eeg_seizure_analyzer.ml.train_convulsive \
     "${NEG_ARG[@]}" \
     --conv-neg-pos-ratio "$CONV_NEG_POS_RATIO" \
     --max-positive-sec "$MAX_POSITIVE_SEC" \
+    --val-mode "$VAL_MODE" \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \
     --lr "$LR" \
