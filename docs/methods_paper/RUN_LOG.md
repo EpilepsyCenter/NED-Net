@@ -565,6 +565,86 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-09 — OUT-OF-SAMPLE RESULT: A3 on held-out Batch 3 — job 3825993
+run:      341 files, **1,850 events**, 0 errors, 3,619 s on lu48.
+scored:   retained channels, 153 convulsive ground-truth events in Batch 3.
+          Frozen is at its production point (0.5 / 0.1), A3 at its validated point
+          (0.9 / 0.5) — **each at its own operating point, not a matched one**; state that.
+
+| | det | recall | fired on | med IoU | med dur |
+|---|---|---|---|---|---|
+| frozen, Stage 1 | 559 | **5.2%** | 58% | 0.40 | 9 s |
+| **A3, Stage 1** | 1,850 | **8.5%** | **90%** | 0.39 | 11 s |
+| frozen, cascade | 253 | **2.6%** | 31% | 0.49 | 8 s |
+| **A3, cascade** | 1,726 | **7.8%** | **88%** | 0.39 | 10 s |
+
+retraining DOES beat frozen out-of-sample, modestly:
+          **1.6x** on Stage 1 (5.2 -> 8.5%), **3x** on the cascade (2.6 -> 7.8%), and
+          coverage 58 -> 90%. But **absolute recall stays under 10%**.
+the boundary improvement does NOT transfer:
+          median IoU 0.36 -> 0.60 in-sample; **0.40 -> 0.39** here. So the better event
+          delineation seen on B1+B2 was fitted, not learned. Report it as an in-sample
+          property only.
+**THE CENTRAL NUMBER OF THE PAPER:**
+
+| | in-sample (B1+B2) | out-of-sample (B3) |
+|---|---|---|
+| frozen | 38.2% | 5.2% |
+| A3 retrained | **50.0%** | **8.5%** |
+
+          Annotating a batch gets you ~50%; inheriting a model trained on *other* batches
+          of the same cohort, in the same lab, on the same rig gets you ~8.5%. **The
+          in-sample/out-of-sample gap is far larger than the gain from retraining itself**,
+          and that gap is the argument for retraining on every new batch. This is the
+          inconvenient version of the thesis and it is the defensible one.
+CONFOUND that must be stated separately:
+          the same model at the same operating point scores 50.0% on B1+B2 and 8.5% on B3,
+          and the **frozen** model shows the same ~7x spread (38.2% vs 5.2%). So **B3 is
+          intrinsically harder**, and the in-sample/out-of-sample gap cannot be attributed
+          wholly to held-out-ness. A LOCO fold holding out B1 or B2 instead would separate
+          the two; until then the gap is an upper bound on the transfer penalty.
+Stage-2 sweep on B3 (free, post-hoc): precision **flat at 4%** across 0.10-0.45, same
+          pathology as B1+B2 — consistent with the missing-negatives diagnosis.
+
+### 2026-10-09 — Job 3825989 TIMED OUT; 3825994 ran stale code
+3825989 (`ramgdnf_all_prod`):
+          **TIMEOUT at 06:00:21**, killed at epoch 18 of 50 with `event_f1` **still rising**
+          (0.425 ep7 -> 0.428 ep13 -> **0.468** ep18; A3's best was 0.485). At
+          **1,165 s/epoch** 50 epochs is ~16 h.
+          Wall clock raised to **24 h** and made overridable via `WALL_TIME` (the self-submit
+          now passes `-t`, which beats the `#SBATCH` directive). Same for
+          `train_convulsive.sh` (2 h -> 6 h).
+          `background sampling: dropped 1 of 11999 draws` — Mir's rejected regions barely
+          constrain the sampling, so the effective ratio held.
+why it was so slow — a split pathology worth knowing:
+          the split came out **7,870 train / 6,935 val = 47% in validation**, not 20%.
+          `split_by_animal` balances the convulsive stratum by **convulsive-window count**
+          (`_n_conv`, `dataset.py:838`) while `stable_convulsive_val` fills it
+          smallest-first — so an animal with 1 convulsive window but hundreds of
+          *background* windows counts as "small", is picked early, and drags all its
+          background into val. 18 animals carried 6,935 windows.
+          **Deliberately NOT fixed**: arms A/A2/A3 used this behaviour, and changing val
+          composition would invalidate the `best_event_f1` 0.485 reference. Fix the cost
+          instead, via the ratio (below).
+`NEG_POS_RATIO` lowered 10 -> 6 for the rerun:
+          10 made sense when the hard-negative pool capped the effective ratio at 6.2 (arm
+          A). With background top-up, 10 means literally 10 — 13,460 negatives, 14,805
+          windows. **6 matches arm A's effective ratio and roughly halves the compute**
+          (~9,400 windows, ~740 s/epoch, ~10 h for 50 epochs). Better comparability and
+          cheaper.
+3825994 (`conv_rejneg_holdB3`): **ran the pre-pull script.** `Train: 451 convulsive / 383
+          non-convulsive` is identical to `conv_armA_holdB3`, there is no
+          `convulsive negatives:` line, and `MAX_POSITIVE_SEC=100` did not drop B1's 11
+          over-100 s events (451 would have become 440). The old script accepts the new env
+          vars silently and trains the old way, so it produced a plausible model
+          (`Best convulsive F1 0.6745 @ 0.60`) rather than an error. **Discard it and
+          resubmit after `git pull`.**
+LESSON (third silent-config failure in two days, after the stale tree and the bare `read`):
+          **`git pull` on LUNARC is part of the submission, not a precondition to assume.**
+          The scripts take env vars they may not understand yet. Always confirm the
+          submission summary line shows the new settings — here it would have shown
+          `neg_from_rejected=` only after the pull.
+
 ### 2026-10-08 — Stage 2 retrained WITH rejected negatives — job 3825994
 script:   `scripts/lunarc/train_convulsive.sh` @ `d04001a`
 config:   `EDF_DIR=~/train_nomirneg`, `MODEL_NAME=conv_rejneg_holdB3`,

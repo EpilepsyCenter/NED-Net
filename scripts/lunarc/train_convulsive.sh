@@ -26,9 +26,11 @@
 # ============================================================
 
 #SBATCH -p gpua100
-#SBATCH -t 02:00:00
-# 2 h, not 30 min: the model is small but with SV2A + RAM_GDNF the dataset scan
-# and window extraction dominate, and 1,216 annotated EDFs is 7x the original.
+#SBATCH -t 06:00:00
+# 6 h, overridable with WALL_TIME. The model is tiny but the dataset scan and
+# window extraction dominate, and --conv-neg-from-rejected adds thousands of
+# windows on top. Compare job 3825989 on the detector side, which needed 24 h
+# once its window count reached ~15k.
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH -J conv_train
@@ -61,6 +63,7 @@
 #   Non-convulsive SEIZURES are kept in full; rejected events fill the rest, so the
 #   convulsive-vs-non-convulsive-seizure boundary is not swamped by easy noise.
 : "${MAX_POSITIVE_SEC:=0}"     # 0 = no cap; 100 drops Mir's chained blocks.
+: "${WALL_TIME:=06:00:00}"     # passed to sbatch as -t, overriding the directive above.
 
 # ============================================================
 # Phase 1: not under SLURM -> prompt, then submit this script.
@@ -87,9 +90,11 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
     echo "            neg_from_rejected=$CONV_NEG_FROM_REJECTED methods=${CONV_NEG_METHODS:-all}"
     echo "            neg/pos cap=$CONV_NEG_POS_RATIO max_positive_sec=$MAX_POSITIVE_SEC"
+    echo "            wall time=$WALL_TIME"
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS EDF_DIR \
-           CONV_NEG_FROM_REJECTED CONV_NEG_METHODS CONV_NEG_POS_RATIO MAX_POSITIVE_SEC
-    sbatch --export=ALL "$0"
+           CONV_NEG_FROM_REJECTED CONV_NEG_METHODS CONV_NEG_POS_RATIO MAX_POSITIVE_SEC \
+           WALL_TIME
+    sbatch --export=ALL -t "$WALL_TIME" "$0"
     exit $?
 fi
 

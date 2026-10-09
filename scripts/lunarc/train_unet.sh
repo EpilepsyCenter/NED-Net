@@ -25,11 +25,15 @@
 # ============================================================
 
 #SBATCH -p gpua100
-#SBATCH -t 06:00:00
-# 06:00 not 02:00 — at ~226 s/epoch (observed, job 3795251 on the RAM_GDNF-only
-# arm) 50 epochs is >3 h, and the SV2A+RAM_GDNF arm has more data so its epochs
-# are slower. Patience normally stops well short of this; the ceiling only
-# matters in the good case where val_loss keeps improving.
+#SBATCH -t 24:00:00
+# 24 h, overridable with WALL_TIME (the self-submit passes -t, which beats this
+# directive). History: 02:00 was too short, then 06:00 was too short — job
+# 3825989 (`ramgdnf_all_prod`, 14,805 windows) ran **1,165 s/epoch** and was
+# killed by the time limit at epoch 18 of 50 with event_f1 still rising
+# (0.425 ep7 -> 0.428 ep13 -> 0.468 ep18). 50 epochs at that rate is ~16 h.
+# Epoch cost scales with the dataset, and the dataset keeps growing as reviews
+# are folded in, so set this from the window count rather than from habit:
+#   epochs x (train+val windows) / ~13 windows/s, then add 50%.
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
 #SBATCH -J unet_train
@@ -77,6 +81,7 @@
 #   rows are wrong as negatives but right as regions to keep background out of.
 #   This supersedes deleting them from the sidecars -- deletion destroyed the
 #   region information, so the two settings could not both be honoured.
+: "${WALL_TIME:=24:00:00}"   # passed to sbatch as -t, overriding the directive above.
 : "${STABLE_VAL_SPLIT:=1}"  # 1 = keep the dominant convulsive animals in train.
 #   Positives are heavily concentrated (355675 alone carries ~1/3 of all convulsive
 #   events), so a random split can land half of them in validation -- which wastes
@@ -115,12 +120,13 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "            exclude=${EXCLUDE_ANIMALS:-none}"
     echo "            max_positive_sec=${MAX_POSITIVE_SEC} bg_avoid_rejected=${BG_AVOID_REJECTED}"
     echo "            hard_neg_exclude=${HARD_NEG_EXCLUDE_METHODS:-none}"
+    echo "            wall time=$WALL_TIME"
     # Pass settings via the (exported) environment + --export=ALL — robust for
     # values that contain spaces (e.g. multiple excluded IDs).
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE NEG_POS_RATIO POS_WEIGHT \
            EXCLUDE_ANIMALS EDF_DIR STABLE_VAL_SPLIT NEG_SOURCE \
-           MAX_POSITIVE_SEC BG_AVOID_REJECTED HARD_NEG_EXCLUDE_METHODS
-    sbatch --export=ALL "$0"
+           MAX_POSITIVE_SEC BG_AVOID_REJECTED HARD_NEG_EXCLUDE_METHODS WALL_TIME
+    sbatch --export=ALL -t "$WALL_TIME" "$0"
     exit $?
 fi
 
