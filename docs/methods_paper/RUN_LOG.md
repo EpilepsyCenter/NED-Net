@@ -723,7 +723,7 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
-### 2026-10-09 — Production-recipe reruns: submission prepared — jobs _tbd_
+### 2026-10-09 — Production-recipe reruns SUBMITTED — jobs 3832977-82
 script:   `scripts/lunarc/submit_prodrecipe_arms.sh`. Each arm takes its data flags from
           its own log header and changes only the recipe (lr 1e-3, batch 8, pos_weight 5,
           FP32=1). Suffix `_pr`.
@@ -740,7 +740,18 @@ guards:   refuses a checkout behind origin, and refuses if `ad_edf_data` holds s
 also:     `train.py` now writes `metadata.json` after every epoch, with
           `training_complete`, so a timed-out run no longer orphans `best_model.pt` the
           way A2 (3809460) did. Smoke-tested locally (2 epochs, fp32, MPS).
-job IDs:  _record here on submission_
+job IDs:  temporal 3832977 (24 h) · all_prod 3832978 (36 h) · A3 3832979 (48 h) ·
+          A 3832980 (48 h) · A2 3832981 (48 h) · B 3832982 (14 h). All PENDING
+          (Resources) at submission, none on PartitionTimeLimit, so 48 h is accepted.
+tree:     NOT refreshed before submission. `refresh_training_tree --dry-run` showed
+          the same 52 manual + 344 adjudicated as the 10-08 refresh, so there was no new
+          review work, and leaving it alone keeps `ramgdnf_temporal_pr` on 3831662's data.
+          Tree = 1,556 sidecars (192 `edf_data` + 1,364 `RAM_GDNF_2025`). No sidecars
+          anywhere else under the project root.
+SV2A count note: 192 sidecar files on disk vs the 157 the trainer counts. Not new labels
+          (none were added). The trainer keeps only files with confirmed/rejected events.
+          The rest are pending-only or empty. Confirm from arm A's "Training U-Net on N
+          EDFs" line.
 
 ### 2026-10-09 — U-Net, temporal split — job 3831662 (RUNNING)
 started:  2026-10-09 14:22:59 on cg12, ~a day ahead of the 2026-10-10 14:57 estimate.

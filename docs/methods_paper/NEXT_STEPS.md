@@ -29,10 +29,14 @@ pos_weight 5, fp32). The old arms used lr 3e-4 / batch 32 / bf16, so frozen-vs-r
 mixed a data change with an optimiser change. See RUN_LOG 2026-10-09 "DECISION". Stage 2
 already matches its production model and is not retrained.
 
+**Submitted 2026-10-09: jobs 3832977-82.** Tree deliberately NOT refreshed (see RUN_LOG).
+
 ```bash
-cd ~/NED-Net && git pull
-bash scripts/lunarc/submit_prodrecipe_arms.sh --dry-run   # read the checks
-bash scripts/lunarc/submit_prodrecipe_arms.sh             # submits all six
+squeue -u $USER -o "%.9i %.32j %.8T %.20r %.10l"
+for j in 3832977 3832978 3832979 3832980 3832981 3832982; do
+  echo "== $j"; sed -n '/^Settings/,/^fp32/p' logs/unet_train_$j.out 2>/dev/null
+  grep -E "^Training U-Net|Training samples|^Epoch" logs/unet_train_$j.out 2>/dev/null | tail -3
+done
 ```
 
 The script refuses a stale checkout and refuses if `ad_edf_data` holds any sidecars,
@@ -44,12 +48,12 @@ The first job to run gives the real fp32/batch-8 s/epoch. Wall times are guesses
 
 | arm | model | job | status |
 |---|---|---|---|
-| temporal | `ramgdnf_temporal_pr` | _tbd_ | to submit |
-| all_prod | `ramgdnf_all_prod_pr` | _tbd_ | to submit |
-| A3 | `ramgdnf_armA3_holdB3_pr` | _tbd_ | to submit |
-| A | `ramgdnf_armA_holdB3_pr` | _tbd_ | to submit |
-| A2 | `ramgdnf_armA2_holdB3_randneg_pr` | _tbd_ | to submit |
-| B | `ramgdnf_armB_holdB3_stable_pr` | _tbd_ | to submit |
+| temporal | `ramgdnf_temporal_pr` | 3832977 | pending |
+| all_prod | `ramgdnf_all_prod_pr` | 3832978 | pending |
+| A3 | `ramgdnf_armA3_holdB3_pr` | 3832979 | pending |
+| A | `ramgdnf_armA_holdB3_pr` | 3832980 | pending |
+| A2 | `ramgdnf_armA2_holdB3_randneg_pr` | 3832981 | pending |
+| B | `ramgdnf_armB_holdB3_stable_pr` | 3832982 | pending |
 | — | `ramgdnf_temporal` (3831662, OLD recipe) | 3831662 | running, ~21:50. Kept as the recipe-only comparison |
 
 Earlier jobs today: 3831663 `conv_temporal` done (F1 0.604 @ 0.75); 3831584 cancelled;
