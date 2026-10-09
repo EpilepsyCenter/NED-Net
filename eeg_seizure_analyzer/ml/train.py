@@ -532,6 +532,42 @@ def train_model(
     model_dir = MODELS_DIR / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
+    def _write_metadata(complete: bool) -> None:
+        """Write metadata.json. Called after every epoch as well as at the end, so a
+        wall-clock kill still leaves a loadable model whose metadata matches
+        best_model.pt. A2 (job 3809460) timed out and left no metadata at all.
+        ``training_complete`` False means the run never reached the end."""
+        metadata = {
+            "model_name": model_name,
+            "architecture": train_config.architecture,  # "unet" or "bendr"
+            "dataset_name": dataset_def.get("name", ""),
+            "dataset_folder": dataset_def.get("folder", ""),
+            "created": datetime.now(timezone.utc).isoformat(),
+            "device": str(device),
+            "n_params": n_params,
+            "n_eeg_channels": n_eeg_channels,
+            "n_activity_channels": n_act_channels,
+            "n_classes": 2,
+            "include_activity": dataset_config.include_activity,
+            "target_fs": dataset_config.target_fs,
+            "window_sec": dataset_config.window_sec,
+            "train_config": asdict(train_config),
+            "dataset_config": asdict(dataset_config),
+            "train_samples": len(train_ds),
+            "val_samples": len(val_ds),
+            "best_epoch": best_epoch,
+            "best_val_loss": round(float(best_val_loss), 4),
+            "best_metrics": best_metrics,
+            "n_epochs_trained": len(history),
+            "stopped_by_user": stopped,
+            "training_complete": complete,
+            "history": history,
+        }
+        tmp = model_dir / "metadata.json.tmp"
+        with open(tmp, "w") as f:
+            json.dump(metadata, f, indent=2)
+        os.replace(tmp, model_dir / "metadata.json")
+
     stopped = False
     for epoch in range(1, train_config.epochs + 1):
         t0 = time.time()
@@ -700,6 +736,9 @@ def train_model(
         if progress_callback:
             progress_callback(epoch_info)
 
+        if best_epoch > 0:
+            _write_metadata(complete=False)
+
         # Early stopping
         if epochs_without_improvement >= train_config.patience:
             print(f"Early stopping at epoch {epoch} "
@@ -713,35 +752,7 @@ def train_model(
     if best_epoch == 0:
         torch.save(model.state_dict(), model_dir / "best_model.pt")
 
-    # Save training metadata
-    metadata = {
-        "model_name": model_name,
-        "architecture": train_config.architecture,  # "unet" or "bendr"
-        "dataset_name": dataset_def.get("name", ""),
-        "dataset_folder": dataset_def.get("folder", ""),
-        "created": datetime.now(timezone.utc).isoformat(),
-        "device": str(device),
-        "n_params": n_params,
-        "n_eeg_channels": n_eeg_channels,
-        "n_activity_channels": n_act_channels,
-        "n_classes": 2,
-        "include_activity": dataset_config.include_activity,
-        "target_fs": dataset_config.target_fs,
-        "window_sec": dataset_config.window_sec,
-        "train_config": asdict(train_config),
-        "dataset_config": asdict(dataset_config),
-        "train_samples": len(train_ds),
-        "val_samples": len(val_ds),
-        "best_epoch": best_epoch,
-        "best_val_loss": round(float(best_val_loss), 4),
-        "best_metrics": best_metrics,
-        "n_epochs_trained": len(history),
-        "stopped_by_user": stopped,
-        "history": history,
-    }
-
-    with open(model_dir / "metadata.json", "w") as f:
-        json.dump(metadata, f, indent=2)
+    _write_metadata(complete=True)
 
     # Save final model too (in case best != last)
     torch.save(model.state_dict(), model_dir / "final_model.pt")

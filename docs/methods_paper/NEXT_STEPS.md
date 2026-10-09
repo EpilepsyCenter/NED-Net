@@ -22,39 +22,56 @@ So:
 * Stop restating "but this is in-sample" as a caveat on every number. State the scope once,
   in Methods, and report the numbers.
 
-## STATE AS OF 2026-10-09 18:00 — start here tomorrow
+## STATE AS OF 2026-10-09 evening — weekend queue, sweeps Monday-Tuesday
 
-**One job outstanding: `3831662` (`ramgdnf_temporal`), RUNNING on gpua100 (cg12) since
-2026-10-09 14:23, 14 h limit.** ~531 s/epoch, so 50 epochs ≈ 7.4 h → done by ~21:50 tonight
-(earlier if patience 10 stops it). Config verified from the log header — see RUN_LOG.
-Everything else today is finished or cancelled.
+**Every U-Net arm is being retrained at the production recipe** (lr 1e-3, batch 8,
+pos_weight 5, fp32). The old arms used lr 3e-4 / batch 32 / bf16, so frozen-vs-retrained
+mixed a data change with an optimiser change. See RUN_LOG 2026-10-09 "DECISION". Stage 2
+already matches its production model and is not retrained.
 
 ```bash
-squeue -u $USER                                    # is 3831662 running / done?
-grep -E "Best event_f1|Early stopping|Training samples" logs/unet_train_3831662.out
-grep -nE "^Epoch" logs/unet_train_3831662.out | tail -5
+cd ~/NED-Net && git pull
+bash scripts/lunarc/submit_prodrecipe_arms.sh --dry-run   # read the checks
+bash scripts/lunarc/submit_prodrecipe_arms.sh             # submits all six
 ```
 
-| job | what | status |
-|---|---|---|
-| **3831662** | `ramgdnf_temporal` — U-Net, **temporal split**, ratio 6, cap 100 s | **RUNNING since 14:23 — the one to read** |
-| 3831663 | `conv_temporal` — Stage 2, temporal split, rejected negatives | **done**, F1 0.604 @ 0.75 |
-| 3831584 | `ramgdnf_all_prod` (animal split) | **cancelled** to free its queue slot for 3831662 |
-| 3825993 | A3 on held-out Batch 3 | done, scored (see RUN_LOG 2026-10-09) |
-| 3825989 | `ramgdnf_all_prod`, first attempt | **TIMED OUT** at 6 h, epoch 18/50 |
-| 3825994 | `conv_rejneg_holdB3`, first attempt | ran **pre-pull**, flags ignored — superseded by 3831663 |
+The script refuses a stale checkout and refuses if `ad_edf_data` holds any sidecars,
+because arms A and A2 scan the whole project root. It prints the
+`refresh_training_tree --dry-run` counts, which belong in RUN_LOG. **Record the six job
+IDs in RUN_LOG**, then check each header as it starts (`fp32: 1`, `lr=1e-3`, `batch=8`).
+The first job to run gives the real fp32/batch-8 s/epoch. Wall times are guesses (14-48 h).
+`metadata.json` is now written every epoch, so a timeout still leaves a usable model.
 
-### When 3831662 lands, in order
+| arm | model | job | status |
+|---|---|---|---|
+| temporal | `ramgdnf_temporal_pr` | _tbd_ | to submit |
+| all_prod | `ramgdnf_all_prod_pr` | _tbd_ | to submit |
+| A3 | `ramgdnf_armA3_holdB3_pr` | _tbd_ | to submit |
+| A | `ramgdnf_armA_holdB3_pr` | _tbd_ | to submit |
+| A2 | `ramgdnf_armA2_holdB3_randneg_pr` | _tbd_ | to submit |
+| B | `ramgdnf_armB_holdB3_stable_pr` | _tbd_ | to submit |
+| — | `ramgdnf_temporal` (3831662, OLD recipe) | 3831662 | running, ~21:50. Kept as the recipe-only comparison |
 
-1. **Operating-point sweep** for `ramgdnf_temporal` on B1-B3 — four lu48 jobs. **Do not
-   inherit 0.9/0.5**; it is a different stage 1.
-2. **Detect** at the winning point with `CONV_MODEL=conv_temporal` over B1-B3.
-3. **`conv_threshold_sweep.py`** — the stage-2 verdict. Precision was **flat at 11%** across
-   every threshold with the old classifier. Rising = the rejected-negatives fix worked;
-   still flat = write stage 2 up as a limitation.
-4. **`draw_precision_sample.py --seed <n>`** — record the seed in `RUN_LOG.md` **before**
-   opening any event, review every one, then `score_precision_sample.py`. This is the
-   paper's last substantive gap.
+Earlier jobs today: 3831663 `conv_temporal` done (F1 0.604 @ 0.75); 3831584 cancelled;
+3825993 scored; 3825989 timed out; 3825994 superseded.
+
+### Monday-Tuesday, once the _pr models land
+
+1. **Recipe effect first:** compare `ramgdnf_temporal` and `ramgdnf_temporal_pr` on the
+   same val set (identical split). That is the only clean measurement of the recipe.
+2. **Operating-point sweep for every _pr model** used in the paper (lu48), on its
+   held-in batches. **No model inherits another's threshold/boundary.** That includes
+   0.9/0.5 from the old A3.
+3. **Detect** at each winning point. Temporal and all_prod use `CONV_MODEL=conv_temporal`;
+   A3 on held-out B3 uses `conv_armA_holdB3`, as before.
+4. **`conv_threshold_sweep.py`**, the stage-2 verdict. With the old classifier, precision
+   was **flat at 11%** across thresholds. If it now rises, the rejected-negatives fix
+   worked. If it is still flat, Stage 2 goes in as a limitation.
+5. **`draw_precision_sample.py --seed <n>`**: record the seed in `RUN_LOG.md` **before**
+   opening any event, review every event, then run `score_precision_sample.py`. This is
+   the paper's last substantive gap.
+6. Every old-recipe number in DRAFT/PAPER_OUTLINE (A3 47.1% / 73%, out-of-sample B3, and
+   the arm ranking) is replaced by its _pr counterpart, or explicitly labelled old-recipe.
 
 ### Facts about training that are easy to re-discover the hard way
 

@@ -723,6 +723,25 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
+### 2026-10-09 — Production-recipe reruns: submission prepared — jobs _tbd_
+script:   `scripts/lunarc/submit_prodrecipe_arms.sh`. Each arm takes its data flags from
+          its own log header and changes only the recipe (lr 1e-3, batch 8, pos_weight 5,
+          FP32=1). Suffix `_pr`.
+from:     temporal <- 3831662; all_prod <- 3825989 at ratio 6 (= cancelled 3831584);
+          A3 <- 3820377; A <- 3800378; A2 <- 3809460; B <- 3801062 (stable split, not
+          the unstable 3795251).
+A3 nuance: the original ran on a tree with Mir's rejections **deleted** (367 EDFs, stale).
+          The refreshed tree keeps them, so the rerun passes
+          `HARD_NEG_EXCLUDE_METHODS=mir_candidate` to stay "no Mir negatives".
+          `BG_AVOID_REJECTED` stays 0 to match, since in the original those regions were
+          unmarked and background could fall in them.
+guards:   refuses a checkout behind origin, and refuses if `ad_edf_data` holds sidecars.
+          A and A2 scan the project root, so AD files would otherwise join them.
+also:     `train.py` now writes `metadata.json` after every epoch, with
+          `training_complete`, so a timed-out run no longer orphans `best_model.pt` the
+          way A2 (3809460) did. Smoke-tested locally (2 epochs, fp32, MPS).
+job IDs:  _record here on submission_
+
 ### 2026-10-09 — U-Net, temporal split — job 3831662 (RUNNING)
 started:  2026-10-09 14:22:59 on cg12, ~a day ahead of the 2026-10-10 14:57 estimate.
 config verified from the log header (the post-3825994 check):
