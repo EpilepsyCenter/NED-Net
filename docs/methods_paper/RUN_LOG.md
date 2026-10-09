@@ -580,33 +580,56 @@ provenance of every confirmed seizure in `~/train_nomirneg` (2026-10-09):
 | **`ml_unet`** | **218** | **194** | **Stage 2 itself — circular** |
 | `None` (reviewer's manual) | 52 | 0 | human; all non-convulsive, as stated |
 
-          **194 of 738 convulsive positives (26%) carry a self-generated flag**, and the
-          218 `ml_unet` non-convulsive rows are equally self-labelled, so the contamination
-          runs in both directions.
+          **CORRECTION (same day, before acting on it): the 26% figure below was WRONG.**
+          Splitting the `ml_unet` rows by cohort and date shows most of them are SV2A's
+          deliberate active-learning round 2, **hand-reviewed by the reviewer on
+          2026-06-15** — legitimate training data, and how `UNetv2` was refined:
+
+| cohort | conv | non-conv | annotated | flag set by |
+|---|---|---|---|---|
+| SV2A | **189** | 147 | 2026-06 | the reviewer — sound |
+| RAM_GDNF | **5** | 71 | 2026-10 | Stage 2 — circular |
+
+          So the genuinely self-labelled convulsive positives are **5 of 738 = 0.7%**, not
+          194. **Immaterial.** `conv_temporal` (job 3831663), which ran without the filter,
+          is unaffected and needs no re-run on these grounds.
+          `convulsive_probability` is NOT a provenance marker — Stage 2 writes it for every
+          U-Net detection in any cohort. Only the cohort/date distinguishes them.
+          The 71 RAM_GDNF non-convulsive flags remain Stage-2-derived, but they agree with
+          the reviewer's own position that this cohort's real events are non-convulsive, so
+          they do not pull the classifier anywhere it should not go.
+          A blanket `ml_unet` exclusion would have **discarded SV2A's 336 hand-reviewed
+          round-2 events** — the lesson is that `detection_method` records who *proposed*
+          an event, never who *labelled* it.
 why it matters: those events ARE real seizures — a human confirmed them — but the
           *convulsive attribute* was never human-judged. Training on it teaches the
           classifier to reproduce its predecessor's errors, and the reviewer reported on
           2026-10-06 that exactly these detections were **"misclassified as convulsive"**.
           So the error being propagated is a known one.
 fix:      `--conv-label-method` / `CONV_LABEL_METHODS` restricts labelled samples to
-          human-provenance sources. Recommended
-          **`mir_candidate autocorrelation manual`**, which excludes `ml_unet`.
+          chosen `detection_method` values. **Implemented and verified, but left OFF by
+          default and NOT recommended**, now that the affected count is 5 events. Kept
+          because the mechanism is sound and may matter once RAM_GDNF U-Net detections are
+          reviewed in bulk.
           `manual` names rows with no `detection_method` field. Applied to BOTH classes.
           Verified on the SV2A tree: 430 -> 204 convulsive with the filter on (that tree
           holds `autocorrelation` + `ml_unet` only, so the drop is exactly the ml_unet
           share). On the full tree it should give ~544 rather than 738.
-consequence: **`conv_rejneg_holdB3` (3831585) is contaminated and should be re-run** with
-          the filter. Its `Best convulsive F1 0.5628 @ 0.85` is not a usable number — and
-          note that F1 was never comparable to `conv_armA_holdB3`'s 0.659 anyway, since
-          adding rejected negatives changed the task from "given a seizure, convulsive?" to
-          "is this a convulsive seizure at all?".
-general principle for the paper:
+consequence: **none — `conv_rejneg_holdB3` (3831585) is NOT materially contaminated** after
+          the correction above. Its `Best convulsive F1 0.5628 @ 0.85` is still not
+          comparable to `conv_armA_holdB3`'s 0.659, but for a different reason: adding
+          rejected negatives changed the task from "given a seizure, convulsive?" to "is
+          this a convulsive seizure at all?".
+general principle for the paper (the finding survives even though the count did not):
           in an active-learning loop, **model output written back as annotations becomes
           training data for the next generation**, and any attribute the human did not
-          actually adjudicate is laundered into ground truth. Here the seizure/not-seizure
-          label was reviewed and is sound; the convulsive/non-convulsive label on the same
-          events was not. Worth stating as a concrete pitfall: a sidecar format that mixes
-          human and model fields needs per-field provenance, not per-event.
+          actually adjudicate can be laundered into ground truth. Here seizure/not-seizure
+          was reviewed and is sound; the convulsive flag on RAM_GDNF U-Net rows was not.
+          **A sidecar format that mixes human and model fields needs per-FIELD provenance,
+          not per-event** — `detection_method` records who *proposed* an event and is
+          routinely mistaken (by me, here) for who *labelled* it. The scale happened to be
+          negligible this time only because the RAM_GDNF review queue is barely started;
+          at 1,377 files reviewed it would not be.
 
 ### 2026-10-09 — Jobs 3831658/3831659 CANCELLED: pre-pull scripts, VAL_MODE ignored
           Submitted with `VAL_MODE=temporal` but the summary lines carried no `val_mode=`
