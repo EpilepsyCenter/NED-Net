@@ -67,6 +67,13 @@ channel** rather than by filename, because live files arrive with unknown names 
 runs a fixed montage — so events are attributed to individual animals from the first file.
 Optional backlog processing covers files recorded before monitoring started.
 
+**The software does not require machine learning at all.** The rule-based detectors
+(autocorrelation, spectral band, amplitude) are a complete workflow on their own: detect,
+review, filter, export, aggregate per animal in the Results tab — no model, no training, no
+GPU. They exist to bootstrap a first annotation set, but a lab that never trains a model can
+use NED-Net as a classical detection and review tool. The ML path is an upgrade, not a
+dependency.
+
 **Why that matters for the design claim:** it makes the refinement loop concurrent with the
 experiment. A researcher can annotate during the first recording days, retrain on their own
 animals, and have a model calibrated to that cohort ready before the bulk of the protocol is
@@ -190,9 +197,23 @@ own proposals.
 
 **What remains unmeasured is precision of the *retrained* model.** The convulsive reference
 cannot credit its non-convulsive detections, and the exhaustive review predates it. So
-"fires more" is established and "finds more" is not. A pre-registered stratified review
-sample of retrained output is the remaining gap, and it matters: animal 459658 produces 569
+"fires more" is established and "finds more" is not. It matters: animal 459658 produces 569
 detections at the tuned operating point and catches 0 of 10 reference seizures.
+
+**The measurement, pre-registered here before the sample is drawn.** Spot-check review of the
+retrained model's own detections, in the UI, confirm/reject per event:
+* **Sampling**: random, stratified by **animal** (not by batch — R4) and by confidence
+  tercile, drawn from retained channels at the chosen operating point. Seed recorded in
+  `RUN_LOG.md` before any event is opened.
+* **Target n**: ~150-200 events. At 70% true, 150 events gives a 95% CI of roughly +-7
+  points, which is enough to separate "usable" from "not" and to compare against the
+  source model's 93.6%.
+* **Two numbers come out of one review pass**: overall precision, and **convulsive
+  precision** on the subset Stage 2 labelled convulsive — which is also the only honest test
+  of whether the Stage-2 fix worked on real output rather than on validation windows.
+* **Fixed in advance**: strata, n, seed, and that every drawn event is adjudicated (no
+  skipping hard cases). Sampling discipline has reversed this project's conclusions three
+  times; the protocol is stated before the data is seen for exactly that reason.
 
 ### R7 — The annotation requirement
 | training positives | source | outcome |
@@ -280,6 +301,12 @@ rest of the protocol. The per-animal result (R4) is what makes this more than a 
 useless on*, and live mode can answer it from the first days because it attributes events
 per channel from the first file.
 
+**ML is optional.** The rule-based path is a usable product by itself, and the paper should
+say so plainly: a lab with no GPU, no annotations and no interest in training can still use
+NED-Net to detect, review, filter and aggregate. That also makes the upgrade path
+incremental — the classical detectors generate the first annotation set, which trains the
+first model, whose output becomes the next review queue.
+
 **The pipeline is not specific to seizures.** It learns whatever humans mark as `confirmed`
 or `rejected`; the same machinery already runs an interictal-spike detector. The pitfalls in
 R8 therefore apply to anyone training an event detector on annotated electrophysiology.
@@ -293,6 +320,34 @@ scoring choices alone — detection scope (stage 1 vs cascade), stage-2 threshol
 the comparison was paired through one code path. **Every correction came from how events
 were selected, not from new data.** That is the strongest available argument for
 pre-registered sampling in detector validation, and it belongs in the paper.
+
+## Classical vs learned detection — a deliberate non-goal, and what we can already say
+
+**Not attempted, on purpose.** A fair head-to-head would require tuning the rule-based
+detectors and their post-detection filters as hard as the model was tuned — parameter sweeps
+per cohort, per channel, plus the local-baseline and amplitude filters — which is a project
+of its own and would not change this paper's claim. Stated here so it is visible as a choice
+rather than an omission. If a reviewer asks, the tractable version is a small matched subset
+with both pipelines swept over their own parameters.
+
+**What the data already shows, without that work.** The external reference set *is* a
+classical detector applied to this cohort: 15-80 Hz envelope peaks above median + 4 x MAD,
+grouped into episodes of >=15 s at >=2.5 spikes/s, then adjudicated on video.
+
+| | classical candidate generator | the learned cascade |
+|---|---|---|
+| human adjudications required | **12,083** | 1,377 files' output, reviewed in samples |
+| events confirmed | **430** | — |
+| yield per adjudication | **3.6%** | — |
+| event population found | 15-80 Hz episodes >=15 s | ~2-14 Hz rhythmicity, any duration >=5 s |
+
+Two instruments, **low overlap in both directions**: the classical generator cannot propose
+the short non-convulsive events the model is best at (no >=15 s high-density episode around
+them), and the model misses most of the classical generator's episodes. Neither is a superset
+of the other. The honest statement is therefore not "learned beats classical" but **"they
+find different things, and the classical route cost 12,083 human adjudications to yield 430
+events"** — which is an annotation-economics argument, and the one that actually matters to a
+lab choosing between them.
 
 ## Limitations
 
@@ -334,9 +389,10 @@ pre-registered sampling in detector validation, and it belongs in the paper.
 3. **Does the stage-2 fix work?** Re-detect with `conv_temporal` and sweep. Flat 11% means
    stage 2 is written up as a limitation (R8.3); rising means the cascade gains a usable
    precision filter.
-4. **R7's table needs re-deriving.** Its arm figures (f1 0.012 / 0.532) come from models
-   trained on the stale label tree (R8.5), so they understate the pipeline. Recompute from
-   the temporal pair.
+4. **R7's third row needs its number swapped** (not the whole section): `865 -> f1 0.532`
+   comes from arm A, trained on the stale label tree (R8.5), so it understates what the
+   pipeline delivers. The 867 and 184 rows are unaffected. Replace with the temporal pair's
+   figure when it lands.
 5. **A figure for R1.** A software paper has to *show* the UI and the loop, not only
    describe it: annotation view, review queue, live-monitoring panel, and a loop diagram
    (rule-based bootstrap -> annotate -> train -> detect -> review -> retrain).
