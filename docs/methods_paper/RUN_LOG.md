@@ -585,24 +585,33 @@ the boundary improvement does NOT transfer:
           median IoU 0.36 -> 0.60 in-sample; **0.40 -> 0.39** here. So the better event
           delineation seen on B1+B2 was fitted, not learned. Report it as an in-sample
           property only.
-**THE CENTRAL NUMBER OF THE PAPER:**
+**CORRECTED FRAMING — the first version of this entry was wrong.**
+It read the 38.2% -> 5.2% drop as the transfer penalty. It is mostly **not** transfer:
 
-| | in-sample (B1+B2) | out-of-sample (B3) |
-|---|---|---|
-| frozen | 38.2% | 5.2% |
-| A3 retrained | **50.0%** | **8.5%** |
+| | frozen (saw NEITHER) | A3 | A3 / frozen |
+|---|---|---|---|
+| B1+B2, n=68 (A3 trained on it) | 38.2% | 50.0% | **1.31x** |
+| B3, n=153 (held out) | 5.2% | 8.5% | **1.63x** |
 
-          Annotating a batch gets you ~50%; inheriting a model trained on *other* batches
-          of the same cohort, in the same lab, on the same rig gets you ~8.5%. **The
-          in-sample/out-of-sample gap is far larger than the gain from retraining itself**,
-          and that gap is the argument for retraining on every new batch. This is the
-          inconvenient version of the thesis and it is the defensible one.
-CONFOUND that must be stated separately:
-          the same model at the same operating point scores 50.0% on B1+B2 and 8.5% on B3,
-          and the **frozen** model shows the same ~7x spread (38.2% vs 5.2%). So **B3 is
-          intrinsically harder**, and the in-sample/out-of-sample gap cannot be attributed
-          wholly to held-out-ness. A LOCO fold holding out B1 or B2 instead would separate
-          the two; until then the gap is an upper bound on the transfer penalty.
+          The frozen model trained on **neither** batch, yet scores **7.3x** better on
+          B1+B2 than on B3. That spread is therefore **pure batch difficulty**, and it
+          accounts for most of the apparent in-sample/out-of-sample gap.
+          Retraining's **relative** gain — the part not confounded by difficulty — is
+          **1.31x in-sample and 1.63x out-of-sample**, i.e. *larger* out-of-sample. So the
+          in-sample figure is **not** inflated by memorisation the way it first appeared.
+WHAT CAN BE CLAIMED, in order of how well supported it is:
+          1. **Batch difficulty dominates.** A **7.3x** spread in detectability between
+             batches of one cohort, one lab, one rig, measured by a model that trained on
+             none of them. Unconfounded, and the most direct evidence for the paper's
+             thesis that electrode position, noise and rig drift change what a detector
+             sees. **This is the strongest finding in the project.**
+          2. **Retraining gives a consistent ~1.3-1.6x relative recall gain** plus a large
+             coverage gain (16 -> 73% in-sample, 58 -> 90% out-of-sample), at both
+             difficulty levels. Modest, real, reproducible.
+          3. **The transfer penalty is NOT measured.** B3 is both held-out and hard, so the
+             two cannot be separated from this fold. **A LOCO fold holding out B1 or B2 —
+             an easy batch — is required**, not optional, for the central claim. Until then
+             no number should be quoted as the cost of not annotating a batch.
 Stage-2 sweep on B3 (free, post-hoc): precision **flat at 4%** across 0.10-0.45, same
           pathology as B1+B2 — consistent with the missing-negatives diagnosis.
 

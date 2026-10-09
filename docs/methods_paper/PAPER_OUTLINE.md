@@ -87,6 +87,18 @@ and must be labelled as such everywhere. The out-of-sample counterpart is held-o
 (job 3825993, pending), and the gap between the two rows is the paper's central quantity:
 the difference between annotating a cohort and inheriting a model.
 
+**Out-of-sample (held-out Batch 3, job 3825993):** recall 5.2% -> 8.5% (Stage 1),
+2.6% -> 7.8% (cascade), coverage 58% -> 90%. The boundary improvement does **not** transfer
+(median IoU 0.40 -> 0.39, against 0.36 -> 0.60 in-sample), so better delineation is fitted,
+not learned.
+
+**Do not read the 50.0% vs 8.5% difference as a transfer penalty.** The frozen model trained
+on neither batch and still scores 7.3x better on B1+B2 (38.2%) than on B3 (5.2%), so that
+spread is batch difficulty. Normalised, retraining gains **1.31x in-sample and 1.63x
+out-of-sample** — larger out-of-sample, so the in-sample result is not an artefact of
+memorisation. **Measuring the transfer penalty requires a LOCO fold holding out an easy
+batch (B1 or B2); B3 is both held out and hard.**
+
 **What is not yet measured: precision of the retrained model.** Every precision figure
 available is scored against Mir's convulsive-only candidate set, which structurally cannot
 credit a non-convulsive detection, and most of the retrained output is non-convulsive. So
