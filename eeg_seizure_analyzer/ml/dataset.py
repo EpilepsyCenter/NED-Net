@@ -97,6 +97,19 @@ class DatasetConfig:
     #   Mir's `rejected` rows are the right source: video-adjudicated "not a
     #   convulsive/behavioural seizure", i.e. wrong for the detector and exactly right
     #   here (`build_merged_sidecars.py:76`).
+    conv_label_methods: tuple = ()  # convulsive-classifier path only: use ONLY events
+    #   whose `features.detection_method` is listed here as labelled samples, because the
+    #   convulsive flag must have HUMAN provenance. Measured 2026-10-09 on the live tree:
+    #     autocorrelation (SV2A, human review)   457 non-conv / 204 conv
+    #     mir_candidate   (video adjudication)    70 non-conv / 340 conv
+    #     ml_unet         (STAGE 2'S OWN OUTPUT) 218 non-conv / 194 conv   <-- circular
+    #     None            (manual additions)      52 non-conv /   0 conv
+    #   `ml_unet` rows are real seizures — a human confirmed them — but their convulsive
+    #   flag came from `events.type`, i.e. the previous Stage 2 (`build_merged_sidecars.py:187`).
+    #   Training on them teaches the classifier to reproduce its predecessor's mistakes, and
+    #   the reviewer reported (2026-10-06) that those detections were *misclassified as
+    #   convulsive*. 26% of the convulsive positive class was affected. Empty = use all
+    #   (the pre-2026-10-09 behaviour).
     conv_neg_methods: tuple = ()  # restrict those negatives to these
     #   `features.detection_method` values; empty = every rejected event.
     conv_neg_pos_ratio: float = 5.0  # cap on TOTAL negatives per convulsive positive.
@@ -1089,6 +1102,19 @@ def build_convulsive_specs(
                 and a.get("event_type") == "seizure"
                 and a.get("channel") == eeg_ch
             ]
+            # Keep only events whose convulsive flag has human provenance; see
+            # DatasetConfig.conv_label_methods. Applies to BOTH classes, since an
+            # ml_unet row's "non-convulsive" is equally Stage-2-derived.
+            if config.conv_label_methods:
+                _ok = set(config.conv_label_methods)
+                # "manual" names the rows with no detection_method at all — the
+                # reviewer's own additions, whose flag is human by definition.
+                ch_confirmed = [
+                    a for a in ch_confirmed
+                    if ((a.get("features") or {}).get("detection_method") in _ok
+                        or ((a.get("features") or {}).get("detection_method") is None
+                            and "manual" in _ok))
+                ]
             # Rejected events as non-convulsive windows (see conv_neg_from_rejected).
             ch_rejected = []
             if config.conv_neg_from_rejected:

@@ -565,6 +565,68 @@ caveats:  B1 and B2 were **in training** for every arm, so Mir's labels there we
           thresholds.
 result:   _pending_
 
+### 2026-10-09 — Stage 2 was training on its own predecessor's labels (26%)
+how it surfaced: `conv_rejneg_holdB3` (job 3831585) reported **571** convulsive positives
+          where `conv_armA_holdB3` had 451. The refreshed tree explains the rise — but the
+          added events include confirmed **U-Net detections**, and
+          `build_merged_sidecars.py:187` sets their convulsive flag from `events.type`,
+          i.e. **the previous Stage 2's own prediction**.
+provenance of every confirmed seizure in `~/train_nomirneg` (2026-10-09):
+
+| `detection_method` | non-conv | convulsive | flag set by |
+|---|---|---|---|
+| `autocorrelation` (SV2A) | 457 | 204 | human review |
+| `mir_candidate` | 70 | **340** | video adjudication — sound |
+| **`ml_unet`** | **218** | **194** | **Stage 2 itself — circular** |
+| `None` (reviewer's manual) | 52 | 0 | human; all non-convulsive, as stated |
+
+          **194 of 738 convulsive positives (26%) carry a self-generated flag**, and the
+          218 `ml_unet` non-convulsive rows are equally self-labelled, so the contamination
+          runs in both directions.
+why it matters: those events ARE real seizures — a human confirmed them — but the
+          *convulsive attribute* was never human-judged. Training on it teaches the
+          classifier to reproduce its predecessor's errors, and the reviewer reported on
+          2026-10-06 that exactly these detections were **"misclassified as convulsive"**.
+          So the error being propagated is a known one.
+fix:      `--conv-label-method` / `CONV_LABEL_METHODS` restricts labelled samples to
+          human-provenance sources. Recommended
+          **`mir_candidate autocorrelation manual`**, which excludes `ml_unet`.
+          `manual` names rows with no `detection_method` field. Applied to BOTH classes.
+          Verified on the SV2A tree: 430 -> 204 convulsive with the filter on (that tree
+          holds `autocorrelation` + `ml_unet` only, so the drop is exactly the ml_unet
+          share). On the full tree it should give ~544 rather than 738.
+consequence: **`conv_rejneg_holdB3` (3831585) is contaminated and should be re-run** with
+          the filter. Its `Best convulsive F1 0.5628 @ 0.85` is not a usable number — and
+          note that F1 was never comparable to `conv_armA_holdB3`'s 0.659 anyway, since
+          adding rejected negatives changed the task from "given a seizure, convulsive?" to
+          "is this a convulsive seizure at all?".
+general principle for the paper:
+          in an active-learning loop, **model output written back as annotations becomes
+          training data for the next generation**, and any attribute the human did not
+          actually adjudicate is laundered into ground truth. Here the seizure/not-seizure
+          label was reviewed and is sound; the convulsive/non-convulsive label on the same
+          events was not. Worth stating as a concrete pitfall: a sidecar format that mixes
+          human and model fields needs per-field provenance, not per-event.
+
+### 2026-10-09 — Jobs 3831658/3831659 CANCELLED: pre-pull scripts, VAL_MODE ignored
+          Submitted with `VAL_MODE=temporal` but the summary lines carried no `val_mode=`
+          and no "Split mode" prompt appeared — the checked-out scripts predated
+          `3b68d7d`/`dcc7b46`, so the variable was silently ignored and both would have
+          trained with the **animal** split. 3831658 was therefore an exact duplicate of
+          3831584.
+          **Fourth occurrence of this failure mode** (3825994, 3831658, 3831659, and
+          3795249's lost `EXCLUDE_ANIMALS`).
+guard added — and the first attempt was wrong:
+          an "unknown variable" check cannot work: a script cannot recognise a name it has
+          never heard of, and filtering env vars to a known prefix list excludes exactly
+          the unknown ones. Tested and it let `SOME_FUTURE_MODE=1` straight through.
+          Replaced with the invariant that actually covers every case: **both launchers now
+          refuse to submit when `$HOME/NED-Net` is behind `origin/main`**
+          (`git rev-list --count HEAD..origin/main > 0`), overridable with `ALLOW_STALE=1`
+          to reproduce an older run. Verified in both directions.
+          This cannot fix a stale checkout retroactively — the old copy has no guard — but
+          from the moment it lands, every future setting is protected.
+
 ### 2026-10-09 — BATCH IS NOT THE UNIT: per-animal variability dominates
 prompted by: reviewer's observation that batches are an artefact of how many animals can be
           recorded at once, not a scientific grouping — another lab might record all animals

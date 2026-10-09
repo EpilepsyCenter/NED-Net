@@ -57,6 +57,11 @@
 #   tuning cannot. Mir's rejected rows are the right source: video-adjudicated "not a
 #   convulsive/behavioural seizure" -- wrong for the detector, exactly right here
 #   (`build_merged_sidecars.py:76`).
+: "${CONV_LABEL_METHODS:=}"  # use ONLY these detection_methods as labelled samples.
+#   The convulsive flag must have HUMAN provenance. `ml_unet` rows are real seizures but
+#   their flag came from the PREVIOUS Stage 2 (`build_merged_sidecars.py:187`), so training
+#   on them reproduces its errors — 26% of the convulsive positive class (2026-10-09).
+#   Recommended: "mir_candidate autocorrelation manual". Empty = all (old behaviour).
 : "${CONV_NEG_METHODS:=}"      # restrict those negatives to these detection_method
 #   values (space-separated); empty = every rejected event. e.g. "mir_candidate"
 : "${CONV_NEG_POS_RATIO:=5}"   # cap on TOTAL negatives per convulsive positive.
@@ -66,6 +71,28 @@
 : "${VAL_MODE:=animal}"    # animal | recording | temporal — **match the Stage-1 run**,
 #   or the cascade's two stages are validated on different questions. See train_unet.sh.
 : "${WALL_TIME:=06:00:00}"     # passed to sbatch as -t, overriding the directive above.
+
+# ---- Guard: refuse to submit from a checkout that is behind origin ----
+# Four runs were lost to one failure mode: an env var is set, the checked-out script
+# predates the feature, the variable is silently ignored, and the job trains with the
+# wrong config while looking fine (3825994 missed --conv-neg-from-rejected; 3831658/9
+# missed VAL_MODE; 3795249 lost EXCLUDE_ANIMALS to a bare `read`). Checking for
+# "unknown variables" cannot work -- a script cannot know a name it has never heard of.
+# The invariant that actually covers every case is: the checkout must not be behind.
+if [ -z "$SLURM_JOB_ID" ] && [ "${ALLOW_STALE:-0}" != "1" ]; then
+    if git -C "$HOME/NED-Net" rev-parse --git-dir >/dev/null 2>&1; then
+        git -C "$HOME/NED-Net" fetch -q origin 2>/dev/null || true
+        _behind=$(git -C "$HOME/NED-Net" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+        if [ "${_behind:-0}" -gt 0 ]; then
+            echo "ERROR: this checkout is $_behind commit(s) behind origin/main." >&2
+            echo "       Any setting this copy does not know would be SILENTLY IGNORED" >&2
+            echo "       and the job would train with the wrong configuration." >&2
+            echo "       Fix:      cd \$HOME/NED-Net && git pull" >&2
+            echo "       Override: ALLOW_STALE=1 (only to reproduce an older run)" >&2
+            exit 1
+        fi
+    fi
+fi
 
 # ============================================================
 # Phase 1: not under SLURM -> prompt, then submit this script.
@@ -85,6 +112,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     ask EXCLUDE_ANIMALS         "Exclude animal IDs (space-separated, blank = none)"
     ask CONV_NEG_FROM_REJECTED  "Train rejected events as non-convulsive (1/0)"
     ask CONV_NEG_METHODS        "Restrict those to detection_methods (blank = all)"
+    ask CONV_LABEL_METHODS      "Label sources with human provenance (blank = all)"
     ask CONV_NEG_POS_RATIO      "Total negatives per convulsive positive"
     ask MAX_POSITIVE_SEC        "Max positive duration in s (0 = no cap)"
     ask VAL_MODE                "Split mode (animal | recording | temporal)"
@@ -92,10 +120,12 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Submitting: model=$MODEL_NAME epochs=$EPOCHS batch=$BATCH_SIZE lr=$LR"
     echo "            patience=$PATIENCE exclude=${EXCLUDE_ANIMALS:-none}"
     echo "            neg_from_rejected=$CONV_NEG_FROM_REJECTED methods=${CONV_NEG_METHODS:-all}"
+    echo "            label_methods=${CONV_LABEL_METHODS:-all}"
     echo "            neg/pos cap=$CONV_NEG_POS_RATIO max_positive_sec=$MAX_POSITIVE_SEC"
     echo "            wall time=$WALL_TIME val_mode=$VAL_MODE"
     export MODEL_NAME EPOCHS BATCH_SIZE LR PATIENCE EXCLUDE_ANIMALS EDF_DIR \
            CONV_NEG_FROM_REJECTED CONV_NEG_METHODS CONV_NEG_POS_RATIO MAX_POSITIVE_SEC \
+           CONV_LABEL_METHODS \
            WALL_TIME VAL_MODE
     sbatch --export=ALL -t "$WALL_TIME" "$0"
     exit $?
@@ -146,6 +176,7 @@ NEG_ARG=()
 [ "$CONV_NEG_FROM_REJECTED" = "1" ] && NEG_ARG=(--conv-neg-from-rejected)
 # Intentionally unquoted: space-separated values -> multiple argparse values.
 [ -n "$CONV_NEG_METHODS" ] && NEG_ARG+=(--conv-neg-method $CONV_NEG_METHODS)
+[ -n "$CONV_LABEL_METHODS" ] && NEG_ARG+=(--conv-label-method $CONV_LABEL_METHODS)
 
 python -m eeg_seizure_analyzer.ml.train_convulsive \
     --data-dir "$EDF_DIR" \

@@ -423,6 +423,14 @@ def main(argv: list[str] | None = None) -> int:
                         "retraining (flat 11% at every threshold on RAM_GDNF). Mir's "
                         "rejected rows are the right source: video-adjudicated 'not a "
                         "convulsive/behavioural seizure'.")
+    p.add_argument("--conv-label-method", nargs="*", default=[], metavar="M",
+                   help="use ONLY events with these detection_method values as labelled "
+                        "samples, because the convulsive flag must have human provenance. "
+                        "'manual' selects the reviewer's own additions (no method field). "
+                        "Recommended: 'mir_candidate autocorrelation manual' — which "
+                        "EXCLUDES ml_unet, whose convulsive flag came from the previous "
+                        "Stage 2 itself (26% of the convulsive positive class, measured "
+                        "2026-10-09). Empty = use all (pre-2026-10-09 behaviour).")
     p.add_argument("--conv-neg-method", nargs="*", default=[], metavar="M",
                    help="restrict those negatives to these detection_method values; "
                         "empty = every rejected event. e.g. 'mir_candidate'")
@@ -458,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
         exclude_animals=tuple(args.exclude_animals),
         conv_neg_from_rejected=args.conv_neg_from_rejected,
         conv_neg_methods=tuple(args.conv_neg_method),
+        conv_label_methods=tuple(args.conv_label_method),
         conv_neg_pos_ratio=args.conv_neg_pos_ratio,
         max_positive_sec=args.max_positive_sec,
         val_mode=args.val_mode,
@@ -465,6 +474,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.val_mode != "animal":
         print(f"Split mode: {args.val_mode} — every animal in BOTH train and val. "
               f"Measures deployment, NOT generalisation to a new animal.")
+    if args.conv_label_method:
+        print(f"Convulsive labels restricted to human provenance: "
+              f"{list(args.conv_label_method)}")
     if args.conv_neg_from_rejected:
         print(f"Stage-2 negatives from rejected events "
               f"(methods={list(args.conv_neg_method) or 'all'}, "

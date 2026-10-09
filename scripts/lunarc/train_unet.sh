@@ -95,6 +95,28 @@
 #   reproduce a run from before this flag existed.
 # POS_WEIGHT left unset/blank => auto (train_unet sets it to NEG_POS_RATIO).
 
+# ---- Guard: refuse to submit from a checkout that is behind origin ----
+# Four runs were lost to one failure mode: an env var is set, the checked-out script
+# predates the feature, the variable is silently ignored, and the job trains with the
+# wrong config while looking fine (3825994 missed --conv-neg-from-rejected; 3831658/9
+# missed VAL_MODE; 3795249 lost EXCLUDE_ANIMALS to a bare `read`). Checking for
+# "unknown variables" cannot work -- a script cannot know a name it has never heard of.
+# The invariant that actually covers every case is: the checkout must not be behind.
+if [ -z "$SLURM_JOB_ID" ] && [ "${ALLOW_STALE:-0}" != "1" ]; then
+    if git -C "$HOME/NED-Net" rev-parse --git-dir >/dev/null 2>&1; then
+        git -C "$HOME/NED-Net" fetch -q origin 2>/dev/null || true
+        _behind=$(git -C "$HOME/NED-Net" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+        if [ "${_behind:-0}" -gt 0 ]; then
+            echo "ERROR: this checkout is $_behind commit(s) behind origin/main." >&2
+            echo "       Any setting this copy does not know would be SILENTLY IGNORED" >&2
+            echo "       and the job would train with the wrong configuration." >&2
+            echo "       Fix:      cd \$HOME/NED-Net && git pull" >&2
+            echo "       Override: ALLOW_STALE=1 (only to reproduce an older run)" >&2
+            exit 1
+        fi
+    fi
+fi
+
 # ============================================================
 # Phase 1: not under SLURM -> prompt, then submit this script.
 # ============================================================
