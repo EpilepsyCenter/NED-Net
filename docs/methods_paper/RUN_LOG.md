@@ -723,6 +723,42 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
+### 2026-10-10 — Why cascade recall is low: Stage 2 and the meaning of "convulsive"
+loss:     on temporal_pr @ 0.95/0.5 (B1-B3, retained, 221 convulsive GT), Stage 1 catches
+          **142 (64%)**. Stage 2 keeps 124 @0.45, 108 @0.5, 89 @0.55, **61 @0.6**. Of the
+          caught true convulsives, conv confidence p10/25/50/75/90 = 0.43/0.51/0.58/0.67/0.93,
+          so the 0.6 cut sits on their median. Stage 1's 79 misses concentrate in a few
+          implants: B3 ch6 alone has 24, B1 ch7 has 12. Duration does not explain them
+          (median 29 vs 28 s).
+definition mismatch (the reviewer, 2026-10-10): SV2A "convulsive" = **electrographic**,
+          judged on EEG; video was not checked for all, but they look alike and obvious.
+          RAM_GDNF "convulsive" = **Mir's video/behaviour** adjudication. Stage 2 trains
+          on both under one label (~393 SV2A electrographic + 340 Mir behavioural) and is
+          scored only against the behavioural one. The reviewer's view: some of Mir's
+          convulsives look exactly like SV2A's, while others, perhaps the longer ones, do not.
+tested on the sweep DB:
+          * duration: weak. Spearman(duration, conv confidence) rho = -0.18, p = 0.034,
+            n=142 caught. Kept @0.6 by duration: <20 s 38%, 20-40 25%, 40-60 24%,
+            60-100 24%, **>100 s 7% (1/15)**. Stage 1 catches only 5/15 of >100 s. That
+            part is self-inflicted: positives were capped at 100 s, so these are outside
+            the training distribution.
+          * **implant: strong.** Median conv confidence of caught convulsives: **B1 ch7
+            0.99 (14/14 kept @0.6)**. Every other implant with n>=5 sits at 0.39-0.67.
+            By batch: B1 0.96, B2 0.70, B3 0.56, but that is driven by the one implant.
+            "Some look exactly the same" is largely one animal.
+consequence: **the 95% precision at conv 0.95 (19/20; Wilson 95% CI ~76-99%) is mostly that
+          implant's tail. Do not headline it.** Frame Stage 2 as recognising SV2A-like
+          electrographic convulsives with high precision, while agreeing only partly
+          with behavioural labels elsewhere, with the implant table as evidence. This is
+          consistent with "the implant, not the batch, is the unit".
+why the SV2A-style retrain failed (for the record): `conv_armA_holdB3` WAS trained as on
+          SV2A (confirmed seizures only), and its precision was flat at 11%. On SV2A,
+          Stage 1 was 93.6% precise, so "given a seizure" held. On RAM_GDNF most Stage-1
+          output is not a seizure, and a classifier that never saw a non-seizure cannot
+          reject one. Hence `conv_temporal`'s rejected negatives.
+open decision (the reviewer's): which definition Stage 2 answers on RAM_GDNF, electrographic
+          or behavioural. That decides whether any Stage-2 retrain is worth it.
+
 ### 2026-10-10 — RESULT: _pr temporal + all_prod, pre-registered selection on B1-B3
 training (fp32 confirmed by "Mixed precision: OFF (fp32, TF32 disabled)" in every log):
           | model | job | best_event_f1 (selection) @ thr | best/ran epochs | s/epoch |
