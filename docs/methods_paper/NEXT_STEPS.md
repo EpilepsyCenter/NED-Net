@@ -70,9 +70,22 @@ convulsive recall **15.4% -> 64.3%** (fires on 53% -> 84%), ALWAYS beside its su
 precision (17% -> 11%). Then the cascade at matched precision (27.6% vs 10.4% at 30% vs 29%)
 and frontier dominance. Stage 2 is the stated limitation: it is uncertain except on
 one implant. No electrographic-vs-behavioural framing: they are the same seizures.
-**Precision sample (recommended, the reviewer to confirm):** temporal_pr @ 0.95/0.5, ALL
-Stage-1 detections, judged seizure / not seizure. It turns the 11% subset precision into
-true precision. Pick and log the seed first.
+**MAIN POINT OF THE PAPER (the reviewer, 2026-10-10):** a detector needs ongoing retraining
+on new animals, and **implant differences are the main limitation**. Evidence so far:
+(1) frozen 15% -> retrained 64% Stage-1 recall in-cohort; (2) within-batch spread > between
+(58 vs 31 points), Stage-1 misses concentrated in two implants, Stage-2 confidence
+implant-dependent (B1 ch7 0.99, the rest 0.4-0.7); (3) held-out *recordings* of seen
+animals (temporal_pr, best_event_f1 0.67) vs held-out *animals* (all_prod_pr, 0.54). The val
+sets differ, so this is supportive, not proof. **Needed to make it solid:** A3_pr on held-out B3
+(pending), plus a B1 or B2 hold-out, because B3 is both held out and hardest, so it
+cannot separate "new animal" from "hard animal" (RUN_LOG:880-883).
+**Precision sample: planned for Monday, AFTER A3/A/A2 finish.** Design (the reviewer):
+sample whole RECORDINGS, not single detections, and review them in the UI.
+`draw_precision_sample.py` needs a recording-sampling mode (stratified by animal; seed logged
+before the draw). Analysis must cluster by recording, because detections within one are
+not independent. If each recording is reviewed in full, not just its detections, it
+also gives an independent recall estimate. Model: probably temporal_pr @ 0.95/0.5, all
+Stage-1 detections. Confirm once all models are in.
 **Still to do:** A3_pr (training 3832979, then sweeps
 3833050-55, select 12 / report 3), A and A2 training logs, per-animal script, precision
 sample, then the paper numbers.
