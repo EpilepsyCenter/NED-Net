@@ -723,6 +723,52 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
+### 2026-10-10 — RESULT: _pr temporal + all_prod, pre-registered selection on B1-B3
+training (fp32 confirmed by "Mixed precision: OFF (fp32, TF32 disabled)" in every log):
+          | model | job | best_event_f1 (selection) @ thr | best/ran epochs | s/epoch |
+          |---|---|---|---|---|
+          | `ramgdnf_temporal` (OLD recipe) | 3831662 | **0.674** @ 0.95 (P 0.74 / R 0.62) | 15 / 25 | 530 (bf16) |
+          | `ramgdnf_temporal_pr` | 3832977 | **0.6705** @ 0.95 (P 0.77 / R 0.59) | 14 / 24 | 609 (fp32) |
+          | `ramgdnf_all_prod_pr` | 3832978 | 0.5366 @ 0.85 | 14 / 24 | 798 |
+          | `ramgdnf_armB_holdB3_stable_pr` | 3832982 | event_f1 @0.5 0.042 (old 0.012) | 6 / 16 | 341 |
+recipe effect (identical split, 6,272 / 3,150): **none measurable**. 0.674 vs 0.6705 on the
+          selection criterion, best epochs 15 vs 14. The log's "Best event_f1" lines
+          (0.580 vs 0.548) are at threshold 0.5, not the criterion. One seed each, so this
+          rules out a large effect, not a small one. fp32 cost +15% per epoch
+          (validation-bound, as predicted). all_prod's split: 5,111 / 4,311 = 46% val (the
+          by-animal pathology).
+sweeps:   3833038-49 COMPLETED, 12 DBs copied to the Mac. Selection run with
+          `select_operating_point.py --select-batches 123 --report-batches 123`. Full
+          grids in `review/opsel_{temporal,all_prod}_pr.csv`.
+WINNERS (pre-registered rule, no re-picking):
+          | B1-B3 retained, 221 convulsive GT | point | det | recall | subset prec | F1 | fired on | IoU | dur |
+          |---|---|---|---|---|---|---|---|---|
+          | frozen | 0.5/0.1/0.45 | 442 | 10.4% (23) | 29% (32/112) | 0.153 | 21% | 0.39 | 9 s |
+          | **temporal_pr** | **0.95/0.5/0.6** | 1,999 | **27.6% (61)** | **30% (67/220)** | **0.290** | **63%** | 0.45 | 10 s |
+          | all_prod_pr | 0.95/0.5/0.6 | 1,368 | 27.1% (60) | 29% (72/246) | 0.282 | 46% | 0.65 | 17 s |
+          **At matched subset precision (30% vs 29%), the retrained cascade finds 2.65x the
+          convulsive seizures and fires on 3x the recordings.** This is the claim the
+          old A3 could not make (it was 11% vs 61%).
+FRONTIER (conv_threshold_sweep, B1-B3; the primary comparison):
+          frozen   recall/prec: 15.4/17 (Stage 1), 10.4/29 (0.45), 8.6/35 (0.6), 6.8/49 (0.8), 3.2/56 (0.95)
+          temporal_pr @0.95/0.5: 64.3/11 (Stage 1), 56.1/14 (0.45), 27.6/30 (0.6), 10.4/74 (0.8), 6.3/95 (0.95)
+          all_prod_pr @0.95/0.5: 73.8/6 (Stage 1), 60.6/9 (0.45), 27.1/29 (0.6), 10.9/60 (0.8), 7.7/75 (0.95)
+          **temporal_pr dominates frozen at every recall frozen reaches** (at ~10%: 74% vs
+          29%; at ~6-7%: 95% vs 49%). Frozen never exceeds 15.4% recall.
+STAGE-2 VERDICT: **the rejected-negatives fix worked.** `conv_temporal` precision rises
+          monotonically, 11 -> 14 -> 30 -> 74 -> 95%, where the old classifier was flat at 11%.
+caveats (state them, do not act on them):
+          * The Stage-1 winner is on the TOP EDGE of the grid again (0.95), for both models. A
+            higher threshold was not tested.
+          * Stage 2 is now the bottleneck: Stage-1 recall 64.3% falls to 27.6% at conv 0.6.
+            `convulsive_confidence` is bunched (temporal p10/p50/p90 0.34/0.51/0.69), so recall
+            falls off a cliff between 0.45 and 0.6. A threshold inside that gap would likely
+            beat 0.6, but the grid was pre-registered. Report it as a limitation, and do
+            not re-pick.
+          * Subset precision only. In-sample by design (B1-B3 all trained on). Frozen
+            precision on B1-B3 (29%) is much lower than on B1+B2 (61%) because B3 is where
+            frozen fails. Do not mix the two subsets in the text.
+
 ### 2026-10-09 — _pr operating-point sweeps SUBMITTED — jobs 3833038-55
 script:   `scripts/lunarc/submit_pr_sweeps.sh` @ `4d4ef75`, `DEPEND=1`, so each sweep waits
           on its training job with `afterany`. lu48, B1-B3 (`Batch_[123]_Recordings`),
