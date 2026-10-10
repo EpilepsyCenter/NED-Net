@@ -65,7 +65,15 @@ Earlier jobs today: 3831663 `conv_temporal` done (F1 0.604 @ 0.75); 3831584 canc
 (0.674 vs 0.6705). temporal_pr @ 0.95/0.5/0.6 on B1-B3: **27.6% recall at 30% subset
 precision vs frozen 10.4% at 29%. That is 2.65x the recall at matched precision, fires on
 63% vs 21%**, and it dominates frozen along the whole frontier. Stage-2 fix confirmed
-(precision 11 -> 95% with threshold). **Still to do:** A3_pr (training 3832979, then sweeps
+(precision 11 -> 95% with threshold). **FRAMING AGREED (the reviewer, 2026-10-10).** Report the detector improvement as Stage-1
+convulsive recall **15.4% -> 64.3%** (fires on 53% -> 84%), ALWAYS beside its subset
+precision (17% -> 11%). Then the cascade at matched precision (27.6% vs 10.4% at 30% vs 29%)
+and frontier dominance. Stage 2 is the stated limitation: it is uncertain except on
+one implant. No electrographic-vs-behavioural framing: they are the same seizures.
+**Precision sample (recommended, the reviewer to confirm):** temporal_pr @ 0.95/0.5, ALL
+Stage-1 detections, judged seizure / not seizure. It turns the 11% subset precision into
+true precision. Pick and log the seed first.
+**Still to do:** A3_pr (training 3832979, then sweeps
 3833050-55, select 12 / report 3), A and A2 training logs, per-animal script, precision
 sample, then the paper numbers.
 

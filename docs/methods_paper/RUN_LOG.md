@@ -723,7 +723,7 @@ Stage 2 needs NO rerun for the recipe: `Convulsive_v4LUNARC_20260616` was traine
 consequence: every operating-point sweep and detection on the old-recipe arms has to be
           redone for the new models. Operating points do not transfer between models.
 
-### 2026-10-10 — Why cascade recall is low: Stage 2 and the meaning of "convulsive"
+### 2026-10-10 — Why cascade recall is low: Stage 2 (CORRECTED the same day, see end)
 loss:     on temporal_pr @ 0.95/0.5 (B1-B3, retained, 221 convulsive GT), Stage 1 catches
           **142 (64%)**. Stage 2 keeps 124 @0.45, 108 @0.5, 89 @0.55, **61 @0.6**. Of the
           caught true convulsives, conv confidence p10/25/50/75/90 = 0.43/0.51/0.58/0.67/0.93,
@@ -758,6 +758,19 @@ why the SV2A-style retrain failed (for the record): `conv_armA_holdB3` WAS train
           reject one. Hence `conv_temporal`'s rejected negatives.
 open decision (the reviewer's): which definition Stage 2 answers on RAM_GDNF, electrographic
           or behavioural. That decides whether any Stage-2 retrain is worth it.
+**CORRECTION (the reviewer, same day): there is no definition mismatch.** Electrographic and
+          behavioural convulsive seizures are the same events at the EEG level. The SV2A
+          ones simply were not all video-confirmed. There is no other seizure type. So:
+          * drop the "two definitions under one label" explanation and the
+            electrographic-vs-behavioural framing. Mir's convulsive labels are the
+            reference, and they are what Stage 2 should predict.
+          * drop the argument that Stage-1 subset precision is biased by "non-convulsive
+            seizures". The 11% stands as measured, with only the general subset caveat
+            (detections overlapping nothing Mir adjudicated are unknown).
+          * what remains, and is data: Stage 2 is uncertain on RAM_GDNF convulsives except
+            on one implant (B1 ch7, median 0.99; the rest 0.39-0.67). That is an implant
+            or signal effect, not a label effect. The 95% tail is still mostly that implant.
+            The >100 s loss is still the training cap.
 
 ### 2026-10-10 — RESULT: _pr temporal + all_prod, pre-registered selection on B1-B3
 training (fp32 confirmed by "Mixed precision: OFF (fp32, TF32 disabled)" in every log):
