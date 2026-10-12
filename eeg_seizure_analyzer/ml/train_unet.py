@@ -240,6 +240,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--patience", type=int, default=10)
     p.add_argument("--num-workers", type=int, default=0)
+    p.add_argument("--export-windows", metavar="DIR",
+                   help="instead of training, write the exact train/val windows this "
+                        "configuration produces (un-augmented model inputs + masks + a "
+                        "per-window table) to DIR, then exit. Same code path as training.")
     p.add_argument("--fp32", action="store_true",
                    help="disable bf16 mixed precision (and TF32) on CUDA, matching how "
                         "the production model was trained")
@@ -316,6 +320,9 @@ def main(argv: list[str] | None = None) -> int:
         mixed_precision=not args.fp32,
     )
 
+    if args.export_windows:
+        return _export_windows(dataset_def, dataset_config, Path(args.export_windows))
+
     print(f"Training U-Net '{args.model_name}' on {len(dataset_def['files'])} EDFs "
           f"(neg-source={args.neg_source}, neg/pos={neg_pos_ratio}, "
           f"pos_weight={pos_weight:.1f})")
@@ -327,6 +334,56 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"\nBest event_f1: {result['best_metrics'].get('event_f1', 'N/A')}")
     print(f"Model: {result['model_path']}")
+    return 0
+
+
+def _export_windows(dataset_def: dict, dataset_config: DatasetConfig, out: Path) -> int:
+    """Write the windows a training run with these flags would see, without training.
+
+    Uses ``build_datasets``, the call ``train_model`` makes, so the specs, split and
+    background draws are identical (seed in DatasetConfig). Augmentation is switched
+    off, because that is applied per epoch at random and is not part of the data.
+    Per split it writes X_<split>.npy (float32, n x channels x samples: the
+    resampled, per-window z-scored input exactly as the model receives it),
+    Y_<split>.npy (uint8, n x 2 x samples: row 0 seizure, row 1 convulsive) and
+    windows_<split>.csv (one row per window).
+    """
+    import numpy as np
+    import pandas as pd
+    from eeg_seizure_analyzer.ml.dataset import build_datasets
+
+    dataset_config.augment = False
+    train_ds, val_ds, cfg = build_datasets(dataset_def, dataset_config)
+    out.mkdir(parents=True, exist_ok=True)
+    for split, ds in (("train", train_ds), ("val", val_ds)):
+        n = len(ds)
+        eeg0, mask0, _ = ds[0]
+        X = np.lib.format.open_memmap(out / f"X_{split}.npy", mode="w+",
+                                      dtype=np.float32, shape=(n, *eeg0.shape))
+        Y = np.lib.format.open_memmap(out / f"Y_{split}.npy", mode="w+",
+                                      dtype=np.uint8, shape=(n, *mask0.shape))
+        rows = []
+        for i in range(n):
+            eeg, mask, _ = ds[i]
+            X[i] = eeg.numpy()
+            Y[i] = (mask.numpy() > 0.5).astype(np.uint8)
+            sp = ds.specs[i]
+            rows.append({
+                "window": i,
+                "recording": Path(sp.edf_path).stem,
+                "animal_id": sp.animal_id,
+                "eeg_channel": sp.eeg_channel,
+                "start_sec": round(float(sp.start_sec), 3),
+                "duration_sec": float(sp.duration_sec),
+                "contains_seizure": bool(sp.is_positive),
+                "centre_is_convulsive": bool(getattr(sp, "center_convulsive", False)),
+                "seizure_seconds": round(float(Y[i][0].sum()) / cfg.target_fs, 2),
+            })
+            if (i + 1) % 1000 == 0:
+                print(f"  {split}: {i + 1}/{n}", flush=True)
+        X.flush(); Y.flush()
+        pd.DataFrame(rows).to_csv(out / f"windows_{split}.csv", index=False)
+        print(f"{split}: {n} windows -> X {X.shape}, Y {Y.shape}")
     return 0
 
 
