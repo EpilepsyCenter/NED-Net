@@ -10,6 +10,7 @@ from dash import html, dcc, callback, Input, Output, State, no_update, ctx, clie
 import dash_bootstrap_components as dbc
 
 from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import inspector_view as iv
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
@@ -581,17 +582,37 @@ def _initial_spectral_row(rec, current_event, state):
 # ── Review Mode Plot ──────────────────────────────────────────────────
 
 
+def _view_key(event: AnnotatedEvent):
+    """Identity of an event for the view state. Survives boundary edits."""
+    on = (event.original_onset_sec if event.original_onset_sec is not None
+          else event.onset_sec)
+    return [event.channel, event.source, round(float(on), 4)]
+
+
+def _review_window(rec, event: AnnotatedEvent, state) -> tuple[float, float]:
+    """The (start, end) seconds shown for this event: context and pan, see inspector_view."""
+    return iv.view_window(state, "tr", _view_key(event), event.onset_sec,
+                          event.offset_sec, rec.duration_sec)
+
+
+def _build_overview(rec, event: AnnotatedEvent, state, annotations) -> go.Figure:
+    """Overview strip for the review plot: this channel's annotations, coloured by label."""
+    evs = [(a.onset_sec, a.offset_sec,
+            _LABEL_COLORS.get(a.label, _LABEL_COLORS["pending"])["line"])
+           for a in annotations if a.channel == event.channel]
+    return iv.overview_figure(state, "tr", rec, event.channel,
+                              _review_window(rec, event, state), evs,
+                              (event.onset_sec, event.offset_sec))
+
+
 def _build_review_figure(rec, event: AnnotatedEvent, state,
                          bp_low=1.0, bp_high=50.0,
                          y_range=None, act_ymin=0.0, act_ymax=4.0,
                          show_baseline=False, show_threshold=False):
-    """Build the EEG plot for review mode: +/- 10s around event."""
-    context_sec = 10.0
+    """Build the EEG plot for review mode: the event plus its view window."""
     ch = event.channel
     onset, offset = event.onset_sec, event.offset_sec
-
-    win_start = max(0, onset - context_sec)
-    win_end = min(rec.duration_sec, offset + context_sec)
+    win_start, win_end = _review_window(rec, event, state)
 
     start_idx = int(win_start * rec.fs)
     end_idx = min(int(win_end * rec.fs), rec.n_samples)
@@ -601,7 +622,9 @@ def _build_review_figure(rec, event: AnnotatedEvent, state,
     data = bandpass_filter(data, rec.fs, bp_low, bp_high)
 
     time_axis = np.linspace(win_start, win_end, len(data))
-    ds_time, ds_data = _minmax_downsample(time_axis, data)
+    # ~40 points/s: the default ±10 s view keeps its 2400 points, wide views stay readable
+    ds_time, ds_data = _minmax_downsample(
+        time_axis, data, target_points=max(2400, int(40 * (win_end - win_start))))
 
     ch_name = rec.channel_names[ch] if ch < len(rec.channel_names) else f"Ch {ch}"
     unit_label = rec.units[ch] if ch < len(rec.units) else ""
@@ -743,12 +766,15 @@ def _build_review_figure(rec, event: AnnotatedEvent, state,
     y_center = float(np.mean(data)) if len(data) > 0 else 0.0
 
     total_height = 500 if has_act else 400
+    # New view -> new uirevision, so Plotly applies the range instead of keeping the
+    # previous zoom. Same view (convulsive toggle, y-range) -> the user's zoom is kept.
+    x_rev = f"x_{ch}_{win_start:.3f}_{win_end:.3f}"
 
     if has_act:
         fig.update_xaxes(title_text="Time (s)", fixedrange=False,
-                         uirevision="x_stable", row=2, col=1)
-        fig.update_xaxes(fixedrange=False, uirevision="x_stable",
-                         row=1, col=1)
+                         range=[win_start, win_end], uirevision=x_rev, row=2, col=1)
+        fig.update_xaxes(fixedrange=False, range=[win_start, win_end],
+                         uirevision=x_rev, row=1, col=1)
         fig.update_yaxes(
             title_text=f"Amplitude ({unit_label})" if unit_label else "Amplitude",
             fixedrange=False,
@@ -766,7 +792,8 @@ def _build_review_figure(rec, event: AnnotatedEvent, state,
         )
     else:
         fig.update_layout(
-            xaxis=dict(title="Time (s)", fixedrange=False),
+            xaxis=dict(title="Time (s)", fixedrange=False,
+                       range=[win_start, win_end], uirevision=x_rev),
             yaxis=dict(
                 title=f"Amplitude ({unit_label})" if unit_label else "Amplitude",
                 fixedrange=False,
@@ -796,12 +823,9 @@ def _build_spectral_plots(rec, event: AnnotatedEvent, state,
     """
     from scipy.signal import spectrogram as scipy_spectrogram, welch
 
-    context_sec = 10.0
     ch = event.channel
     onset, offset = event.onset_sec, event.offset_sec
-
-    win_start = max(0, onset - context_sec)
-    win_end = min(rec.duration_sec, offset + context_sec)
+    win_start, win_end = _review_window(rec, event, state)
 
     start_idx = int(win_start * rec.fs)
     end_idx = min(int(win_end * rec.fs), rec.n_samples)
@@ -813,7 +837,7 @@ def _build_spectral_plots(rec, event: AnnotatedEvent, state,
     # ── Spectrogram ─────────────────────────────────────────────
     nperseg = min(int(1.0 * rec.fs), len(data) // 4)
     nperseg = max(nperseg, 64)
-    noverlap = int(nperseg * 0.9)
+    noverlap = iv.spectrogram_overlap(nperseg, len(data))
 
     f_spec, t_spec, Sxx = scipy_spectrogram(
         data, fs=rec.fs, nperseg=nperseg, noverlap=noverlap)
@@ -834,7 +858,8 @@ def _build_spectral_plots(rec, event: AnnotatedEvent, state,
     fig_spec.add_vline(x=offset, line=dict(color="#f85149", width=1.5, dash="dash"))
     fig_spec.update_layout(
         height=250, xaxis_title="Time (s)", yaxis_title="Frequency (Hz)",
-        showlegend=False, uirevision=f"tr_spec_{onset}_{ch}",
+        showlegend=False, uirevision=f"tr_spec_{ch}_{win_start:.3f}_{win_end:.3f}",
+        xaxis_range=[win_start, win_end],
     )
     apply_fig_theme(fig_spec)
     fig_spec.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -887,7 +912,8 @@ def _build_spectral_plots(rec, event: AnnotatedEvent, state,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
                     font=dict(size=10)),
-        uirevision=f"tr_bp_{onset}_{ch}",
+        uirevision=f"tr_bp_{ch}_{win_start:.3f}_{win_end:.3f}",
+        xaxis_range=[win_start, win_end],
     )
     apply_fig_theme(fig_bp)
     fig_bp.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -1575,6 +1601,19 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
+                    # View controls (pan / context / overview span), then the overview
+                    # strip: ± minutes around the view, click to jump
+                    html.Div(
+                        iv.view_controls("tr", iv.context_sec(state, "tr"),
+                                         iv.ovspan_sec(state, "tr")),
+                        style={"display": "flex", "justifyContent": "center",
+                               "marginBottom": "4px"},
+                    ),
+                    iv.overview_graph(
+                        "tr-overview",
+                        _build_overview(rec, current_event, state, annotations)
+                        if current_event else None),
+
                     # Review EEG plot — pre-render first event
                     dcc.Loading(
                         dcc.Graph(
@@ -1872,7 +1911,7 @@ clientside_callback(
             document.addEventListener('keydown', function(e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
                 var key = e.key.toLowerCase();
-                if (['c', 'r', 's', 'v', 'arrowleft', 'arrowright', ',', '.'].includes(key)) {
+                if (['c', 'r', 's', 'v', 'arrowleft', 'arrowright', ',', '.', '[', ']', '\\\\'].includes(key)) {
                     e.preventDefault();
                     if (window.dash_clientside && window.dash_clientside.set_props) {
                         window.dash_clientside.set_props('tr-keyboard-store', {data: {key: key, ts: Date.now()}});
@@ -1978,6 +2017,7 @@ def save_method_filter(val, sid):
     Output("tr-annotation-counts", "children"),
     Output("tr-spectrogram", "figure"),
     Output("tr-band-power", "figure"),
+    Output("tr-overview", "figure"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-method-filter", "value"),
@@ -2009,6 +2049,12 @@ def save_method_filter(val, sid):
     Input("tr-show-baseline", "value"),
     Input("tr-show-threshold", "value"),
     Input("tr-convulsive-toggle", "value"),
+    Input("tr-pan-left", "n_clicks"),
+    Input("tr-pan-right", "n_clicks"),
+    Input("tr-pan-centre", "n_clicks"),
+    Input("tr-context", "value"),
+    Input("tr-overview", "clickData"),
+    Input("tr-ovspan", "value"),
     State("tr-onset-input", "value"),
     State("tr-offset-input", "value"),
     State("tr-notes", "value"),
@@ -2023,17 +2069,18 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
                   confirm_clicks, reject_clicks, skip_clicks,
                   kb_data, tr_yrange, tr_act_ymin, tr_act_ymax,
                   show_baseline, show_threshold, convulsive_toggle,
+                  _pan_l, _pan_r, _pan_c, context_val, ov_click, ovspan_val,
                   onset_input, offset_input,
                   notes_val, sid):
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
-    _N_OUT = 13  # number of outputs
+    _N_OUT = 14  # number of outputs
     _no = no_update
     if mode != "review":
         return (_no,) * _N_OUT
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure()
+        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure(), go.Figure()
 
     trigger = ctx.triggered_id
 
@@ -2122,7 +2169,7 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
         empty_counts = _build_annotation_counts(
             _progress_counts(annotations), _progress_counts([]),
             0, {}, filt_on)
-        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), empty_counts, go.Figure(), go.Figure()
+        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), empty_counts, go.Figure(), go.Figure(), go.Figure()
 
     current_idx = state.extra.get("tr_current_idx", 0)
 
@@ -2142,6 +2189,12 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
             action = "prev"
         elif key in ("arrowright", "."):
             action = "next"
+        elif key == "[":
+            action = "pan_left"
+        elif key == "]":
+            action = "pan_right"
+        elif key == "\\":
+            action = "pan_centre"
     elif trigger == "tr-confirm-btn":
         action = "confirm"
     elif trigger == "tr-reject-btn":
@@ -2156,6 +2209,18 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
         action = "jump"
     elif trigger == "tr-convulsive-toggle":
         action = "set_convulsive"
+    elif trigger == "tr-pan-left":
+        action = "pan_left"
+    elif trigger == "tr-pan-right":
+        action = "pan_right"
+    elif trigger == "tr-pan-centre":
+        action = "pan_centre"
+    elif trigger == "tr-context":
+        action = "context"
+    elif trigger == "tr-overview":
+        action = "overview_jump"
+    elif trigger == "tr-ovspan":
+        action = "ovspan"
 
     # Save notes for current event before moving
     if action in ("confirm", "reject", "skip", "prev", "next", "jump"):
@@ -2256,6 +2321,19 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
 
     # Build figure
     event = filtered[current_idx]
+
+    # View window: pan / centre / context change the view, never the event
+    if action in ("pan_left", "pan_right", "pan_centre"):
+        iv.apply_view_action(state, "tr", _view_key(event), action[4:],
+                             event.onset_sec, event.offset_sec, rec.duration_sec)
+    elif action == "context":
+        iv.set_context(state, "tr", _view_key(event), context_val,
+                       event.onset_sec, event.offset_sec, rec.duration_sec)
+    elif action == "overview_jump" and ov_click and ov_click.get("points"):
+        iv.jump_view(state, "tr", _view_key(event), float(ov_click["points"][0]["x"]),
+                     event.onset_sec, event.offset_sec, rec.duration_sec)
+    elif action == "ovspan" and ovspan_val is not None:
+        state.extra["tr_ovspan"] = int(ovspan_val)
     # Persist baseline/threshold toggle state
     state.extra["tr_show_baseline"] = bool(show_baseline)
     state.extra["tr_show_threshold"] = bool(show_threshold)
@@ -2304,7 +2382,15 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
     except Exception:
         fig_spec, fig_bp = go.Figure(), go.Figure()
 
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp
+    fig_ov = _build_overview(rec, event, state, annotations)
+
+    if action in ("pan_left", "pan_right", "pan_centre", "context", "overview_jump", "ovspan"):
+        # Only the view moved: keep typed-but-unapplied boundaries and notes; the
+        # video follows the view.
+        view_seek = round(_review_window(rec, event, state)[0], 1)
+        return (fig, nav_text, badge, no_update, no_update, no_update, no_update,
+                view_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov)
+    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov
 
 
 # Clientside callback: seek the training video when event changes

@@ -5,11 +5,12 @@ from __future__ import annotations
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from dash import html, dcc, callback, Input, Output, State, no_update, ctx
+from dash import html, dcc, callback, Input, Output, State, no_update, ctx, clientside_callback
 import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 
 from eeg_seizure_analyzer.dash_app import server_state
+from eeg_seizure_analyzer.dash_app import inspector_view as iv
 from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     get_plotly_theme,
@@ -713,7 +714,9 @@ def layout(sid: str | None) -> html.Div:
             html.Div(id="sz-results", children=existing_results),
 
             # Inspector controls
-            _inspector_controls(has_results, insp_yr, insp_opts),
+            _inspector_controls(has_results, insp_yr, insp_opts,
+                                context=iv.context_sec(state, "sz_insp"),
+                                ovspan=iv.ovspan_sec(state, "sz_insp")),
 
             # Event inspector — pre-render if event was selected before tab switch
             html.Div(
@@ -901,7 +904,9 @@ _ALL_FILTER_IDS = _ALL_FILTER_MIN_IDS + _ALL_FILTER_MAX_IDS
 # ── Inspector controls ─────────────────────────────────────────────
 
 
-def _inspector_controls(visible: bool, y_range: float, opts=None) -> html.Div:
+def _inspector_controls(visible: bool, y_range: float, opts=None,
+                        context: float = iv.DEFAULT_CONTEXT,
+                        ovspan: int = iv.DEFAULT_OVSPAN) -> html.Div:
     opts = opts or dict(_INSP_DEFAULTS)
     return html.Div(
         id="sz-inspector-controls",
@@ -942,10 +947,36 @@ def _inspector_controls(visible: bool, y_range: float, opts=None) -> html.Div:
                             ),
                         ],
                     ),
+                    iv.view_controls("sz-insp", context, ovspan),
+                    html.Div(id="sz-insp-key-listener", style={"display": "none"}),
                 ],
             ),
         ],
     )
+
+
+# Keyboard: [ and ] pan the inspector, \ re-centres it. Clicks the buttons, so the
+# keys only act while the inspector controls are on screen.
+clientside_callback(
+    """
+    function(_id) {
+        if (!window._szInspKeysActive) {
+            window._szInspKeysActive = true;
+            var map = {'[': 'sz-insp-pan-left', ']': 'sz-insp-pan-right',
+                       '\\\\': 'sz-insp-pan-centre'};
+            document.addEventListener('keydown', function(e) {
+                var t = e.target.tagName;
+                if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+                var b = map[e.key] && document.getElementById(map[e.key]);
+                if (b && b.offsetParent !== null) { e.preventDefault(); b.click(); }
+            });
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("sz-insp-key-listener", "children"),
+    Input("sz-insp-key-listener", "id"),
+)
 
 
 # ── Export controls ───────────────────────────────────────────────────
@@ -4324,11 +4355,17 @@ def poll_detect_all(n_intervals, sid, is_running, refresh):
     Input("sz-insp-show-threshold", "value"),
     Input("sz-insp-bandpass", "value"),
     Input("sz-insp-yrange", "value"),
+    Input("sz-insp-pan-left", "n_clicks"),
+    Input("sz-insp-pan-right", "n_clicks"),
+    Input("sz-insp-pan-centre", "n_clicks"),
+    Input("sz-insp-context", "value"),
+    Input("sz-insp-ovspan", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def on_row_select(selected_rows, show_spikes, show_baseline, show_threshold,
-                  bandpass_on, insp_yrange, sid):
+                  bandpass_on, insp_yrange, _pan_l, _pan_r, _pan_c, context_val,
+                  ovspan_val, sid):
     """Render the event inspector when a seizure row is clicked or controls change."""
     if not selected_rows:
         return html.Div()
@@ -4358,6 +4395,17 @@ def on_row_select(selected_rows, show_spikes, show_baseline, show_threshold,
     # Persist selected event for tab-switch restoration
     state.extra["sz_selected_event_key"] = _event_key(event)
 
+    # View window: pan / centre / context move the view, never the event
+    trig = ctx.triggered_id
+    if trig in ("sz-insp-pan-left", "sz-insp-pan-right", "sz-insp-pan-centre"):
+        iv.apply_view_action(state, "sz_insp", _event_key(event), trig.rsplit("-", 1)[1],
+                             event.onset_sec, event.offset_sec, rec.duration_sec)
+    elif trig == "sz-insp-context":
+        iv.set_context(state, "sz_insp", _event_key(event), context_val,
+                       event.onset_sec, event.offset_sec, rec.duration_sec)
+    elif trig == "sz-insp-ovspan" and ovspan_val is not None:
+        state.extra["sz_insp_ovspan"] = int(ovspan_val)
+
     det_info = state.st_detection_info.get(event.channel, {})
 
     try:
@@ -4376,17 +4424,54 @@ def on_row_select(selected_rows, show_spikes, show_baseline, show_threshold,
         return alert(f"Inspector error: {e}", "danger")
 
 
+@callback(
+    Output("sz-event-inspector", "children", allow_duplicate=True),
+    Input("sz-insp-overview", "clickData"),
+    State("sz-insp-show-spikes", "value"),
+    State("sz-insp-show-baseline", "value"),
+    State("sz-insp-show-threshold", "value"),
+    State("sz-insp-bandpass", "value"),
+    State("sz-insp-yrange", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def on_overview_click(click, show_spikes, show_baseline, show_threshold,
+                      bandpass_on, insp_yrange, sid):
+    """Centre the inspector's view where the overview strip was clicked."""
+    if not click or not click.get("points"):
+        return no_update
+    state = server_state.get_session(sid)
+    rec = state.recording
+    ek = state.extra.get("sz_selected_event_key")
+    event = next((e for e in state.seizure_events if _event_key(e) == ek), None)
+    if rec is None or event is None:
+        return no_update
+    iv.jump_view(state, "sz_insp", ek, float(click["points"][0]["x"]),
+                 event.onset_sec, event.offset_sec, rec.duration_sec)
+    try:
+        return _render_inspector(
+            rec, event, state.st_detection_info.get(event.channel, {}), state,
+            show_spikes=show_spikes, show_baseline=show_baseline,
+            show_threshold=show_threshold, bandpass_on=bandpass_on,
+            y_range=float(insp_yrange) if insp_yrange and insp_yrange > 0 else None,
+            sid=sid,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return alert(f"Inspector error: {e}", "danger")
+
+
 def _render_inspector(rec, event, det_info, state, *,
                       show_spikes=True, show_baseline=True,
                       show_threshold=True, bandpass_on=False,
                       y_range=None, sid=None):
     """Build full event inspector: EEG trace, activity, spectrogram, power over time."""
-    context_sec = 10.0
     ch = event.channel
     onset, offset = event.onset_sec, event.offset_sec
-
-    win_start = max(0, onset - context_sec)
-    win_end = min(rec.duration_sec, offset + context_sec)
+    # Context and pan: see inspector_view. Every plot below follows this window.
+    win_start, win_end = iv.view_window(state, "sz_insp", _event_key(event),
+                                        onset, offset, rec.duration_sec)
 
     start_idx = int(win_start * rec.fs)
     end_idx = min(int(win_end * rec.fs), rec.n_samples)
@@ -4437,8 +4522,11 @@ def _render_inspector(rec, event, det_info, state, *,
     )
 
     _eeg_color = "#1b2a4a" if get_plotly_theme() == "light" else "#58a6ff"
+    # Raw samples for normal views (zooming in keeps full detail); a min/max envelope
+    # only when a wide view would send more than 200k points.
+    plot_t, plot_y = iv.minmax_downsample(time_axis, data, 200_000)
     fig_eeg.add_trace(go.Scattergl(
-        x=time_axis, y=data,
+        x=plot_t, y=plot_y,
         mode="lines", name=ch_name,
         line=dict(width=0.8, color=_eeg_color),
     ), row=1, col=1)
@@ -4541,15 +4629,15 @@ def _render_inspector(rec, event, det_info, state, *,
         uirevision=f"insp_y_{y_range}",
         row=1, col=1,
     )
-    fig_eeg.update_xaxes(
-        uirevision=f"insp_x_{onset}_{ch}",
-        row=1, col=1,
-    )
+    # The view is part of the uirevision: a pan applies the new range, while checkbox
+    # toggles on the same view keep the user's zoom.
+    view_rev = f"{onset}_{ch}_{win_start:.3f}_{win_end:.3f}"
+    fig_eeg.update_xaxes(range=[win_start, win_end], uirevision=f"insp_x_{view_rev}")
 
     fig_eeg.update_layout(
         height=400 if has_act else 300,
         showlegend=False, dragmode="zoom",
-        uirevision=f"insp_{onset}_{ch}",
+        uirevision=f"insp_{view_rev}",
     )
     apply_fig_theme(fig_eeg)
     fig_eeg.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -4559,7 +4647,7 @@ def _render_inspector(rec, event, det_info, state, *,
 
     nperseg = min(int(1.0 * rec.fs), len(data) // 4)
     nperseg = max(nperseg, 64)
-    noverlap = int(nperseg * 0.9)
+    noverlap = iv.spectrogram_overlap(nperseg, len(data))
 
     f_spec, t_spec, Sxx = scipy_spectrogram(
         data, fs=rec.fs, nperseg=nperseg, noverlap=noverlap)
@@ -4580,7 +4668,8 @@ def _render_inspector(rec, event, det_info, state, *,
     fig_spec.add_vline(x=offset, line=dict(color="#f85149", width=1.5, dash="dash"))
     fig_spec.update_layout(
         height=250, xaxis_title="Time (s)", yaxis_title="Frequency (Hz)",
-        showlegend=False, uirevision=f"spec_{onset}_{ch}",
+        showlegend=False, uirevision=f"spec_{view_rev}",
+        xaxis_range=[win_start, win_end],
     )
     apply_fig_theme(fig_spec)
     fig_spec.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -4634,7 +4723,8 @@ def _render_inspector(rec, event, det_info, state, *,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
                     font=dict(size=10)),
-        uirevision=f"bp_{onset}_{ch}",
+        uirevision=f"bp_{view_rev}",
+        xaxis_range=[win_start, win_end],
     )
     apply_fig_theme(fig_bp)
     fig_bp.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -4670,7 +4760,7 @@ def _render_inspector(rec, event, det_info, state, *,
                 xaxis_title="Time (s)", yaxis_title="SBI (target/ref power)",
                 xaxis_range=[win_start, win_end],
                 showlegend=False,
-                uirevision=f"sbi_{onset}_{ch}",
+                uirevision=f"sbi_{view_rev}",
             )
             apply_fig_theme(fig_sbi)
             fig_sbi.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -4763,7 +4853,7 @@ def _render_inspector(rec, event, det_info, state, *,
             fig_acorr.update_yaxes(title_text="Spike Freq (Hz)", row=2, col=1)
             fig_acorr.update_layout(
                 height=300, showlegend=False,
-                uirevision=f"acorr_{onset}_{ch}",
+                uirevision=f"acorr_{view_rev}",
             )
             apply_fig_theme(fig_acorr)
             fig_acorr.update_layout(margin=dict(l=60, r=20, t=30, b=40))
@@ -4858,6 +4948,14 @@ def _render_inspector(rec, event, det_info, state, *,
         html.H5("Event Inspector",
                  style={"marginBottom": "16px", "color": "var(--ned-accent)"}),
         detail_metrics,
+        html.Div("Overview (1–50 Hz amplitude; click to view there)",
+                 style={"fontSize": "0.82rem", "fontWeight": "600",
+                        "color": "var(--ned-text-muted)", "marginBottom": "2px"}),
+        iv.overview_graph("sz-insp-overview", iv.overview_figure(
+            state, "sz_insp", rec, ch, (win_start, win_end),
+            [(e.onset_sec, e.offset_sec, "#f85149") for e in state.seizure_events
+             if e.channel == ch],
+            (onset, offset))),
         html.Div("EEG Trace", style={"fontSize": "0.82rem", "fontWeight": "600",
                                       "color": "var(--ned-text-muted)", "marginBottom": "4px"}),
         dcc.Graph(id=graph_id, figure=fig_eeg,
