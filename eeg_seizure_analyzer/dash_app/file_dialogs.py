@@ -1,9 +1,12 @@
 """Native OS file/folder dialogs for the in-window desktop app.
 
 The webview window has no browser file-input or download capability, so every
-picker shells out to the platform's native dialog:
+picker uses a native dialog:
 
-* macOS              -> AppleScript via ``osascript``
+* desktop app        -> the pywebview window's own dialog (``set_native_window``).
+                        It belongs to the app's window, so it opens at once and
+                        with keyboard focus.
+* macOS (browser)    -> AppleScript via ``osascript``
 * Linux              -> ``zenity`` (GTK) or ``kdialog`` (KDE), whichever exists
 * Windows / fallback -> ``tkinter``
 
@@ -14,6 +17,11 @@ subprocess so a crash in a native toolkit can't take down the Dash server.
 Note on Linux: tkinter is a separate system package (``python3-tk``) that is
 frequently absent, which is why ``zenity``/``kdialog`` are tried first — they
 ship with most desktops and need no extra setup.
+
+Why not osascript in the desktop app: it runs as a separate background process,
+so its dialog opened without keyboard focus (a first click only focused it).
+Making it ``activate`` first made it slower to appear and still unfocused, since
+macOS no longer lets a background process take focus from the active app.
 """
 
 from __future__ import annotations
@@ -25,6 +33,44 @@ import subprocess
 import sys
 
 _TIMEOUT = 120  # seconds a dialog may stay open before we give up
+
+# The desktop app's pywebview window, when running as the desktop app
+# (set by desktop.main). None in a browser: the other backends are used then.
+_native_window = None
+
+
+def set_native_window(window) -> None:
+    """Route every dialog through this pywebview window (desktop app)."""
+    global _native_window
+    _native_window = window
+
+
+def _webview_dialog(kind: str, title: str = "", exts=(), multiple: bool = False,
+                    save_name: str = ""):
+    """Open the dialog on the app's own window.
+
+    Returns a list of paths, or None when there is no window or the dialog failed,
+    so the caller falls back to the other backends. pywebview runs the dialog on
+    its GUI thread and blocks this (callback) thread until the user answers.
+    """
+    if _native_window is None:
+        return None
+    try:
+        import webview
+        dtype = {"open": webview.FileDialog.OPEN, "folder": webview.FileDialog.FOLDER,
+                 "save": webview.FileDialog.SAVE}[kind]
+        types = ()
+        if exts and kind == "open":
+            label = "/".join(e.upper() for e in exts)
+            types = (f"{label} files ({';'.join('*.' + e for e in exts)})",
+                     "All files (*.*)")
+        res = _native_window.create_file_dialog(
+            dtype, allow_multiple=multiple, save_filename=save_name, file_types=types)
+    except Exception:
+        return None
+    if not res:
+        return []
+    return [res] if isinstance(res, str) else [str(r) for r in res]
 
 
 # ── subprocess plumbing ─────────────────────────────────────────────────
@@ -40,14 +86,8 @@ def _stdout(cmd: list[str]) -> str:
 
 
 def _osascript(script: str) -> str:
-    """Run an AppleScript dialog, activated first.
-
-    osascript is a background process, so its dialog used to open without
-    keyboard focus: the first click only focused it and a second was needed to
-    choose. ``activate`` brings the dialog to the front with focus, and needs no
-    Automation permission (unlike scripting "System Events").
-    """
-    return _stdout(["osascript", "-e", "activate", "-e", script])
+    """Run an AppleScript dialog (macOS in a browser; see the module docstring)."""
+    return _stdout(["osascript", "-e", script])
 
 
 def _lines(text: str) -> list[str]:
@@ -133,6 +173,9 @@ def _tk(body: str) -> str:
 
 def pick_folder(title: str = "Select folder") -> str | None:
     """Open a folder picker. Returns the chosen path, or None if cancelled."""
+    res = _webview_dialog("folder", title)
+    if res is not None:
+        return res[0].rstrip("/") if res else None
     system = platform.system()
     if system == "Darwin":
         out = _osascript(f'POSIX path of (choose folder with prompt "{title}")')
@@ -153,6 +196,9 @@ def pick_file(title: str = "Select file", exts=()) -> str | None:
     """Open a single-file picker. *exts* is the allowed extensions without the
     dot (empty = any file). Returns the chosen path, or None if cancelled."""
     exts = _norm_exts(exts)
+    res = _webview_dialog("open", title, exts)
+    if res is not None:
+        return res[0] if res else None
     system = platform.system()
     if system == "Darwin":
         out = _osascript(f'POSIX path of (choose file with prompt "{title}"'
@@ -177,6 +223,9 @@ def pick_files(title: str = "Select files", exts=()) -> list[str]:
     """Open a multi-file picker. Returns the list of chosen paths (possibly
     empty)."""
     exts = _norm_exts(exts)
+    res = _webview_dialog("open", title, exts, multiple=True)
+    if res is not None:
+        return res
     system = platform.system()
     if system == "Darwin":
         script = "\n".join([
@@ -220,6 +269,10 @@ def save_file(default_name: str, title: str = "Save file",
         if path and default_ext and not os.path.splitext(path)[1]:
             path += default_ext
         return path or None
+
+    res = _webview_dialog("save", title, save_name=default_name)
+    if res is not None:
+        return _ensure_ext(res[0]) if res else None
 
     system = platform.system()
     if system == "Darwin":

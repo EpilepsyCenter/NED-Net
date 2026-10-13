@@ -184,6 +184,10 @@ def main() -> None:
         min_size=MIN_SIZE,
     )
 
+    # File/folder pickers open on this window: fast, and with keyboard focus.
+    from eeg_seizure_analyzer.dash_app import file_dialogs
+    file_dialogs.set_native_window(window)
+
     # Track the latest size — pywebview's resized event passes (width, height).
     def _on_resized(*args):
         if len(args) >= 2:
