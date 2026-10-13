@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use NED-Net, please cite it as below."
+type: software
+title: "NED-Net: Neural Event Detection Network for automated seizure detection in rodent EEG"
+version: 1.0.0
+date-released: 2026-10-13
+license: GPL-3.0-only
+repository-code: "https://github.com/EpilepsyCenter/NED-Net"
+authors:
+  - family-names: Ledri
+    given-names: Marco
+keywords:
+  - EEG
+  - epilepsy
+  - seizure detection
+  - interictal spikes
+  - deep learning
+  - U-Net
+  - rodent

@@ -1,6 +1,6 @@
 [project]
 name = "eeg-seizure-analyzer"
-version = "0.1.0"
+version = "1.0.0"
 description = "Detect and quantify seizures and interictal activity in mouse EEG recordings"
 requires-python = ">=3.9"
 dependencies = [

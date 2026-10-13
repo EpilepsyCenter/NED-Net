@@ -5,6 +5,7 @@ Run with:  python -m eeg_seizure_analyzer.dash_app.main
 
 from __future__ import annotations
 
+from eeg_seizure_analyzer import __version__
 from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 
@@ -233,7 +234,7 @@ def _sidebar():
                         ],
                     ),
                     html.Div([
-                        html.Span("NED-Net v0.1"),
+                        html.Span(f"NED-Net v{__version__}"),
                         html.Span(" \u00B7 ", style={"opacity": "0.4"}),
                         html.Span("EEG Analysis Platform"),
                         html.Span(" \u00B7 ", style={"opacity": "0.4"}),

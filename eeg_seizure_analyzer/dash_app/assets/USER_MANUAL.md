@@ -1,6 +1,6 @@
 # NED-Net User Manual
 
-**Neural Event Detection Network**, v0.1
+**Neural Event Detection Network**, v1.0
 
 A desktop application for detecting, reviewing and quantifying seizures and interictal spikes in
 long-term rodent EEG.

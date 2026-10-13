@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from eeg_seizure_analyzer import __version__
 import json
 import os
 from pathlib import Path
@@ -134,7 +135,7 @@ def _landing_layout() -> html.Div:
             _recent_list(),
             html.Div(id="recent-status", style={"marginTop": "8px"}),
             html.Div(
-                "v0.1",
+                f"v{__version__}",
                 style={
                     "marginTop": "48px",
                     "fontSize": "0.75rem",
