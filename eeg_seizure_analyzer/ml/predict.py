@@ -38,6 +38,7 @@ def predict_seizures(
     overlap_sec: float = 15.0,
     progress_callback=None,
     convulsive_model_name: str | None = None,
+    convulsive_min_duration_sec: float = 0.0,
 ) -> list[DetectedEvent]:
     """Run seizure detection on an EDF file using a trained model.
 
@@ -78,6 +79,10 @@ def predict_seizures(
         crop is run through this classifier and its output *overrides* the
         detector's ch1 convulsive flag. When None, the ch1 fallback is used
         unchanged.
+    convulsive_min_duration_sec : float
+        Events shorter than this are labelled non-convulsive whatever the
+        classifier says (convulsive seizures last tens of seconds). They stay
+        detected as seizures. 0 = off.
 
     Returns
     -------
@@ -232,11 +237,30 @@ def predict_seizures(
             all_events, edf_path, convulsive_model_name,
             convulsive_threshold, device,
         )
+    apply_convulsive_min_duration(all_events, convulsive_min_duration_sec)
 
     # Sort by onset
     all_events.sort(key=lambda e: (e.channel, e.onset_sec))
 
     return all_events
+
+
+def apply_convulsive_min_duration(events: list[DetectedEvent], min_sec: float) -> int:
+    """Label events shorter than ``min_sec`` non-convulsive; return how many changed.
+
+    The convulsive probability is kept, so the classifier's view stays visible, and
+    ``features["convulsive_min_duration"]`` records the rule that overrode it.
+    """
+    n = 0
+    if not min_sec or min_sec <= 0:
+        return n
+    for ev in events:
+        f = ev.features
+        if f.get("convulsive") and (ev.offset_sec - ev.onset_sec) < min_sec:
+            f["convulsive"] = False
+            f["convulsive_min_duration"] = float(min_sec)
+            n += 1
+    return n
 
 
 def _apply_convulsive_classifier(

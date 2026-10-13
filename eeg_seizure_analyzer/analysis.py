@@ -166,6 +166,9 @@ class ClassificationParams:
     hvsw_min_slow_wave_index: float = 0.5
     hpd_min_freq_hz: float = 15.0
     hpd_min_hf_index: float = 0.3
+    # Events shorter than this are non-convulsive whatever the classifier says
+    # (they stay seizures). 0 = off.
+    convulsive_min_duration_sec: float = 0.0
 
 
 def classify_event_types(
@@ -487,6 +490,9 @@ def process_chunk(
             merge_gap_sec=merge_gap_sec,
             progress_callback=progress_callback,
             convulsive_model_name=convulsive_model_name,
+            convulsive_min_duration_sec=(
+                classification_params.convulsive_min_duration_sec
+                if classification_params else 0.0),
         )
 
         # Classify event types (convulsive, HVSW, HPD)

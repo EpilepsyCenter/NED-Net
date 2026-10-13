@@ -1776,6 +1776,12 @@ def _unet_params(state) -> html.Div:
     _convmodel = state.extra.get("sz_unet_convmodel", "")
     seiz_opt, bnd_opt, _cm, conv_opt, info_children = _suggested_thresholds(
         default_model, _convmodel or None)
+    # Until the user has chosen a classifier (key absent; "" = chose the ch1
+    # fallback), use the one the thresholds above were validated with. Otherwise
+    # the classifier's threshold was applied to the detector's ch1 output.
+    if ("sz_unet_convmodel" not in state.extra and _cm
+            and any(o["value"] == _cm for o in _convulsive_model_options())):
+        _convmodel = _cm
     seiz_default = unet_p.get("threshold",
                               seiz_opt if seiz_opt is not None else 0.5)
     conv_default = unet_p.get("convulsive_threshold",
@@ -1807,10 +1813,7 @@ def _unet_params(state) -> html.Div:
                                 style={"fontSize": "0.82rem"},
                             ),
                         ], style={"marginBottom": "12px"}),
-                        _convulsive_dropdown(
-                            "sz-unet-convmodel",
-                            state.extra.get("sz_unet_convmodel", ""),
-                        ),
+                        _convulsive_dropdown("sz-unet-convmodel", _convmodel),
                         param_control(
                             "Threshold", "sz-unet-threshold",
                             0.05, 0.99, 0.01,
@@ -1837,6 +1840,15 @@ def _unet_params(state) -> html.Div:
                             "Threshold on the convulsive channel (ch1) for "
                             "labelling an event convulsive. Defaults to the "
                             "model's training optimum.",
+                        ),
+                        param_control(
+                            "Convulsive min duration (s)",
+                            "sz-unet-conv-min-dur",
+                            0.0, 60.0, 1.0,
+                            unet_p.get("convulsive_min_duration_sec", 0.0),
+                            "Events shorter than this are labelled "
+                            "non-convulsive whatever the classifier says; they "
+                            "stay detected as seizures. 0 = off.",
                         ),
                         param_control(
                             "Min duration (s)", "sz-unet-min-dur",
@@ -2277,6 +2289,7 @@ def auto_save_sz_extras(*args):
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-conv-min-dur"}, "value"),
     # ── Event re-ranker (post-processing) ──
     State("sz-reranker-enabled", "value"),
     State("sz-reranker-model", "value"),
@@ -2329,7 +2342,7 @@ def run_detection(
     bendr_min_dur, bendr_merge_gap,
     # U-Net
     unet_model, unet_convmodel, unet_threshold, unet_bnd_threshold,
-    unet_conv_threshold, unet_min_dur, unet_merge_gap,
+    unet_conv_threshold, unet_min_dur, unet_merge_gap, unet_conv_min_dur,
     # Event re-ranker
     reranker_enabled, reranker_model,
     sid,
@@ -2561,6 +2574,7 @@ def run_detection(
                     bendr_threshold, bendr_conv_threshold,
                     bendr_min_dur, bendr_merge_gap)
                 _ml_bnd = None  # no hysteresis control in the (shelved) BENDR panel
+                _ml_convmin = 0.0
                 _model_key, _params_key = "sz_bendr_model", "sz_bendr_params"
                 _convmodel_key = "sz_bendr_convmodel"
             else:
@@ -2570,6 +2584,7 @@ def run_detection(
                     unet_threshold, unet_conv_threshold,
                     unet_min_dur, unet_merge_gap)
                 _ml_bnd = unet_bnd_threshold
+                _ml_convmin = float(unet_conv_min_dur or 0.0)
                 _model_key, _params_key = "sz_unet_model", "sz_unet_params"
                 _convmodel_key = "sz_unet_convmodel"
 
@@ -2606,6 +2621,7 @@ def run_detection(
                 "threshold": _thr,
                 "boundary_threshold": (_ml_bnd if _ml_bnd is not None else _thr),
                 "convulsive_threshold": _convthr,
+                "convulsive_min_duration_sec": _ml_convmin,
                 "min_duration_sec": _mindur,
                 "merge_gap_sec": _merge,
             }
@@ -2620,6 +2636,7 @@ def run_detection(
                 min_duration_sec=_mindur,
                 merge_gap_sec=_merge,
                 convulsive_model_name=(_ml_convmodel or None),
+                convulsive_min_duration_sec=_ml_convmin,
             )
 
         elif method == "ensemble":
@@ -3900,6 +3917,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
         ml_convthr = float(sz_params.get("ml_convulsive_threshold", 0.5))
         ml_mindur = float(sz_params.get("ml_min_duration_sec", 3.0))
         ml_merge = float(sz_params.get("ml_merge_gap_sec", 2.0))
+        ml_convmin = float(sz_params.get("ml_convulsive_min_duration_sec", 0.0))
         # Hysteresis boundary threshold (U-Net only); None / >= detection = off.
         ml_bnd = sz_params.get("ml_boundary_threshold")
         ml_bnd = float(ml_bnd) if ml_bnd is not None else None
@@ -3979,6 +3997,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
                     convulsive_threshold=ml_convthr,
                     min_duration_sec=ml_mindur, merge_gap_sec=ml_merge,
                     convulsive_model_name=ml_convmodel,
+                    convulsive_min_duration_sec=ml_convmin,
                 )
             else:
                 use_chunked = rec.duration_sec > 1800 and edf_path.lower().endswith(".edf")
@@ -4117,13 +4136,14 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     State({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
+    State({"type": "param-slider", "key": "sz-unet-conv-min-dur"}, "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
                      bendr_convthr, bendr_mindur, bendr_merge, unet_model,
                      unet_convmodel, unet_thr, unet_bnd, unet_convthr,
-                     unet_mindur, unet_merge, sid):
+                     unet_mindur, unet_merge, unet_convmin, sid):
     """Launch the background detection thread and start polling."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -4179,6 +4199,8 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
         sz_params["ml_convulsive_threshold"] = float(ml_convthr or 0.5)
         sz_params["ml_min_duration_sec"] = float(ml_mindur or 3.0)
         sz_params["ml_merge_gap_sec"] = float(ml_merge or 2.0)
+        sz_params["ml_convulsive_min_duration_sec"] = (
+            float(unet_convmin or 0.0) if method == "unet" else 0.0)
 
     # Honour the channel selection from the Seizure tab (sz-channel-selector).
     # Without this, batch detection ran every channel even when the user had

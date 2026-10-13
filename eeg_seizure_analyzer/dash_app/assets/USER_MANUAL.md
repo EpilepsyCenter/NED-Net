@@ -453,7 +453,12 @@ files, use **Analysis** (section 13).
 | **Threshold** | An event's core must exceed this probability |
 | **Boundary threshold (hysteresis)** | Events grow outward to this lower probability. Equal to the threshold (or higher) turns growth off |
 | **Convulsive threshold** | Probability above which an event is labelled convulsive |
+| **Convulsive min duration (s)** | Events shorter than this are labelled non-convulsive whatever the classifier says. They stay detected as seizures, and keep their convulsive probability. 0 (the default) turns it off |
 | **Min duration (s)** / **Merge gap (s)** | Event length and merging |
+
+Convulsive seizures typically last 20-90 s, so a classifier calling a 5 s event convulsive is
+usually wrong. A minimum of about 15 s removes those calls. The default is off so that results
+match the validated operating points below, which were measured without it.
 
 ### 7.3 Recommended operating points
 
@@ -870,7 +875,7 @@ goes to a project database, the review queue, or both.
   - **Detection threshold** and **Boundary threshold** (section 7.1);
   - **Min event duration (s)** (default 5) and **Merge gap (s)** (default 2).
 - **Stage 2 (convulsive classification):** **Convulsive classifier**, or none (the U-Net's own
-  convulsive output), and **Convulsive threshold**.
+  convulsive output), **Convulsive threshold**, and **Convulsive min duration (s)** (section 7.2).
 
 Choosing a model fills in its **recommended operating point** (section 7.3), and a note says
 where it came from. If the validated classifier is not installed, the selected classifier is

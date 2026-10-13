@@ -95,6 +95,13 @@ def _effective_output(output, det_type) -> str:
     return output
 
 
+def _float_or(v, default: float) -> float:
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_boundary(val, threshold: float):
     """U-Net hysteresis boundary threshold: float below ``threshold``, else None.
 
@@ -154,6 +161,7 @@ def layout(sid: str | None) -> html.Div:
     prev_model = store.get("model_path")
     prev_threshold = store.get("confidence_threshold", 0.5)
     prev_conv_threshold = store.get("convulsive_threshold", 0.5)
+    prev_conv_min_dur = store.get("convulsive_min_duration_sec", 0)
     prev_bnd_threshold = store.get("boundary_threshold", 0.1)
     prev_min_dur = store.get("min_duration_sec", 5.0)
     prev_merge_gap = store.get("merge_gap_sec", 2.0)
@@ -324,6 +332,13 @@ def layout(sid: str | None) -> html.Div:
                             dbc.Input(id="an-conv-threshold", type="text",
                                       value=prev_conv_threshold, min=0.05, max=1.0,
                                       step=0.01, size="sm", style=_INPUT),
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Convulsive min duration (s)", style=_LABEL),
+                            dbc.Input(id="an-conv-min-dur", type="text",
+                                      value=prev_conv_min_dur, size="sm", style=_INPUT),
+                            html.Div("Shorter events are non-convulsive whatever "
+                                     "the classifier says. 0 = off.", style=_HINT),
                         ], width=3),
                     ], className="g-3 mb-2"),
                 ]),
@@ -817,6 +832,7 @@ def update_conv_model_list(det_type):
     Input("an-threshold", "value"),
     Input("an-bnd-threshold", "value"),
     Input("an-conv-threshold", "value"),
+    Input("an-conv-min-dur", "value"),
     Input("an-min-duration", "value"),
     Input("an-merge-gap", "value"),
     Input("an-output", "value"),
@@ -824,8 +840,8 @@ def update_conv_model_list(det_type):
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def remember_settings(det_type, model, conv_model, thr, bnd, conv_thr, min_dur,
-                      merge_gap, output, mode, sid):
+def remember_settings(det_type, model, conv_model, thr, bnd, conv_thr, conv_min_dur,
+                      min_dur, merge_gap, output, mode, sid):
     """Keep the settings across tab switches (they were saved only on Run)."""
     state = server_state.get_session(sid)
     store = _get_analysis_store(state)
@@ -834,6 +850,7 @@ def remember_settings(det_type, model, conv_model, thr, bnd, conv_thr, min_dur,
         "convulsive_model_name": conv_model or "",
         "confidence_threshold": thr, "boundary_threshold": bnd,
         "convulsive_threshold": conv_thr, "min_duration_sec": min_dur,
+        "convulsive_min_duration_sec": conv_min_dur,
         "merge_gap_sec": merge_gap, "output": output, "mode": mode,
     })
     _set_analysis_store(state, store)
@@ -1150,6 +1167,7 @@ def check_single_processed(path, output, det_type):
     State("an-hvsw-swi", "value"),
     State("an-hpd-freq", "value"),
     State("an-hpd-hfi", "value"),
+    State("an-conv-min-dur", "value"),
     State("an-detection-type", "value"),
     State("an-overwrite", "value"),
     State("an-output", "value"),
@@ -1158,7 +1176,7 @@ def check_single_processed(path, output, det_type):
 )
 def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
                conv_threshold, bnd_threshold, min_dur, merge_gap, hvsw_freq,
-               hvsw_swi, hpd_freq, hpd_hfi, det_type, overwrite_val, output, sid):
+               hvsw_swi, hpd_freq, hpd_hfi, conv_min_dur, det_type, overwrite_val, output, sid):
     if not n_clicks:
         return no_update, no_update, no_update
 
@@ -1180,6 +1198,7 @@ def run_single(n_clicks, edf_path, model_name, conv_model_name, threshold,
         hvsw_min_slow_wave_index=float(hvsw_swi or 0.5),
         hpd_min_freq_hz=float(hpd_freq or 15.0),
         hpd_min_hf_index=float(hpd_hfi or 0.3),
+        convulsive_min_duration_sec=_float_or(conv_min_dur, 0.0),
     )
 
     # Persist settings
@@ -1328,6 +1347,7 @@ def scan_batch_folder(n, folder, include_sub, output, det_type):
     State("an-hvsw-swi", "value"),
     State("an-hpd-freq", "value"),
     State("an-hpd-hfi", "value"),
+    State("an-conv-min-dur", "value"),
     State("an-detection-type", "value"),
     State("an-batch-meta-path", "value"),
     State("an-overwrite", "value"),
@@ -1337,7 +1357,7 @@ def scan_batch_folder(n, folder, include_sub, output, det_type):
 )
 def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
               conv_threshold, bnd_threshold, min_dur, merge_gap, hvsw_freq,
-              hvsw_swi, hpd_freq, hpd_hfi, det_type, meta_path, overwrite_val,
+              hvsw_swi, hpd_freq, hpd_hfi, conv_min_dur, det_type, meta_path, overwrite_val,
               output, sid):
     if not n:
         return no_update, no_update, no_update, no_update, no_update
@@ -1358,6 +1378,7 @@ def run_batch(n, folder, include_sub, model_name, conv_model_name, threshold,
         hvsw_min_slow_wave_index=float(hvsw_swi or 0.5),
         hpd_min_freq_hz=float(hpd_freq or 15.0),
         hpd_min_hf_index=float(hpd_hfi or 0.3),
+        convulsive_min_duration_sec=_float_or(conv_min_dur, 0.0),
     )
 
     # Persist
@@ -1469,6 +1490,7 @@ def cancel_batch(n):
     State("an-hvsw-swi", "value"),
     State("an-hpd-freq", "value"),
     State("an-hpd-hfi", "value"),
+    State("an-conv-min-dur", "value"),
     State("an-detection-type", "value"),
     State("an-live-template", "value"),
     State("an-output", "value"),
@@ -1477,7 +1499,7 @@ def cancel_batch(n):
 )
 def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
                threshold, conv_threshold, bnd_threshold, min_dur, merge_gap,
-               hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi, det_type, template_path,
+               hvsw_freq, hvsw_swi, hpd_freq, hpd_hfi, conv_min_dur, det_type, template_path,
                output, sid):
     if not n:
         return no_update, no_update, no_update
@@ -1494,6 +1516,7 @@ def start_live(n, folder, backlog, wait_sec, model_name, conv_model_name,
         hvsw_min_slow_wave_index=float(hvsw_swi or 0.5),
         hpd_min_freq_hz=float(hpd_freq or 15.0),
         hpd_min_hf_index=float(hpd_hfi or 0.3),
+        convulsive_min_duration_sec=_float_or(conv_min_dur, 0.0),
     )
 
     # Persist
