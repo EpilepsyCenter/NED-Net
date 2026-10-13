@@ -50,7 +50,7 @@ def _nice_round(value: float) -> float:
     return float(min(nice, key=lambda v: abs(v - value)))
 
 
-def _activity_controls(state, act_ymin=0.0, act_ymax=1.0) -> html.Div:
+def _activity_controls(state, act_ymin=0.0, act_ymax=4.0) -> html.Div:
     """Activity Y-range controls, shown only when activity channels are paired."""
     act_rec = state.activity_recordings.get("paired")
     has_act = act_rec is not None and bool(state.channel_pairings)
@@ -563,6 +563,9 @@ def layout(sid: str | None) -> html.Div:
                                className="btn-ned-secondary", style={"fontSize": "1rem"}),
                     html.Div(
                         id="nav-time-display",
+                        # Filled from the start (was blank until the first click)
+                        children=f"{float(v_start):.1f}s \u2013 "
+                                 f"{float(v_start) + float(v_window):.1f}s",
                         style={"flex": "1", "textAlign": "center", "fontWeight": "600",
                                "fontSize": "0.9rem"},
                     ),
@@ -758,7 +761,7 @@ def update_viewer(
     bp_high = float(bp_high or 50)
     notch_freq = float(notch_freq or 50)
     act_ymin = float(act_ymin) if act_ymin is not None else 0.0
-    act_ymax = float(act_ymax) if act_ymax is not None else 1.0
+    act_ymax = float(act_ymax) if act_ymax is not None else 4.0  # same default as the layout
 
     end_sec = min(start_sec + window_sec, rec.duration_sec)
     start_idx = int(start_sec * rec.fs)

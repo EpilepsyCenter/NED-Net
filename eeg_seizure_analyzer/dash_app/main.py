@@ -445,7 +445,7 @@ app.clientside_callback(
 )
 def on_theme_change(theme, refresh):
     """Re-render tab content when theme changes so Plotly figures update."""
-    set_plotly_theme(theme or "dark")
+    set_plotly_theme(theme or "light")  # the app starts light
     return (refresh or 0) + 1
 
 

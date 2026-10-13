@@ -665,6 +665,10 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                         "Change Channel Selection",
                         id="upload-change-btn",
                         className="btn-ned-secondary",
+                        # ADICHT files open without a channel-selection step
+                        style={"display": "none"} if str(getattr(
+                            state.recording, "source_path", "") or ""
+                        ).lower().endswith(".adicht") else {},
                     ),
                     dbc.Button(
                         "Load Another File",
@@ -1108,39 +1112,6 @@ def _try_load_saved_spikes(state: server_state.SessionState):
 
 
 
-def _try_load_ml_detections(state: server_state.SessionState):
-    """Load ML detections from disk sidecar if present."""
-    try:
-        rec = state.recording
-        src = getattr(rec, "source_path", None) or ""
-        if not src or not src.lower().endswith(".edf"):
-            return None
-
-        from pathlib import Path
-        import json
-
-        stem = Path(src).stem
-        ml_path = Path(src).parent / f"{stem}_ned_ml_detections.json"
-        if not ml_path.exists():
-            return None
-
-        with open(ml_path) as f:
-            data = json.load(f)
-
-        events = data.get("events", [])
-        if events:
-            state.extra["ml_detected_events"] = events
-            state.extra["ml_det_model"] = data.get("model_name", "")
-            return alert(
-                f"Loaded {len(events)} saved ML detection(s) from disk.",
-                "info",
-            )
-    except Exception:
-        import traceback
-        traceback.print_exc()
-    return None
-
-
 def _discover_video(state: server_state.SessionState):
     """Look for an MP4 video file alongside the recording.
 
@@ -1362,6 +1333,8 @@ def on_change_channels(n_clicks, sid, refresh):
         return no_update
     state = server_state.get_session(sid)
     source = state.recording.source_path if state.recording else None
+    if source and source.lower().endswith(".adicht"):
+        return no_update  # ADICHT has no channel-selection step (button hidden)
     state.recording = None
     if source and os.path.isfile(source):
         from eeg_seizure_analyzer.io.edf_reader import scan_edf_channels
@@ -1404,6 +1377,7 @@ def on_load_new_file(n_clicks, sid, refresh):
 
 @callback(
     Output("tab-refresh", "data", allow_duplicate=True),
+    Output("upload-channel-ids-status", "children", allow_duplicate=True),
     Input("upload-video-link-btn", "n_clicks"),
     State("upload-video-path", "value"),
     State("session-id", "data"),
@@ -1413,12 +1387,14 @@ def on_load_new_file(n_clicks, sid, refresh):
 def on_link_video(n_clicks, video_path, sid, refresh):
     """Manually link a video file to the current recording."""
     if not n_clicks or not video_path:
-        return no_update
+        return no_update, no_update
     state = server_state.get_session(sid)
+    video_path = video_path.strip()
     if not os.path.isfile(video_path):
-        return no_update
+        # Used to do nothing at all on a wrong path
+        return no_update, alert(f"Video file not found: {video_path}", "danger")
     state.extra["video_path"] = video_path
-    return (refresh or 0) + 1
+    return (refresh or 0) + 1, no_update
 
 
 # ── Save channel Animal IDs on edit ─────────────────────────────────
@@ -1770,11 +1746,22 @@ def batch_scan_folder(n_clicks, n_auto, folder, sid):
             except Exception:
                 ann_count = "\u2714"
 
+        # Interictal-spike detections
+        sp_json = os.path.join(folder, stem + "_ned_spikes.json")
+        sp_count = "\u2014"
+        if os.path.isfile(sp_json):
+            try:
+                with open(sp_json) as f:
+                    sp_count = str(len(json.load(f).get("events", [])))
+            except Exception:
+                sp_count = "\u2714"
+
         rows.append({
             "filename": fname,
             "edf_path": edf_path,
             "animal_ids": "\u2714" if has_ids else "\u2718",
             "detections": det_count,
+            "spikes": sp_count,
             "annotations": ann_count,
             "has_ids": has_ids,
             "has_detections": has_detections,
@@ -1786,7 +1773,9 @@ def batch_scan_folder(n_clicks, n_auto, folder, sid):
         {"field": "filename", "headerName": "File", "flex": 2, "minWidth": 250},
         {"field": "animal_ids", "headerName": "Animal IDs", "width": 110,
          "cellStyle": {"textAlign": "center"}},
-        {"field": "detections", "headerName": "Detections", "width": 110,
+        {"field": "detections", "headerName": "Seizure det.", "width": 120,
+         "cellStyle": {"textAlign": "center"}},
+        {"field": "spikes", "headerName": "Spike det.", "width": 110,
          "cellStyle": {"textAlign": "center"}},
         {"field": "annotations", "headerName": "Annotations", "width": 120,
          "cellStyle": {"textAlign": "center"}},
@@ -1874,8 +1863,18 @@ def batch_generate_template(n_clicks, scan_data, sid):
         return alert("No folder set.", "danger")
 
     edf_files = [r["filename"] for r in scan_data]
-    out_path = generate_channel_ids_template(folder, edf_files)
-    return alert(f"Template generated: {out_path}", "success")
+    # One column per EEG channel: up to the highest EEG signal in any file
+    n_ch = 0
+    from eeg_seizure_analyzer.io.edf_reader import scan_edf_channels
+    for r in scan_data:
+        try:
+            eeg_idx, _act, _pairs = auto_pair_channels(scan_edf_channels(r["edf_path"]))
+            if eeg_idx:
+                n_ch = max(n_ch, max(eeg_idx) + 1)
+        except Exception:
+            pass
+    out_path = generate_channel_ids_template(folder, edf_files, n_ch or 8)
+    return alert(f"Template generated: {out_path} (Ch1–Ch{n_ch or 8})", "success")
 
 
 @callback(
@@ -1896,6 +1895,7 @@ def batch_back(n_clicks, sid, refresh):
 
 @callback(
     Output("tab-refresh", "data", allow_duplicate=True),
+    Output("batch-template-status", "children", allow_duplicate=True),
     Input("batch-load-all-btn", "n_clicks"),
     State("batch-scan-data", "data"),
     State("session-id", "data"),
@@ -1905,12 +1905,12 @@ def batch_back(n_clicks, sid, refresh):
 def batch_load_all(n_clicks, scan_data, sid, refresh):
     """Load all scanned EDF files as a project and open the first one."""
     if not n_clicks or not scan_data:
-        return no_update
+        return no_update, no_update
 
     state = server_state.get_session(sid)
     folder = state.extra.get("project_folder", "")
     if not folder:
-        return no_update
+        return no_update, alert("No folder set: scan a folder first.", "warning")
 
     # 1. Apply channel IDs from Excel if available
     xlsx_ids = read_channel_ids_excel(folder)
@@ -1942,12 +1942,13 @@ def batch_load_all(n_clicks, scan_data, sid, refresh):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return no_update
+        # Used to fail silently; say which file and why
+        return no_update, alert(f"Could not load {first['filename']}: {e}", "danger")
 
     # 4. Clear batch form flag
     state.extra.pop("show_batch_form", None)
 
-    return (refresh or 0) + 1
+    return (refresh or 0) + 1, no_update
 
 
 @callback(
@@ -2072,5 +2073,3 @@ def _load_edf_into_state(state: server_state.SessionState, edf_path: str):
     _try_load_saved_detections(state)
     _try_load_saved_spikes(state)
 
-    # Load saved ML detections
-    _try_load_ml_detections(state)

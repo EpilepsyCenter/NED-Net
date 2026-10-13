@@ -55,6 +55,7 @@ class SpikeDatasetConfig:
     neg_pos_ratio: float = 2.0
     augment: bool = True
     seed: int = 42
+    exclude_animals: tuple = ()  # animal IDs to drop entirely (as for seizures)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,8 @@ def build_spike_window_specs(
 
         for eeg_ch in eeg_idx:
             animal_id = ch_ids.get(eeg_ch, f"ch{eeg_ch}")
+            if animal_id in set(config.exclude_animals or ()):
+                continue
             act_ch = eeg_to_act.get(eeg_ch) if config.include_activity else None
 
             ch_confirmed = [

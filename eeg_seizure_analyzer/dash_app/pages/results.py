@@ -324,9 +324,10 @@ def layout(sid: str | None) -> html.Div:
                             {"label": "Per-animal", "value": "animals"},
                             {"label": "Distributions", "value": "dist"},
                             {"label": "Longitudinal", "value": "long"},
+                            {"label": "Spike analysis", "value": "is"},
                         ],
                         value=["daily", "circadian", "groups", "animals",
-                               "dist", "long"],
+                               "dist", "long", "is"],
                         inline=True,
                         style={"fontSize": "0.82rem"},
                     ),
@@ -407,6 +408,9 @@ def layout(sid: str | None) -> html.Div:
                 ], className="mb-3"),
             ]),
 
+            # Outer wrapper: the "Show: Spike analysis" toggle. The inner panel is
+            # shown only in the Spikes view.
+            html.Div(id="res-panel-is-toggle", children=[
             # ── Interictal-spike analysis (shown only for the Spikes view) ──
             html.Div(id="res-panel-is", style={"display": "none"}, children=[
                 html.H6("Interictal spike analysis",
@@ -422,6 +426,7 @@ def layout(sid: str | None) -> html.Div:
                     dbc.Col(dcc.Graph(id="res-is-diurnal",
                                       config={"responsive": True}, style={"height": "320px"}), width=12),
                 ], className="mb-3"),
+            ]),
             ]),
 
             # ── Daily burden + circadian (timeline — live monitoring) ──
@@ -531,9 +536,17 @@ def res_on_project_switch(project):
         s.get("modes", ["single", "batch", "live"]),
         s.get("types", ["convulsive", "non_convulsive"]),
         s.get("min_conf", 0),
-        s.get("panels",
-              ["daily", "circadian", "groups", "animals", "dist", "long"]),
+        _restored_panels(s),
     )
+
+
+def _restored_panels(s: dict) -> list:
+    """Saved 'Show:' panels, with 'Spike analysis' on for states saved before it existed."""
+    panels = s.get("panels",
+                   ["daily", "circadian", "groups", "animals", "dist", "long", "is"])
+    if panels is not None and "is" not in panels and not s.get("panels_has_is"):
+        panels = list(panels) + ["is"]
+    return panels
 
 
 @callback(
@@ -565,6 +578,7 @@ def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
         "date_start": ds, "date_end": de, "modes": modes, "animals": animals,
         "types": types, "min_conf": min_conf, "files": files,
         "cohort": cohort, "group": group, "panels": panels,
+        "panels_has_is": True,
     })
     return no_update
 
@@ -850,6 +864,7 @@ def res_edit_animal(changed, sig):
     Output("res-panel-animals", "style"),
     Output("res-panel-dist", "style"),
     Output("res-panel-long", "style"),
+    Output("res-panel-is-toggle", "style"),
     Input("res-panels-toggle", "value"),
 )
 def res_toggle_panels(shown):
@@ -860,7 +875,7 @@ def res_toggle_panels(shown):
         return {} if key in shown else {"display": "none"}
 
     return (st("daily"), st("circadian"), st("groups"),
-            st("animals"), st("dist"), st("long"))
+            st("animals"), st("dist"), st("long"), st("is"))
 
 
 # ── Event selection from AG Grid ───────────────────────────────────────
@@ -2112,6 +2127,13 @@ def _build_events_table(events: list[dict], filters_active: bool = False):
         },
         className="ag-theme-alpine-dark",
     )
+    if len(events) > 500:
+        # The table shows the first 500; say so (exports are not capped)
+        tag = tag + [html.Div(
+            f"Showing the first 500 of {len(events):,} events. "
+            "The CSV and XLSX exports include all of them.",
+            style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                   "marginBottom": "6px"})]
     return html.Div(tag + [grid]) if tag else grid
 
 

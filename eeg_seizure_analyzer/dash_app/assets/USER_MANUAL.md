@@ -232,13 +232,15 @@ Viewer, Training and inspector. Convert WMV recordings first with **Tools → Vi
    The scan is not recursive.
 2. The table lists each EDF with columns:
    - **Animal IDs:** ✔ if `_ned_channels.json` exists.
-   - **Detections:** the count in `_ned_detections.json`.
+   - **Seizure det.:** the count in `_ned_detections.json`.
+   - **Spike det.:** the count in `_ned_spikes.json`.
    - **Annotations:** the count in `_ned_annotations.json`.
 3. Animal IDs for many files can come from a spreadsheet:
-   - **Generate Template** writes `channel_ids.xlsx` in the folder, with columns File and
-     Ch1–Ch8.
+   - **Generate Template** writes `channel_ids.xlsx` in the folder, with a File column and one
+     column per EEG channel (Ch1 = the first signal).
    - Fill it in. On the next scan it is used automatically.
-4. Click **Load All**. The first file opens, with automatic channel pairing.
+4. Click **Load All**. The first file opens, with automatic channel pairing. If it cannot be
+   loaded, the page says why.
 
 Once loaded:
 - **Active file** switches between the recordings.
@@ -783,7 +785,7 @@ Saved datasets can be reloaded (**Load**, then **Scan** to refresh) or deleted.
 | **Patience** | 10 | Stop after this many epochs without improvement; the best epoch is kept |
 | **Pos weight** | 5.0 | Extra weight on seizure samples in the loss |
 | **Neg/Pos ratio** | 2.0 | Negative windows per positive one |
-| **Exclude animal IDs** | — | Animals left out entirely (seizure datasets) |
+| **Exclude animal IDs** | — | Animals left out entirely |
 
 Validation is a fixed split **by animal**: 20% of animals are held out. This measures how well a
 model works on animals it has not seen. Training needs reviewed events from **at least two
@@ -929,7 +931,7 @@ full picture.
   Group, Event type (convulsive / non-convulsive), Min conf. Click **Apply filters**.
 - Filters are remembered per project.
 - **Show:** turns panels on and off: Daily burden, Circadian, Group comparison, Per-animal,
-  Distributions, Longitudinal.
+  Distributions, Longitudinal, Spike analysis.
 
 ### 14.2 Panels
 
@@ -959,8 +961,9 @@ full picture.
 
 ### 14.3 Events table
 
-The table lists the filtered events (the first 500). **Exclude** removes an event from all
-summaries, plots and exports. Clicking a row opens an inspector with the EEG around the event, if
+The table lists the filtered events. Only the first 500 are shown, and the page says so; the
+exports include all of them. **Exclude** removes an event from all summaries, plots and
+exports. Clicking a row opens an inspector with the EEG around the event, if
 the recording is available.
 
 ### 14.4 Exports

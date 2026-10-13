@@ -156,7 +156,7 @@ def read_channel_ids_excel(folder: str) -> dict[str, dict[int, str]]:
 
 
 def generate_channel_ids_template(
-    folder: str, edf_files: list[str]
+    folder: str, edf_files: list[str], n_channels: int = 8
 ) -> str:
     """Generate a template ``channel_ids.xlsx`` in *folder*.
 
@@ -166,12 +166,15 @@ def generate_channel_ids_template(
         Directory where the file will be created.
     edf_files : list[str]
         List of EDF filenames (basenames, without path).
+    n_channels : int
+        Number of ``Ch`` columns (Ch1 = signal 0). Callers pass the highest EEG
+        channel found in the files; it used to be fixed at 8.
 
     Returns
     -------
     str – absolute path to the generated file.
     """
-    ch_cols = [f"Ch{i}" for i in range(1, 9)]
+    ch_cols = [f"Ch{i}" for i in range(1, max(1, int(n_channels)) + 1)]
     data = {"File": edf_files}
     for col in ch_cols:
         data[col] = [""] * len(edf_files)

@@ -497,7 +497,7 @@ def _isolation_params(_val) -> html.Div:
 def _sp_unet_params(state) -> html.Div:
     """U-Net (ML) spike-detection controls: trained-model selector + threshold,
     min-duration, merge-gap. The shared isolation filter (sp-iso-win /
-    sp-iso-max, in the Baseline & Isolation panel) is applied to ML results
+    sp-iso-max, in the "Isolation (all methods)" panel) is applied to ML results
     too, so only isolated spikes survive as IS."""
     try:
         from eeg_seizure_analyzer.ml.spike_train import list_spike_models
@@ -562,7 +562,7 @@ def _sp_unet_params(state) -> html.Div:
                                "marginBottom": "8px"}),
                     html.Div(
                         "Isolation filtering (window + max neighbours, set in "
-                        "Baseline & Isolation) is applied to the predictions, so "
+                        "Isolation (all methods)) is applied to the predictions, so "
                         "spikes inside bursts/seizures are rejected — only "
                         "isolated spikes are kept as IS. To improve detection, "
                         "annotate more spikes and re-train the model.",
