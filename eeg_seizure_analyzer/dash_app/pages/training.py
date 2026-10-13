@@ -1395,6 +1395,9 @@ def layout(sid: str | None) -> html.Div:
                                        "fontWeight": "600", "fontSize": "0.9rem"},
                                 children=event_nav_text,
                             ),
+                            html.Label("Go to #",
+                                       style={"fontSize": "0.72rem", "margin": "0",
+                                              "color": "var(--ned-text-muted)"}),
                             dcc.Input(
                                 id="tr-jump-to", type="number",
                                 min=1, step=1, debounce=True,
@@ -1416,13 +1419,15 @@ def layout(sid: str | None) -> html.Div:
                         children=_build_event_properties(rec, current_event),
                     ),
 
-                    # Action buttons + Convulsive checkbox
+                    # Labelling: status badge, Confirm / Reject / Skip, Convulsive
                     html.Div(
                         style={"display": "flex", "gap": "12px",
                                "alignItems": "center",
                                "justifyContent": "center",
-                               "marginBottom": "10px"},
+                               "marginBottom": "12px"},
                         children=[
+                            html.Div(id="tr-event-status", children=event_label_badge,
+                                     style={"minWidth": "90px", "textAlign": "right"}),
                             dbc.Button(
                                 [html.Span("\u2713 "), "Confirm (C)"],
                                 id="tr-confirm-btn",
@@ -1459,19 +1464,19 @@ def layout(sid: str | None) -> html.Div:
                         ],
                     ),
 
-                    # Status badge + Y-range controls
+                    # Plot toolbar: view (pan / context / overview span) on the left,
+                    # display (y ranges, overlays) on the right
                     html.Div(
                         style={"display": "flex", "alignItems": "center",
-                               "justifyContent": "space-between",
-                               "marginBottom": "8px"},
+                               "justifyContent": "space-between", "flexWrap": "wrap",
+                               "gap": "8px 16px", "marginBottom": "4px",
+                               "padding": "6px 0", "borderTop": "1px solid var(--ned-border)"},
                         children=[
-                            html.Div(
-                                id="tr-event-status",
-                                children=event_label_badge,
-                            ),
+                            iv.view_controls("tr", iv.context_sec(state, "tr"),
+                                             iv.ovspan_sec(state, "tr")),
                             html.Div(
                                 style={"display": "flex", "gap": "8px",
-                                       "alignItems": "center"},
+                                       "alignItems": "center", "flexWrap": "nowrap"},
                                 children=[
                                     html.Label("Y range",
                                                style={"fontSize": "0.72rem",
@@ -1481,7 +1486,7 @@ def layout(sid: str | None) -> html.Div:
                                         min=0, step=0.01,
                                         value=tr_yrange, debounce=True,
                                         className="form-control",
-                                        style={"width": "80px", "height": "26px",
+                                        style={"width": "64px", "height": "26px",
                                                "fontSize": "0.78rem"},
                                     ),
                                 ] + ([
@@ -1493,7 +1498,7 @@ def layout(sid: str | None) -> html.Div:
                                         id="tr-act-ymin", type="number",
                                         value=tr_act_ymin, step=0.1,
                                         debounce=True, className="form-control",
-                                        style={"width": "60px", "height": "26px",
+                                        style={"width": "50px", "height": "26px",
                                                "fontSize": "0.78rem"},
                                     ),
                                     html.Span("\u2013",
@@ -1503,7 +1508,7 @@ def layout(sid: str | None) -> html.Div:
                                         id="tr-act-ymax", type="number",
                                         value=tr_act_ymax, step=0.1,
                                         debounce=True, className="form-control",
-                                        style={"width": "60px", "height": "26px",
+                                        style={"width": "50px", "height": "26px",
                                                "fontSize": "0.78rem"},
                                     ),
                                 ] if has_activity else [
@@ -1518,7 +1523,7 @@ def layout(sid: str | None) -> html.Div:
                                         label="Baseline",
                                         value=state.extra.get("tr_show_baseline", False),
                                         style={"fontSize": "0.72rem",
-                                               "marginLeft": "12px"},
+                                               "marginLeft": "6px"},
                                     ),
                                     dbc.Switch(
                                         id="tr-show-threshold",
@@ -1529,15 +1534,6 @@ def layout(sid: str | None) -> html.Div:
                                 ],
                             ),
                         ],
-                    ),
-
-                    # View controls (pan / context / overview span), then the overview
-                    # strip: ± minutes around the view, click to jump
-                    html.Div(
-                        iv.view_controls("tr", iv.context_sec(state, "tr"),
-                                         iv.ovspan_sec(state, "tr")),
-                        style={"display": "flex", "justifyContent": "center",
-                               "marginBottom": "4px"},
                     ),
                     iv.overview_graph(
                         "tr-overview",
