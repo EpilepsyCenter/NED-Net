@@ -8,7 +8,7 @@ from pathlib import Path as _Path
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import html, dcc, callback, Input, Output, State, no_update, ctx
+from dash import html, dcc, callback, Input, Output, State, no_update, ctx, clientside_callback
 import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 
@@ -27,6 +27,7 @@ from eeg_seizure_analyzer.dash_app.components import (
     hidden_by_filters,
 )
 from eeg_seizure_analyzer.config import SpikeDetectionParams
+from eeg_seizure_analyzer.dash_app import inspector_view as iv
 
 # ── Default parameter values ────────────────────────────────────────
 
@@ -679,6 +680,35 @@ def show_all_spikes(n_clicks):
     return False if n_clicks else no_update
 
 
+iv.register_grid_nav("sp-insp", "sp-results-grid", "_idx", noun="Spike")
+
+# Keyboard: , . ← → step through the spikes. The keys click the buttons, so they
+# only act while the inspector controls are on screen.
+clientside_callback(
+    """
+    function(_id) {
+        if (!window._spInspKeysActive) {
+            window._spInspKeysActive = true;
+            var map = {',': 'sp-insp-prev', '.': 'sp-insp-next',
+                       'ArrowLeft': 'sp-insp-prev', 'ArrowRight': 'sp-insp-next'};
+            document.addEventListener('keydown', function(e) {
+                var t = e.target.tagName;
+                if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+                // Inside the grid the arrow keys move between cells
+                if (e.key.startsWith('Arrow') && e.target.closest &&
+                    e.target.closest('.ag-root-wrapper')) return;
+                var b = map[e.key] && document.getElementById(map[e.key]);
+                if (b && b.offsetParent !== null) { e.preventDefault(); b.click(); }
+            });
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("sp-insp-key-listener", "children"),
+    Input("sp-insp-key-listener", "id"),
+)
+
+
 def _sp_inspector_controls(visible: bool, opts=None) -> html.Div:
     opts = opts or dict(_SP_INSP_DEFAULTS)
     _inp_style = {"width": "80px", "height": "30px", "fontSize": "0.8rem"}
@@ -691,6 +721,8 @@ def _sp_inspector_controls(visible: bool, opts=None) -> html.Div:
                 style={"display": "flex", "alignItems": "center", "gap": "16px",
                        "flexWrap": "wrap"},
                 children=[
+                    iv.grid_nav_controls("sp-insp"),
+                    html.Div(id="sp-insp-key-listener", style={"display": "none"}),
                     html.Span("Inspector Options",
                               style={"fontSize": "0.82rem", "fontWeight": "600",
                                      "color": "var(--ned-text-muted)"}),
@@ -1656,8 +1688,9 @@ def _build_results(rec, all_spikes, spikes, total_count=None):
         style={"height": "300px", "width": "100%"},
         dashGridOptions={
             "animateRows": False,
-            "rowSelection": {"mode": "singleRow"},
+            "rowSelection": iv.grid_row_selection(),
         },
+        getRowId="params.data._idx",  # Prev/Next select rows by id
     )
 
     # Spike rate over time (uses filtered spikes)

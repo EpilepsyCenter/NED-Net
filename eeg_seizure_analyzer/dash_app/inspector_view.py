@@ -245,3 +245,74 @@ def view_controls(id_prefix: str, context: float,
             ),
         ],
     )
+
+
+# ── Stepping through a results grid (Detection → Seizure / Interictal Spikes) ──
+# Prev / Next buttons and keys, like Training review mode. They step through the
+# grid in its displayed order (after sorting and column filters, from
+# ``virtualRowData``), select the row (which opens it in the inspector) and
+# scroll it into view. The grid needs ``getRowId`` on its key column so a row
+# set in ``selectedRows`` is matched by id.
+
+def grid_nav_controls(id_prefix: str) -> html.Div:
+    """◀ Prev / "Event x of N" / Next ▶ for a results grid."""
+    btn = dict(size="sm", color="secondary", outline=True,
+               style={"whiteSpace": "nowrap"})
+    return html.Div(
+        style={"display": "flex", "alignItems": "center", "gap": "8px"},
+        children=[
+            dbc.Button("◀ Prev (,)", id=f"{id_prefix}-prev",
+                       title="Previous event ( , or ← )", **btn),
+            html.Span("", id=f"{id_prefix}-nav-text",
+                      style={"fontSize": "0.8rem", "minWidth": "110px",
+                             "textAlign": "center"}),
+            dbc.Button("Next (.) ▶", id=f"{id_prefix}-next",
+                       title="Next event ( . or → )", **btn),
+        ],
+    )
+
+
+def register_grid_nav(id_prefix: str, grid_id: str, key_field: str,
+                      noun: str = "Event") -> None:
+    """Callbacks behind grid_nav_controls for one grid."""
+    from dash import Input, Output, State, callback, ctx, no_update
+
+    @callback(
+        Output(grid_id, "selectedRows", allow_duplicate=True),
+        Output(grid_id, "scrollTo", allow_duplicate=True),
+        Input(f"{id_prefix}-prev", "n_clicks"),
+        Input(f"{id_prefix}-next", "n_clicks"),
+        State(grid_id, "virtualRowData"),
+        State(grid_id, "selectedRows"),
+        prevent_initial_call=True,
+    )
+    def _step(_prev, _next, rows, selected):
+        if not rows:
+            return no_update, no_update
+        keys = [r.get(key_field) for r in rows]
+        cur = selected[0].get(key_field) if selected else None
+        if cur in keys:
+            i = keys.index(cur) + (1 if ctx.triggered_id == f"{id_prefix}-next" else -1)
+            i = max(0, min(i, len(rows) - 1))
+        else:
+            i = 0
+        return [rows[i]], {"rowIndex": i, "rowPosition": "middle"}
+
+    @callback(
+        Output(f"{id_prefix}-nav-text", "children"),
+        Input(grid_id, "selectedRows"),
+        Input(grid_id, "virtualRowData"),
+        prevent_initial_call=True,
+    )
+    def _nav_text(selected, rows):
+        n = len(rows or [])
+        if not n:
+            return ""
+        keys = [r.get(key_field) for r in rows]
+        cur = selected[0].get(key_field) if selected else None
+        return f"{noun} {keys.index(cur) + 1} of {n}" if cur in keys else f"{n} {noun.lower()}s"
+
+
+def grid_row_selection() -> dict:
+    """AG Grid v33 row selection: click a row to select it, no checkbox column."""
+    return {"mode": "singleRow", "checkboxes": False, "enableClickSelection": True}

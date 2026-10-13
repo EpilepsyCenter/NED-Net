@@ -838,6 +838,7 @@ def _inspector_controls(visible: bool, y_range: float, opts=None,
                 style={"display": "flex", "alignItems": "center", "gap": "16px",
                        "flexWrap": "wrap"},
                 children=[
+                    iv.grid_nav_controls("sz-insp"),
                     html.Span("Inspector Options",
                               style={"fontSize": "0.82rem", "fontWeight": "600",
                                      "color": "var(--ned-text-muted)"}),
@@ -886,18 +887,27 @@ def show_all_seizures(n_clicks):
     return False if n_clicks else no_update
 
 
-# Keyboard: [ and ] pan the inspector, \ re-centres it. Clicks the buttons, so the
-# keys only act while the inspector controls are on screen.
+iv.register_grid_nav("sz-insp", "sz-results-grid", "_event_key", noun="Seizure")
+
+
+# Keyboard: , . ← → step through the events; [ and ] pan the inspector and the
+# backslash key re-centres it. The keys click the buttons, so they only act while
+# the inspector controls are on screen.
 clientside_callback(
     """
     function(_id) {
         if (!window._szInspKeysActive) {
             window._szInspKeysActive = true;
             var map = {'[': 'sz-insp-pan-left', ']': 'sz-insp-pan-right',
-                       '\\\\': 'sz-insp-pan-centre'};
+                       '\\\\': 'sz-insp-pan-centre',
+                       ',': 'sz-insp-prev', '.': 'sz-insp-next',
+                       'ArrowLeft': 'sz-insp-prev', 'ArrowRight': 'sz-insp-next'};
             document.addEventListener('keydown', function(e) {
                 var t = e.target.tagName;
                 if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+                // Inside the grid the arrow keys move between cells
+                if (e.key.startsWith('Arrow') && e.target.closest &&
+                    e.target.closest('.ag-root-wrapper')) return;
                 var b = map[e.key] && document.getElementById(map[e.key]);
                 if (b && b.offsetParent !== null) { e.preventDefault(); b.click(); }
             });
@@ -3451,7 +3461,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
     ]
     grid_props = {
         "animateRows": False,
-        "rowSelection": {"mode": "singleRow"},
+        "rowSelection": iv.grid_row_selection(),
         "headerHeight": 32,
         "enableCellTextSelection": True,
     }
@@ -3480,6 +3490,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         style={"height": "300px", "width": "100%"},
         dashGridOptions=grid_props,
         getRowStyle=manual_row_style,
+        getRowId="params.data._event_key",  # Prev/Next select rows by id
     )
 
     return html.Div([
@@ -3489,7 +3500,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
                    "marginBottom": "12px"},
             children=[
                 html.H6("Detected Seizures", style={"margin": "0"}),
-                html.Span("Click a row to inspect (use \u2191\u2193 arrows to navigate)",
+                html.Span("Click a row to inspect; step with Prev / Next or the , . \u2190 \u2192 keys",
                           style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
             ],
         ),
