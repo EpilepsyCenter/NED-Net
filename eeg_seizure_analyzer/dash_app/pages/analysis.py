@@ -69,7 +69,7 @@ def _model_options(model_type: str = "seizure") -> list[dict]:
 
 def _convulsive_model_options() -> list[dict]:
     """Dropdown options for Stage-2 convulsive classifiers (cascade)."""
-    opts = [{"label": "(use detector ch1)", "value": ""}]
+    opts = [{"label": "None (the U-Net's own convulsive output)", "value": ""}]
     for m in list_models():
         if m.get("architecture") != "convulsive_classifier":
             continue
@@ -105,6 +105,38 @@ def _parse_boundary(val, threshold: float):
     except (TypeError, ValueError):
         return None
     return b if b < threshold else None
+
+
+_LABEL = {"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}
+_HINT = {"fontSize": "0.72rem", "color": "var(--ned-text-muted)", "marginTop": "2px"}
+_SUBHEAD = {"fontSize": "0.8rem", "fontWeight": "600", "color": "var(--ned-text)",
+            "margin": "4px 0 6px"}
+_INPUT = {"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
+          "border": "1px solid var(--ned-border)"}
+
+
+def _step_card(n: int, title: str, children: list) -> html.Div:
+    """A numbered section of the Analysis page."""
+    return html.Div(
+        style={"marginBottom": "16px", "padding": "14px 16px",
+               "border": "1px solid var(--ned-border)", "borderRadius": "8px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "10px",
+                       "marginBottom": "10px"},
+                children=[
+                    html.Span(str(n), style={
+                        "display": "inline-flex", "alignItems": "center",
+                        "justifyContent": "center", "width": "22px", "height": "22px",
+                        "borderRadius": "50%", "fontSize": "0.78rem", "fontWeight": "700",
+                        "color": "var(--ned-accent)",
+                        "border": "1.5px solid var(--ned-accent)"}),
+                    html.Span(title, style={"fontSize": "0.95rem", "fontWeight": "600"}),
+                ],
+            ),
+            *children,
+        ],
+    )
 
 
 # ── Layout ─────────────────────────────────────────────────────────────
@@ -151,207 +183,158 @@ def layout(sid: str | None) -> html.Div:
                        "marginBottom": "16px"},
             ),
 
-            # ── Project database ──────────────────────────────────
-            html.Div(
-                style={"marginBottom": "16px", "padding": "12px",
-                       "border": "1px solid #30363d", "borderRadius": "6px"},
-                children=[
-                    html.Label(
-                        "Project database",
-                        style={"fontSize": "0.82rem", "fontWeight": "600",
-                               "color": "var(--ned-text-muted)"}),
-                    html.P(
-                        "Analysis writes to the active project; Results reads "
-                        "from it. Switch projects to keep experiments separate, "
-                        "or add cohorts to an existing one.",
-                        style={"color": "var(--ned-text-muted)",
-                               "fontSize": "0.76rem", "margin": "2px 0 8px"}),
-                    dbc.Row([
-                        dbc.Col(dcc.Dropdown(
-                            id="an-project-select",
-                            options=[{"label": p, "value": p}
-                                     for p in db.list_projects()],
-                            value=db.get_active_project(),
-                            clearable=False,
-                        ), width=4),
-                        dbc.Col(dbc.Input(
-                            id="an-project-new-name", type="text",
-                            placeholder="New project name…", size="sm",
-                        ), width=4),
-                        dbc.Col(dbc.Button(
-                            "Create project", id="an-project-create-btn",
-                            className="btn-ned-secondary", size="sm",
-                        ), width="auto"),
-                        dbc.Col(dbc.Button(
-                            "Delete project", id="an-project-delete-btn",
-                            className="btn-ned-danger", size="sm",
-                        ), width="auto"),
-                    ], className="g-2", align="center"),
-                    html.Div(id="an-project-status",
-                             style={"fontSize": "0.78rem", "marginTop": "6px"}),
-                    dcc.ConfirmDialog(id="an-project-delete-confirm"),
-                ],
-            ),
-
-            # ── Detection type ────────────────────────────────────
-            dbc.RadioItems(
-                id="an-detection-type",
-                options=[
-                    {"label": " Seizures", "value": "seizure"},
-                    {"label": " Interictal Spikes", "value": "spike"},
-                ],
-                value=prev_det_type,
-                inline=True,
-                className="mb-3",
-                style={"fontSize": "0.95rem", "fontWeight": "600"},
-            ),
-
-            # ── Top controls (always visible) ──────────────────────
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Trained model",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="an-model",
-                        options=models,
-                        value=prev_model if prev_model and any(
-                            o["value"] == prev_model for o in models) else None,
-                        placeholder="Select a trained model..." if has_models else "No models trained yet",
-                        clearable=True,
-                        disabled=not has_models,
-                    ),
-                ], width=6),
-                dbc.Col([
-                    html.Label("Seizure threshold (ch0)",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dbc.Input(
-                        id="an-threshold", type="text",
-                        value=prev_threshold, min=0.05, max=1.0, step=0.01,
-                        size="sm",
-                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
-                               "border": "1px solid var(--ned-border)"},
-                    ),
-                ], width=3),
-                dbc.Col([
-                    html.Label("Convulsive threshold (ch1)",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dbc.Input(
-                        id="an-conv-threshold", type="text",
-                        value=prev_conv_threshold, min=0.05, max=1.0, step=0.01,
-                        size="sm",
-                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
-                               "border": "1px solid var(--ned-border)"},
-                    ),
-                ], width=3),
-            ], className="g-3 mb-3"),
-
-            # ── Convulsive classifier (Stage-2 cascade, optional) ──
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Convulsive classifier (optional)",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="an-conv-model",
-                        options=conv_models,
-                        value=prev_conv_model if any(
-                            o["value"] == prev_conv_model for o in conv_models) else "",
+            # ── 1. Project & output ───────────────────────────────
+            _step_card(1, "Project & output", [
+                html.P(
+                    "Analysis writes to the active project database; the Results "
+                    "tab reads from it. Use separate projects to keep experiments "
+                    "apart, or add cohorts to an existing one.",
+                    style=_HINT),
+                dbc.Row([
+                    dbc.Col(dcc.Dropdown(
+                        id="an-project-select",
+                        options=[{"label": p, "value": p}
+                                 for p in db.list_projects()],
+                        value=db.get_active_project(),
                         clearable=False,
-                    ),
-                    html.Div(
-                        "When set, overrides the detector's ch1 flag for the "
-                        "convulsive decision.",
-                        style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                               "marginTop": "2px"},
-                    ),
-                ], width=6),
-            ], className="g-3 mb-3"),
+                    ), width=4),
+                    dbc.Col(dbc.Input(
+                        id="an-project-new-name", type="text",
+                        placeholder="New project name…", size="sm",
+                    ), width=4),
+                    dbc.Col(dbc.Button(
+                        "Create project", id="an-project-create-btn",
+                        className="btn-ned-secondary", size="sm",
+                    ), width="auto"),
+                    dbc.Col(dbc.Button(
+                        "Delete project", id="an-project-delete-btn",
+                        className="btn-ned-danger", size="sm",
+                    ), width="auto"),
+                ], className="g-2", align="center"),
+                html.Div(id="an-project-status",
+                         style={"fontSize": "0.78rem", "marginTop": "6px"}),
+                dcc.ConfirmDialog(id="an-project-delete-confirm"),
 
-            # ── Detection parameters ──────────────────────────────
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Boundary threshold (hysteresis)",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dbc.Input(
-                        id="an-bnd-threshold", type="text",
-                        value=prev_bnd_threshold, min=0.05, max=0.9, step=0.05,
-                        size="sm",
-                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
-                               "border": "1px solid var(--ned-border)"},
-                    ),
-                    html.Div(
-                        "Grows event onset/offset out to this lower prob (U-Net "
-                        "only). Below the seizure threshold; blank/≥ it = off.",
-                        style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                               "marginTop": "2px"},
-                    ),
-                ], width=4),
-                dbc.Col([
-                    html.Label("Min event duration (s)",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dbc.Input(
-                        id="an-min-duration", type="text",
-                        value=prev_min_dur, min=0, step=0.5,
-                        size="sm",
-                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
-                               "border": "1px solid var(--ned-border)"},
-                    ),
-                ], width=4),
-                dbc.Col([
-                    html.Label("Merge gap (s)",
-                               style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}),
-                    dbc.Input(
-                        id="an-merge-gap", type="text",
-                        value=prev_merge_gap, min=0, step=0.5,
-                        size="sm",
-                        style={"backgroundColor": "var(--ned-bg)", "color": "var(--ned-text)",
-                               "border": "1px solid var(--ned-border)"},
-                    ),
-                ], width=4),
-            ], className="g-3 mb-3"),
+                html.Label("Save detections to", style={**_LABEL, "marginTop": "12px"}),
+                dbc.RadioItems(
+                    id="an-output",
+                    options=[
+                        {"label": " Project database", "value": "db"},
+                        {"label": " Annotation sidecars (for review → training)",
+                         "value": "sidecar"},
+                        {"label": " Both", "value": "both"},
+                    ],
+                    value=prev_output,
+                    inline=True,
+                    style={"fontSize": "0.85rem"},
+                ),
+                html.Div(
+                    "Database: feeds Results and statistics. Sidecars: events are "
+                    "merged into each EDF's _ned_annotations.json as pending; "
+                    "confirm or reject them in the Training tab and they become "
+                    "training data. Existing human labels are never changed. "
+                    "Seizures only: spikes always go to the database.",
+                    style={**_HINT, "margin": "2px 0 10px"},
+                ),
+                dbc.Checklist(
+                    id="an-overwrite",
+                    options=[{
+                        "label": " Re-analyse files already processed "
+                                 "(overwrite previous results for this detector)",
+                        "value": "overwrite",
+                    }],
+                    value=[],
+                    switch=True,
+                    style={"fontSize": "0.82rem"},
+                ),
+            ]),
 
-            # ── Where detections are written ──────────────────────
-            html.Label("Save detections to",
-                       style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
-                              "marginBottom": "4px"}),
-            dbc.RadioItems(
-                id="an-output",
-                options=[
-                    {"label": " Project database", "value": "db"},
-                    {"label": " Annotation sidecars (for review → training)",
-                     "value": "sidecar"},
-                    {"label": " Both", "value": "both"},
-                ],
-                value=prev_output,
-                inline=True,
-                style={"fontSize": "0.85rem"},
-            ),
-            html.Div(
-                "Database: feeds Results and statistics. Sidecars: events are "
-                "merged into each EDF's _ned_annotations.json as pending — "
-                "confirm/reject them in the Training tab and they become "
-                "training data. Existing human labels are never changed. "
-                "Seizure detection only (spikes always go to the database).",
-                style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                       "margin": "2px 0 10px"},
-            ),
+            # ── 2. Model ──────────────────────────────────────────
+            _step_card(2, "Model", [
+                dbc.RadioItems(
+                    id="an-detection-type",
+                    options=[
+                        {"label": " Seizures", "value": "seizure"},
+                        {"label": " Interictal spikes", "value": "spike"},
+                    ],
+                    value=prev_det_type,
+                    inline=True,
+                    className="mb-3",
+                    style={"fontSize": "0.95rem", "fontWeight": "600"},
+                ),
+                html.Div("Stage 1: detection", style=_SUBHEAD),
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Trained model", style=_LABEL),
+                        dcc.Dropdown(
+                            id="an-model",
+                            options=models,
+                            value=prev_model if prev_model and any(
+                                o["value"] == prev_model for o in models) else None,
+                            placeholder="Select a trained model..." if has_models else "No models trained yet",
+                            clearable=True,
+                            disabled=not has_models,
+                        ),
+                    ], width=6),
+                    dbc.Col([
+                        html.Label("Detection threshold", style=_LABEL),
+                        dbc.Input(id="an-threshold", type="text", value=prev_threshold,
+                                  min=0.05, max=1.0, step=0.01, size="sm", style=_INPUT),
+                        html.Div("An event's core must exceed this probability.", style=_HINT),
+                    ], width=3),
+                    dbc.Col([
+                        html.Label("Boundary threshold", style=_LABEL),
+                        dbc.Input(id="an-bnd-threshold", type="text", value=prev_bnd_threshold,
+                                  min=0.05, max=0.9, step=0.05, size="sm", style=_INPUT),
+                        html.Div("Grows each event out to this lower probability; "
+                                 "blank or ≥ the detection threshold = off.", style=_HINT),
+                    ], width=3, id="an-bnd-col"),
+                ], className="g-3 mb-2"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Min event duration (s)", style=_LABEL),
+                        dbc.Input(id="an-min-duration", type="text", value=prev_min_dur,
+                                  min=0, step=0.5, size="sm", style=_INPUT),
+                    ], width=3),
+                    dbc.Col([
+                        html.Label("Merge gap (s)", style=_LABEL),
+                        dbc.Input(id="an-merge-gap", type="text", value=prev_merge_gap,
+                                  min=0, step=0.5, size="sm", style=_INPUT),
+                    ], width=3),
+                ], className="g-3 mb-3"),
 
-            dbc.Checklist(
-                id="an-overwrite",
-                options=[{
-                    "label": " Re-analyze files already processed "
-                             "(overwrite previous results for this detector)",
-                    "value": "overwrite",
-                }],
-                value=[],
-                switch=True,
-                style={"fontSize": "0.82rem", "marginBottom": "12px"},
-            ),
+                html.Div(id="an-stage2", children=[
+                    html.Div("Stage 2: convulsive classification", style=_SUBHEAD),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Convulsive classifier", style=_LABEL),
+                            dcc.Dropdown(
+                                id="an-conv-model",
+                                options=conv_models,
+                                value=prev_conv_model if any(
+                                    o["value"] == prev_conv_model for o in conv_models) else "",
+                                clearable=False,
+                            ),
+                            html.Div("Labels each detected event convulsive or not; "
+                                     "it never removes events.", style=_HINT),
+                        ], width=6),
+                        dbc.Col([
+                            html.Label("Convulsive threshold", style=_LABEL),
+                            dbc.Input(id="an-conv-threshold", type="text",
+                                      value=prev_conv_threshold, min=0.05, max=1.0,
+                                      step=0.01, size="sm", style=_INPUT),
+                        ], width=3),
+                    ], className="g-3 mb-2"),
+                ]),
 
-            # ── HVSW / HPD classification thresholds ──────────────
-            collapsible_section(
-                "HVSW / HPD classification", "an-cls",
-                default_open=True,
-                children=[
+                # Where the filled-in values came from (set when a model is chosen)
+                html.Div(id="an-op-note", style={**_HINT, "marginBottom": "8px"}),
+                html.Div(id="an-model-info", className="mb-3"),
+
+                collapsible_section(
+                    "Advanced: HVSW / HPD classification", "an-cls",
+                    default_open=False,
+                    children=[
                     dbc.Row([
                         dbc.Col([
                             html.Label("HVSW — max dominant freq (Hz)",
@@ -408,42 +391,37 @@ def layout(sid: str | None) -> html.Div:
                         style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                                "marginTop": "8px"},
                     ),
-                ],
-            ),
+                    ],
+                ),
+            ]),
 
-            # Model info card
-            html.Div(id="an-model-info", className="mb-3"),
-
-            html.Hr(style={"borderColor": "#21262d"}),
-
-            # ── Mode selector ──────────────────────────────────────
-            html.Label("Mode", style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
-                                       "marginBottom": "4px"}),
-            dbc.RadioItems(
-                id="an-mode",
-                options=[
-                    {"label": " Single file", "value": "single"},
-                    {"label": " Batch", "value": "batch"},
-                    {"label": " Live monitoring", "value": "live"},
-                ],
-                value=prev_mode,
-                inline=True,
-                className="mb-3",
-                style={"fontSize": "0.9rem"},
-            ),
-
-            # ── Mode panels (toggled by mode selector) ─────────────
-            html.Div(id="an-single-panel", children=_single_panel(loaded_path, store)),
-            html.Div(id="an-batch-panel", children=_batch_panel(store),
-                     style={"display": "none"}),
-            html.Div(id="an-live-panel", children=_live_panel(store),
-                     style={"display": "none"}),
+            # ── 3. Input & run ────────────────────────────────────
+            _step_card(3, "Input & run", [
+                dbc.RadioItems(
+                    id="an-mode",
+                    options=[
+                        {"label": " Single file", "value": "single"},
+                        {"label": " Batch", "value": "batch"},
+                        {"label": " Live monitoring", "value": "live"},
+                    ],
+                    value=prev_mode,
+                    inline=True,
+                    className="mb-3",
+                    style={"fontSize": "0.9rem"},
+                ),
+                html.Div(id="an-single-panel", children=_single_panel(loaded_path, store)),
+                html.Div(id="an-batch-panel", children=_batch_panel(store),
+                         style={"display": "none"}),
+                html.Div(id="an-live-panel", children=_live_panel(store),
+                         style={"display": "none"}),
+            ]),
 
             # ── Results summary (below modes) ──────────────────────
             html.Hr(style={"borderColor": "#21262d", "marginTop": "24px"}),
             html.Div(id="an-results-summary", children=_results_summary()),
 
             # ── Stores & intervals ─────────────────────────────────
+            html.Div(id="an-settings-saved", style={"display": "none"}),
             dcc.Store(id="an-store", storage_type="session"),
             dcc.Interval(id="an-poll", interval=2000, disabled=True),
         ],
@@ -802,8 +780,9 @@ def toggle_mode_panels(mode):
     Output("an-model", "value"),
     Output("an-model", "placeholder"),
     Input("an-detection-type", "value"),
+    State("an-model", "value"),
 )
-def update_model_list(det_type):
+def update_model_list(det_type, current):
     models = _model_options(det_type)
     has = len(models) > 0
     label = "spike" if det_type == "spike" else "seizure"
@@ -811,7 +790,10 @@ def update_model_list(det_type):
         f"Select a trained {label} model..."
         if has else f"No {label} models trained yet"
     )
-    return models, None, placeholder
+    # Keep the chosen model when it is still offered. This also runs when the page
+    # renders, and it used to clear the selection every time.
+    keep = current and any(o["value"] == current for o in models)
+    return models, (no_update if keep else None), placeholder
 
 
 @callback(
@@ -822,8 +804,114 @@ def update_model_list(det_type):
 def update_conv_model_list(det_type):
     """Populate the Stage-2 classifier dropdown (seizure detection only)."""
     if det_type == "spike":
-        return [{"label": "(use detector ch1)", "value": ""}], True
+        return [{"label": "None", "value": ""}], True
     return _convulsive_model_options(), False
+
+
+@callback(
+    Output("an-settings-saved", "children"),
+    Input("an-detection-type", "value"),
+    Input("an-model", "value"),
+    Input("an-conv-model", "value"),
+    Input("an-threshold", "value"),
+    Input("an-bnd-threshold", "value"),
+    Input("an-conv-threshold", "value"),
+    Input("an-min-duration", "value"),
+    Input("an-merge-gap", "value"),
+    Input("an-output", "value"),
+    Input("an-mode", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def remember_settings(det_type, model, conv_model, thr, bnd, conv_thr, min_dur,
+                      merge_gap, output, mode, sid):
+    """Keep the settings across tab switches (they were saved only on Run)."""
+    state = server_state.get_session(sid)
+    store = _get_analysis_store(state)
+    store.update({
+        "detection_type": det_type, "model_path": model,
+        "convulsive_model_name": conv_model or "",
+        "confidence_threshold": thr, "boundary_threshold": bnd,
+        "convulsive_threshold": conv_thr, "min_duration_sec": min_dur,
+        "merge_gap_sec": merge_gap, "output": output, "mode": mode,
+    })
+    _set_analysis_store(state, store)
+    return no_update
+
+
+@callback(
+    Output("an-stage2", "style"),
+    Output("an-bnd-col", "style"),
+    Input("an-detection-type", "value"),
+)
+def toggle_seizure_only_controls(det_type):
+    """Stage 2 and the boundary threshold apply to seizure detection only."""
+    hide = {"display": "none"} if det_type == "spike" else {}
+    return hide, hide
+
+
+@callback(
+    Output("an-threshold", "value", allow_duplicate=True),
+    Output("an-bnd-threshold", "value", allow_duplicate=True),
+    Output("an-conv-model", "value", allow_duplicate=True),
+    Output("an-conv-threshold", "value", allow_duplicate=True),
+    Output("an-op-note", "children"),
+    Input("an-model", "value"),
+    Input("an-conv-model", "value"),
+    State("an-detection-type", "value"),
+    State("an-conv-model", "options"),
+    prevent_initial_call=True,
+)
+def fill_operating_point(model_name, conv_model, det_type, conv_options):
+    """Fill in the chosen model's recommended operating point (see ml.operating_points).
+
+    Choosing a model sets the threshold, boundary, classifier and convulsive
+    threshold. Choosing a classifier afterwards updates only the convulsive
+    threshold. Values stay editable.
+    """
+    from eeg_seizure_analyzer.ml.operating_points import (
+        convulsive_threshold_for, recommended_operating_point)
+    nu = no_update
+    if det_type == "spike" or not model_name:
+        return nu, nu, nu, nu, ""
+    installed = {o["value"] for o in (conv_options or [])}
+
+    if ctx.triggered_id == "an-conv-model":
+        t, src = convulsive_threshold_for(model_name, conv_model or "")
+        if t is None:
+            return nu, nu, nu, nu, nu
+        return nu, nu, nu, t, f"Convulsive threshold {t:g} from {src}."
+
+    op = recommended_operating_point(model_name)
+    parts, missing = [], ""
+    thr = op.get("threshold", nu)
+    bnd = op.get("boundary", nu)
+    if "threshold" in op:
+        parts.append(f"detection {op['threshold']:g}")
+    if "boundary" in op:
+        parts.append(f"boundary {op['boundary']:g}")
+    cm = op.get("convulsive_model")
+    ct = op.get("convulsive_threshold", nu)
+    if cm is not None and cm not in installed:
+        # Keep the classifier that is selected and use its own threshold: the
+        # validated value belongs to a different classifier.
+        missing = (f" It was validated with classifier “{cm}”, which is not "
+                   "installed; the convulsive threshold is the selected "
+                   "classifier's own.")
+        cm = None
+        t, _src = convulsive_threshold_for(model_name, conv_model or "")
+        ct = t if t is not None else nu
+        op = {k: v for k, v in op.items() if k != "convulsive_threshold"}
+    if cm is not None:
+        parts.append(f"classifier {cm or 'none'} at {op['convulsive_threshold']:g}"
+                     if "convulsive_threshold" in op else f"classifier {cm or 'none'}")
+    elif "convulsive_threshold" in op:
+        parts.append(f"convulsive {op['convulsive_threshold']:g}")
+    if not parts:
+        return nu, nu, nu, nu, "No recommended operating point stored for this model."
+    note = (f"Filled in from the {op['source']}: " + ", ".join(parts)
+            + ". Edit if needed." + missing)
+    return thr, bnd, (cm if cm is not None else nu), ct, note
 
 
 @callback(

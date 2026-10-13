@@ -1712,45 +1712,48 @@ def _read_model_metadata(model_name: str) -> dict:
         return {}
 
 
-def _suggested_thresholds(unet_model: str, convmodel: str = ""):
-    """Optimal seizure + convulsive thresholds for a model, from training.
+def _suggested_thresholds(unet_model: str, convmodel: str | None = None):
+    """Recommended operating point for a U-Net model (see ml.operating_points).
 
-    Training records the threshold that maximised event-F1 on validation
-    (``best_threshold`` for the seizure channel, ``conv_best_threshold`` for the
-    U-Net's convulsive channel). When a standalone convulsive classifier is
-    chosen instead, its own ``best_threshold`` governs the convulsive call.
+    ``convmodel=None`` means "the model's own pairing". A classifier name, or ""
+    for none, means the user picked one: only the convulsive threshold follows it.
 
-    Returns ``(seiz_thr, conv_thr, info_children)`` — thresholds are None when
-    absent; info_children is a list of Dash nodes for the model-info panel.
+    Returns ``(seiz_thr, bnd_thr, conv_model, conv_thr, info_children)``. Values
+    are None when not known; ``conv_model`` is None unless the operating point
+    names a classifier.
     """
-    bm = _read_model_metadata(unet_model).get("best_metrics") or {}
-    seiz = bm.get("best_threshold")
-    seiz_f1 = bm.get("best_event_f1") or bm.get("event_f1")
-    if convmodel:
-        cbm = _read_model_metadata(convmodel).get("best_metrics") or {}
-        conv = cbm.get("best_threshold")
-        conv_f1 = cbm.get("best_event_f1") or cbm.get("event_f1")
-        conv_src = f"classifier “{convmodel}”"
+    from eeg_seizure_analyzer.ml.operating_points import (
+        convulsive_threshold_for, recommended_operating_point)
+    if not unet_model:
+        return None, None, None, None, []
+    op = recommended_operating_point(unet_model)
+    seiz, bnd = op.get("threshold"), op.get("boundary")
+    if convmodel is None:
+        conv_model = op.get("convulsive_model")
+        conv = op.get("convulsive_threshold")
+        conv_src = op["source"]
+        if conv is None:
+            conv, conv_src = convulsive_threshold_for(unet_model, conv_model or "")
     else:
-        conv = bm.get("conv_best_threshold")
-        conv_f1 = bm.get("conv_best_event_f1")
-        conv_src = "U-Net convulsive channel"
+        conv_model = None
+        conv, conv_src = convulsive_threshold_for(unet_model, convmodel)
 
-    if seiz is None and conv is None:
-        return seiz, conv, []
-    rows = [html.Div("Suggested thresholds (training optimum):",
+    if seiz is None and conv is None and bnd is None:
+        return None, None, None, None, []
+    rows = [html.Div(f"Recommended operating point ({op['source']}):",
                      style={"fontWeight": "600", "marginBottom": "2px"})]
     if seiz is not None:
-        rows.append(html.Div(
-            f"• Seizure: {seiz:.2f}"
-            + (f" — val event F1 {seiz_f1:.2f}" if seiz_f1 else "")))
+        rows.append(html.Div(f"• Threshold: {seiz:.2f}"))
+    if bnd is not None:
+        rows.append(html.Div(f"• Boundary threshold: {bnd:.2f}"))
     if conv is not None:
-        rows.append(html.Div(
-            f"• Convulsive: {conv:.2f} ({conv_src})"
-            + (f" — val event F1 {conv_f1:.2f}" if conv_f1 else "")))
-    rows.append(html.Div("Sliders are set to these — adjust if needed.",
+        cm = conv_model if conv_model is not None else convmodel
+        rows.append(html.Div(f"• Convulsive: {conv:.2f}"
+                             + (f" with classifier “{cm}”" if cm else "")
+                             + ("" if conv_src == op["source"] else f" ({conv_src})")))
+    rows.append(html.Div("The sliders are set to these; adjust if needed.",
                          style={"opacity": "0.75", "marginTop": "2px"}))
-    return seiz, conv, rows
+    return seiz, bnd, conv_model, conv, rows
 
 
 def _unet_params(state) -> html.Div:
@@ -1784,15 +1787,17 @@ def _unet_params(state) -> html.Div:
     # hard 0.5 was a guess). A persisted user value still wins; otherwise fall
     # back to the optimum, then 0.5. The info panel always shows the optimum.
     _convmodel = state.extra.get("sz_unet_convmodel", "")
-    seiz_opt, conv_opt, info_children = _suggested_thresholds(default_model, _convmodel)
+    seiz_opt, bnd_opt, _cm, conv_opt, info_children = _suggested_thresholds(
+        default_model, _convmodel or None)
     seiz_default = unet_p.get("threshold",
                               seiz_opt if seiz_opt is not None else 0.5)
     conv_default = unet_p.get("convulsive_threshold",
                               conv_opt if conv_opt is not None else 0.5)
-    # Boundary (hysteresis) threshold defaults to roughly half the detection
-    # threshold — comfortably below it so onset/offset ramps get captured.
+    # Boundary (hysteresis) threshold: the recommended one, else roughly half the
+    # detection threshold, comfortably below it so onset/offset ramps get captured.
     bnd_default = unet_p.get("boundary_threshold",
-                             round((seiz_default or 0.5) * 0.5, 2))
+                             bnd_opt if bnd_opt is not None
+                             else round((seiz_default or 0.5) * 0.5, 2))
 
     return html.Div([
         dbc.Row([
@@ -1821,7 +1826,7 @@ def _unet_params(state) -> html.Div:
                         ),
                         param_control(
                             "Threshold", "sz-unet-threshold",
-                            0.1, 0.9, 0.05,
+                            0.05, 0.99, 0.01,
                             seiz_default,
                             "Detection threshold — an event's core must exceed "
                             "it. Lower = more sensitive. Defaults to the model's "
@@ -1840,7 +1845,7 @@ def _unet_params(state) -> html.Div:
                         ),
                         param_control(
                             "Convulsive threshold", "sz-unet-conv-threshold",
-                            0.1, 0.9, 0.05,
+                            0.05, 0.99, 0.01,
                             conv_default,
                             "Threshold on the convulsive channel (ch1) for "
                             "labelling an event convulsive. Defaults to the "
@@ -1890,25 +1895,38 @@ def _unet_params(state) -> html.Div:
 @callback(
     Output({"type": "param-slider", "key": "sz-unet-threshold"}, "value",
            allow_duplicate=True),
+    Output({"type": "param-slider", "key": "sz-unet-bnd-threshold"}, "value",
+           allow_duplicate=True),
+    Output("sz-unet-convmodel", "value", allow_duplicate=True),
     Output({"type": "param-slider", "key": "sz-unet-conv-threshold"}, "value",
            allow_duplicate=True),
     Output("sz-unet-model-info", "children"),
     Input("sz-unet-model", "value"),
     Input("sz-unet-convmodel", "value"),
+    State("sz-unet-convmodel", "options"),
     prevent_initial_call=True,
 )
-def suggest_unet_thresholds(unet_model, convmodel):
-    """When the U-Net model (or its convulsive classifier) changes, set the
-    threshold sliders to that model's training optimum and explain it.
+def suggest_unet_thresholds(unet_model, convmodel, conv_options):
+    """Set the sliders to the model's recommended operating point and explain it.
 
-    The clientside MATCH callback then propagates the slider value to its input
-    + display, so only the slider value needs setting here.
+    Choosing a U-Net sets threshold, boundary, classifier and convulsive threshold.
+    Choosing a classifier afterwards updates only the convulsive threshold.
+    The clientside MATCH callback propagates each slider value to its input and
+    display, so only the slider values need setting here.
     """
-    seiz, conv, info = _suggested_thresholds(unet_model, convmodel)
+    nu = no_update
+    picked_classifier = ctx.triggered_id == "sz-unet-convmodel"
+    seiz, bnd, cm, conv, info = _suggested_thresholds(
+        unet_model, (convmodel or "") if picked_classifier else None)
     if not info:
-        return no_update, no_update, []
-    return (seiz if seiz is not None else no_update,
-            conv if conv is not None else no_update,
+        return nu, nu, nu, nu, []
+    if picked_classifier:
+        return nu, nu, nu, (conv if conv is not None else nu), info
+    installed = {o["value"] for o in (conv_options or [])}
+    return (seiz if seiz is not None else nu,
+            bnd if bnd is not None else nu,
+            cm if cm is not None and cm in installed else nu,
+            conv if conv is not None else nu,
             info)
 
 
