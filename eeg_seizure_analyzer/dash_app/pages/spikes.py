@@ -257,10 +257,15 @@ def layout(sid: str | None) -> html.Div:
                         className="btn-ned-danger",
                         style={"display": "inline-block" if has_results else "none"},
                     ),
+                    # The main action when several files are open (shown only then,
+                    # as on the Seizure page)
                     dbc.Button(
                         "\U0001F4C1 Detect All Files",
                         id="sp-detect-all-btn",
-                        className="btn-ned-secondary",
+                        className="btn-ned-primary",
+                        style={"display": "inline-block"
+                               if state.extra.get("project_files")
+                               else "none"},
                     ),
                     dbc.Button(
                         "Add to project database",

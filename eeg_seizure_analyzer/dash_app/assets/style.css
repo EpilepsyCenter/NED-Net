@@ -393,6 +393,82 @@ div.form-control {
     display: none !important;
 }
 
+/* ── Start screen: recent files and folders ────────────────────────── */
+.recent-list {
+    border: 1px solid var(--ned-border);
+    border-radius: var(--ned-radius);
+    background: var(--ned-surface);
+    overflow: hidden;
+}
+.recent-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 12px;
+    border: none;
+    border-bottom: 1px solid var(--ned-border);
+    background: transparent;
+    color: var(--ned-text);
+    font-family: var(--ned-font);
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+}
+.recent-item:last-child { border-bottom: none; }
+.recent-item:hover:not(:disabled) {
+    background: var(--ned-surface-hover);
+    color: color-mix(in oklab, var(--ned-text) 70%, var(--ned-accent));
+}
+.recent-item:disabled { cursor: default; opacity: 0.5; }
+.recent-item .recent-name { font-weight: 600; white-space: nowrap; }
+.recent-item .recent-dir {
+    flex: 1; min-width: 0;
+    color: var(--ned-text-muted); font-size: 0.75rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recent-item .recent-date {
+    color: var(--ned-text-muted); font-size: 0.72rem;
+    font-family: var(--ned-font-mono); white-space: nowrap;
+}
+
+/* ── App menus (dbc.DropdownMenu with className="ned-menu") ─────────
+   Bootstrap's default menu (black on this theme) looked foreign; use the
+   app's surface, border and type so it follows light and dark mode. */
+.ned-menu .dropdown-toggle {
+    text-decoration: none !important;
+    color: var(--ned-text) !important;
+}
+.ned-menu .dropdown-menu {
+    background: var(--ned-surface) !important;
+    border: 1px solid var(--ned-border) !important;
+    border-radius: var(--ned-radius) !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12) !important;
+    padding: 4px 0 !important;
+    min-width: 240px;
+}
+.ned-menu .dropdown-item {
+    color: var(--ned-text) !important;
+    font-family: var(--ned-font) !important;
+    font-size: 0.8rem !important;
+    padding: 6px 14px !important;
+    background: transparent !important;
+}
+.ned-menu .dropdown-item:hover,
+.ned-menu .dropdown-item:focus {
+    background: var(--ned-surface-hover) !important;
+    color: color-mix(in oklab, var(--ned-text) 70%, var(--ned-accent)) !important;
+}
+.ned-menu .dropdown-item.disabled,
+.ned-menu .dropdown-item:disabled {
+    color: var(--ned-text-muted) !important;
+    opacity: 0.6;
+}
+.ned-menu .dropdown-divider {
+    border-top-color: var(--ned-border) !important;
+    margin: 4px 0 !important;
+}
+
 /* ── Hide browser number input spinners ───────────────────────────── */
 
 /* Webkit / Chrome / Safari / Edge */

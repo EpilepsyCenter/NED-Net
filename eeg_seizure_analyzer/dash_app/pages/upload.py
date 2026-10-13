@@ -7,11 +7,12 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from dash import html, dcc, callback, Input, Output, State, no_update, ctx
+from dash import html, dcc, callback, Input, Output, State, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 
 from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
+from eeg_seizure_analyzer.dash_app.recent import add_recent, list_recent
 from eeg_seizure_analyzer.dash_app.components import (
     metric_card,
     alert,
@@ -130,6 +131,8 @@ def _landing_layout() -> html.Div:
                     ),
                 ],
             ),
+            _recent_list(),
+            html.Div(id="recent-status", style={"marginTop": "8px"}),
             html.Div(
                 "v0.1",
                 style={
@@ -140,6 +143,74 @@ def _landing_layout() -> html.Div:
             ),
         ],
     )
+
+
+def _recent_list() -> html.Div:
+    """Recently opened files and folders; click one to open it again."""
+    items = list_recent()
+    if not items:
+        return html.Div()
+    rows = []
+    for i, it in enumerate(items):
+        p = it["path"]
+        name = os.path.basename(p.rstrip("/")) or p
+        icon = "\U0001F4C1" if it["kind"] == "folder" else "\U0001F4C4"
+        rows.append(html.Button(
+            id={"type": "recent-open", "index": i},
+            n_clicks=0,
+            disabled=not it["exists"],
+            title=p if it["exists"] else f"{p} (no longer found)",
+            className="recent-item",
+            children=[
+                html.Span(icon, style={"width": "22px"}),
+                html.Span(name, className="recent-name"),
+                html.Span(os.path.dirname(p.rstrip("/")) if it["exists"]
+                          else "no longer found", className="recent-dir"),
+                html.Span((it.get("opened_at") or "").replace("T", " "),
+                          className="recent-date"),
+            ],
+        ))
+    return html.Div(
+        style={"marginTop": "36px", "width": "min(680px, 100%)", "textAlign": "left"},
+        children=[
+            html.Div("Recent", style={"fontSize": "0.78rem", "fontWeight": "600",
+                                      "color": "var(--ned-text-muted)",
+                                      "textTransform": "uppercase",
+                                      "letterSpacing": "var(--ned-tracking)",
+                                      "marginBottom": "6px"}),
+            html.Div(rows, className="recent-list"),
+        ],
+    )
+
+
+@callback(
+    Output("tab-refresh", "data", allow_duplicate=True),
+    Output("recent-status", "children"),
+    Input({"type": "recent-open", "index": ALL}, "n_clicks"),
+    State("session-id", "data"),
+    State("tab-refresh", "data"),
+    prevent_initial_call=True,
+)
+def open_recent(clicks, sid, refresh):
+    """Open a recent file (to channel selection) or folder (scanned, in Load Multiple)."""
+    trig = ctx.triggered_id
+    if not trig or not any(clicks or []):
+        return no_update, no_update
+    items = list_recent()
+    if trig["index"] >= len(items):
+        return no_update, no_update
+    it = items[trig["index"]]
+    state = server_state.get_session(sid)
+    if it["kind"] == "folder":
+        state.extra["project_folder"] = it["path"]
+        state.extra["show_batch_form"] = True
+        state.extra["batch_autoscan"] = True
+        return (refresh or 0) + 1, no_update
+    status, ok = _open_file(state, it["path"])
+    if not ok:
+        return no_update, status
+    state.extra["show_upload_form"] = True
+    return (refresh or 0) + 1, no_update
 
 
 @callback(
@@ -617,9 +688,13 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
 def _batch_browse_layout(state: server_state.SessionState) -> html.Div:
     """Form for browsing and scanning a folder of EDF files."""
     prev_folder = state.extra.get("project_folder", "")
+    autoscan = bool(state.extra.pop("batch_autoscan", False))
     return html.Div(
         style={"padding": "24px", "maxWidth": "900px", "margin": "0 auto"},
         children=[
+            # Fires once to scan a folder opened from the recent list
+            dcc.Interval(id="batch-autoscan", interval=300, max_intervals=1,
+                         disabled=not autoscan),
             html.H4("Load Multiple Recordings", style={"marginBottom": "8px"}),
             html.P(
                 "Select a folder containing EDF recordings. Each file will be "
@@ -1137,13 +1212,19 @@ def on_path_load(n_clicks, path, sid, refresh):
     """Load from a file path."""
     if not n_clicks or not path:
         return no_update, no_update
+    status, ok = _open_file(server_state.get_session(sid), path)
+    return status, ((refresh or 0) + 1 if ok else no_update)
 
-    path = path.strip()
+
+def _open_file(state, path: str):
+    """Open a recording: EDF goes to channel selection, ADICHT loads for viewing.
+
+    Returns ``(status_component_or_None, ok)``. Shared by the path box and the
+    start screen's recent list; a successful open is added to the recent list.
+    """
+    path = (path or "").strip()
     if not os.path.isfile(path):
-        return alert(f"File not found: {path}", "danger"), no_update
-
-    state = server_state.get_session(sid)
-
+        return alert(f"File not found: {path}", "danger"), False
     try:
         if path.lower().endswith(".edf"):
             from eeg_seizure_analyzer.io.edf_reader import scan_edf_channels
@@ -1151,7 +1232,8 @@ def on_path_load(n_clicks, path, sid, refresh):
             state.all_channels_info = channel_info
             state.extra["upload_source_path"] = path
             state.extra["upload_filename"] = os.path.basename(path)
-            return None, (refresh or 0) + 1
+            add_recent(path, "file")
+            return None, True
 
         elif path.lower().endswith(".adicht"):
             from eeg_seizure_analyzer.io.adicht_reader import read_adicht
@@ -1159,18 +1241,19 @@ def on_path_load(n_clicks, path, sid, refresh):
             recording.source_path = path
             state.recording = recording
             _discover_video(state)
+            add_recent(path, "file")
             return alert(
                 "ADICHT file loaded for viewing. Detection, training, ML, "
                 "and saving results require EDF format. Convert via "
                 "Tools \u2192 ADICHT \u2192 EDF (Windows only).",
                 "warning",
-            ), (refresh or 0) + 1
+            ), True
 
         else:
-            return alert("Unsupported file type", "danger"), no_update
+            return alert("Unsupported file type", "danger"), False
 
     except Exception as e:
-        return alert(f"Error: {e}", "danger"), no_update
+        return alert(f"Error: {e}", "danger"), False
 
 
 @callback(
@@ -1617,13 +1700,18 @@ def batch_browse_folder(n_clicks):
     Output("batch-scan-results", "children"),
     Output("batch-scan-data", "data"),
     Input("batch-scan-btn", "n_clicks"),
+    Input("batch-autoscan", "n_intervals"),
     State("batch-folder-input", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def batch_scan_folder(n_clicks, folder, sid):
-    """Scan folder for EDF files and show status table."""
-    if not n_clicks or not folder:
+def batch_scan_folder(n_clicks, n_auto, folder, sid):
+    """Scan folder for EDF files and show status table.
+
+    Also runs once by itself (``batch-autoscan``) when the folder was opened
+    from the start screen's recent list.
+    """
+    if not (n_clicks or n_auto) or not folder:
         return no_update, no_update
 
     folder = folder.strip()
@@ -1644,6 +1732,7 @@ def batch_scan_folder(n_clicks, folder, sid):
             alert(f"No EDF files found in {folder}", "warning"),
             no_update,
         )
+    add_recent(folder, "folder")
 
     # Build status rows
     rows = []

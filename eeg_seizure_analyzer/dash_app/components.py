@@ -114,7 +114,9 @@ def params_menu(prefix: str, has_results: bool) -> dbc.DropdownMenu:
     """
     return dbc.DropdownMenu(
         label="Parameters",
-        size="sm", color="secondary", align_end=True,
+        size="sm", color="link", align_end=True,
+        className="ned-menu",                    # themed in style.css
+        toggleClassName="btn-ned-secondary",
         toggle_style={"whiteSpace": "nowrap"},
         children=[
             dbc.DropdownMenuItem("Load my saved defaults",

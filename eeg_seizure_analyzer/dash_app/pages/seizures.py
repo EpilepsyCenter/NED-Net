@@ -646,10 +646,11 @@ def layout(sid: str | None) -> html.Div:
                 children=[
                     dbc.Button("Detect Seizures", id="sz-detect-btn",
                                className="btn-ned-primary"),
+                    # The main action when several files are open (shown only then)
                     dbc.Button(
                         "\U0001F4C1 Detect All Files",
                         id="sz-detect-all-btn",
-                        className="btn-ned-secondary",
+                        className="btn-ned-primary",
                         style={"display": "inline-block"
                                if state.extra.get("project_files")
                                else "none"},

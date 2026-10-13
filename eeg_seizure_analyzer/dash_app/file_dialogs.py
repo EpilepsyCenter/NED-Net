@@ -39,6 +39,17 @@ def _stdout(cmd: list[str]) -> str:
         return ""
 
 
+def _osascript(script: str) -> str:
+    """Run an AppleScript dialog, activated first.
+
+    osascript is a background process, so its dialog used to open without
+    keyboard focus: the first click only focused it and a second was needed to
+    choose. ``activate`` brings the dialog to the front with focus, and needs no
+    Automation permission (unlike scripting "System Events").
+    """
+    return _stdout(["osascript", "-e", "activate", "-e", script])
+
+
 def _lines(text: str) -> list[str]:
     return [p for p in text.splitlines() if p.strip()]
 
@@ -107,6 +118,10 @@ def _tk(body: str) -> str:
         "except Exception:",
         "    pass",
         "root.update()",
+        "try:",
+        "    root.lift(); root.focus_force()",
+        "except Exception:",
+        "    pass",
         body,
         "root.destroy()",
         "print(out or '')",
@@ -120,8 +135,7 @@ def pick_folder(title: str = "Select folder") -> str | None:
     """Open a folder picker. Returns the chosen path, or None if cancelled."""
     system = platform.system()
     if system == "Darwin":
-        out = _stdout(["osascript", "-e",
-                       f'POSIX path of (choose folder with prompt "{title}")'])
+        out = _osascript(f'POSIX path of (choose folder with prompt "{title}")')
         return out.strip().rstrip("/") or None
     if system == "Linux":
         z = shutil.which("zenity")
@@ -141,9 +155,8 @@ def pick_file(title: str = "Select file", exts=()) -> str | None:
     exts = _norm_exts(exts)
     system = platform.system()
     if system == "Darwin":
-        out = _stdout(["osascript", "-e",
-                       f'POSIX path of (choose file with prompt "{title}"'
-                       f'{_osascript_of_type(exts)})'])
+        out = _osascript(f'POSIX path of (choose file with prompt "{title}"'
+                         f'{_osascript_of_type(exts)})')
         return out.strip() or None
     if system == "Linux":
         z = shutil.which("zenity")
@@ -175,7 +188,7 @@ def pick_files(title: str = "Select files", exts=()) -> list[str]:
             'end repeat',
             'return out',
         ])
-        return _lines(_stdout(["osascript", "-e", script]))
+        return _lines(_osascript(script))
     if system == "Linux":
         z = shutil.which("zenity")
         if z:
@@ -210,9 +223,8 @@ def save_file(default_name: str, title: str = "Save file",
 
     system = platform.system()
     if system == "Darwin":
-        out = _stdout(["osascript", "-e",
-                       f'POSIX path of (choose file name with prompt "{title}" '
-                       f'default name "{default_name}")'])
+        out = _osascript(f'POSIX path of (choose file name with prompt "{title}" '
+                         f'default name "{default_name}")')
         return out.strip() or None
     if system == "Linux":
         z = shutil.which("zenity")
