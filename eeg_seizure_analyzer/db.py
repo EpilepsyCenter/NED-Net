@@ -667,6 +667,22 @@ def get_summary(
     ).fetchall()
     animal_list = [r[0] for r in animals if r[0]]
 
+    # Without event-level filters, count every analysed file and every observed
+    # animal (incl. those without events), as the Results tab does. Counting only
+    # files/animals with events made Analysis show e.g. 4 files where Results
+    # showed 12 for the same project.
+    if len(ev_conditions) == 1:        # only the always-on "not excluded"
+        n_files = conn.execute(
+            f"SELECT COUNT(*) FROM chunks c WHERE {where}", params).fetchone()[0]
+        try:
+            observed = conn.execute(
+                f"""SELECT DISTINCT fa.animal_id FROM file_animals fa
+                    JOIN chunks c ON fa.chunk_id = c.id WHERE {where}""",
+                params).fetchall()
+            animal_list = sorted(set(animal_list) | {r[0] for r in observed if r[0]})
+        except Exception:
+            pass  # older projects without observation rows
+
     # Event counts
     total = conn.execute(
         f"""SELECT COUNT(*) FROM events e

@@ -649,7 +649,8 @@ p, span, div, h1, h2, h3, h4, h5, h6 {
 }
 
 .form-check-input {
-    border-color: var(--ned-border) !important;
+    /* --ned-border (10% opacity) made unchecked boxes invisible on cards */
+    border: 1.5px solid color-mix(in oklab, var(--ned-text) 40%, transparent) !important;
     background-color: var(--ned-surface) !important;
 }
 

@@ -795,6 +795,8 @@ Click **🚀 Start Training**. **■ Stop** ends early and keeps the best model 
 
 ![Screenshot: training progress table](screenshots/ml_training_progress.png)
 
+*The per-epoch table of a real run (24 epochs on RAM-GDNF data).*
+
 The progress panel shows the settings in use and a live per-epoch table:
 - train and validation loss;
 - seizure F1, precision and recall at 0.5;
