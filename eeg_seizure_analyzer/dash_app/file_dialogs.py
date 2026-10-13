@@ -61,9 +61,23 @@ def _webview_dialog(kind: str, title: str = "", exts=(), multiple: bool = False,
                  "save": webview.FileDialog.SAVE}[kind]
         types = ()
         if exts and kind == "open":
-            label = "/".join(e.upper() for e in exts)
-            types = (f"{label} files ({';'.join('*.' + e for e in exts)})",
-                     "All files (*.*)")
+            # pywebview accepts only letters, digits, _ and spaces in the label
+            # ("EDF/ADICHT files" was rejected, so the dialog fell back to the old
+            # unfocused one). A filter that still fails validation is dropped:
+            # an unfiltered fast dialog beats the slow one.
+            from webview.util import parse_file_type
+            names = [e.upper() for e in exts]
+            label = " and ".join(names) if len(names) == 2 else " ".join(names)
+            cand = (f"{label} files ({';'.join('*.' + e for e in exts)})",
+                    "All files (*.*)")
+            ok = []
+            for t in cand:
+                try:
+                    parse_file_type(t)
+                    ok.append(t)
+                except ValueError:
+                    pass
+            types = tuple(ok) if len(ok) == len(cand) else ()
         res = _native_window.create_file_dialog(
             dtype, allow_multiple=multiple, save_filename=save_name, file_types=types)
     except Exception:
