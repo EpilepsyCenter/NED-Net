@@ -1108,6 +1108,7 @@ def layout(sid: str | None) -> html.Div:
         n_samp = min(int(10 * rec.fs), rec.n_samples)
         ptps = [float(np.ptp(rec.data[i, :n_samp])) for i in range(rec.n_channels)]
         default_yrange = float(np.median(ptps)) * 1.5 if ptps else 1.0
+        default_yrange = float(f"{default_yrange:.3g}")  # 1.62, not 1.615618
     tr_yrange = state.extra.get("tr_yrange", viewer_saved.get("yrange", default_yrange))
     tr_act_ymin = state.extra.get("tr_act_ymin", viewer_saved.get("act_ymin", 0.0))
     tr_act_ymax = state.extra.get("tr_act_ymax", viewer_saved.get("act_ymax", 4.0))

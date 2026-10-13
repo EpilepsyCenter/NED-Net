@@ -96,8 +96,8 @@ def layout(sid: str | None) -> html.Div:
             # ── Annotation type ──────────────────────────────────
             _param_label(
                 "Annotation type",
-                "Which sidecar labels to train on: Seizure events (for U-Net, "
-                "Convulsive, Re-ranker) or Interictal Spikes (their own model).",
+                "Which sidecar labels to train on: Seizure events (for the U-Net "
+                "and the convulsive classifier) or Interictal Spikes (their own model).",
                 font_size="0.82rem"),
             dbc.RadioItems(
                 id="ml-type-radio",
@@ -189,9 +189,7 @@ def layout(sid: str | None) -> html.Div:
                                 "What to train. U-Net = the seizure detector "
                                 "(finds candidate events). Convulsive Classifier "
                                 "= Stage-2 model labelling each event convulsive "
-                                "vs non-convulsive. Event Re-ranker = tabular layer "
-                                "that re-scores confidence of candidates a detector "
-                                "already found (filters false positives).",
+                                "vs non-convulsive.",
                                 font_size="0.82rem"),
                             dbc.RadioItems(
                                 id="ml-architecture",

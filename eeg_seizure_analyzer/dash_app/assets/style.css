@@ -370,6 +370,25 @@ div.form-control {
     padding: 0 !important;
 }
 
+/* Dash 4 renders dcc.Input as a container (which gets the component's style)
+   holding the <input> and −/+ stepper buttons. The inner <input> keeps its
+   intrinsic ~178 px width, so in containers narrower than that it overflows and
+   neighbouring inputs cover each other's text (e.g. Training "Act Y" looked
+   empty). Make the inner input fill its container instead. */
+.dash-input-container {
+    display: inline-flex;
+    align-items: center;
+}
+.dash-input-container > .dash-input-element {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+}
+/* ...and hide Dash 4's −/+ steppers, like the browser spinners below. */
+.dash-input-container > .dash-input-stepper {
+    display: none !important;
+}
+
 /* ── Hide browser number input spinners ───────────────────────────── */
 
 /* Webkit / Chrome / Safari / Edge */

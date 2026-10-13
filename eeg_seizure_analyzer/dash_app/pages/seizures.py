@@ -277,44 +277,25 @@ Best for maximum specificity - reduces false positives by requiring agreement.
 
 ## U-Net (ML)
 
-A compact 1-D U-Net trained **from scratch** on your annotated seizures \
-(no pre-training). A solid baseline when you have enough labelled data; \
-BENDR is the alternative that starts from a self-supervised pre-trained \
-encoder.
+A compact 1-D U-Net trained on your annotated seizures. It outputs a seizure \
+probability for every sample; events are the stretches where it is high. An \
+optional Stage-2 **convulsive classifier** then labels each event convulsive or \
+non-convulsive. It only labels events; it never removes them.
 
 **Parameters:**
 
 | Parameter | Description |
 |-----------|-------------|
-| **Model** | Select a trained U-Net model. Models are trained in the Dataset / Model tab. |
-| **Threshold** | Probability threshold for seizure detection (0.1–0.9). Lower = more sensitive, higher = more specific. |
-| **Min duration** | Discard predicted events shorter than this (seconds). |
-| **Merge gap** | Merge predicted segments closer than this (seconds). |
+| **U-Net model** | A trained seizure model (Dataset / Model tab). |
+| **Convulsive classifier** | Optional Stage-2 model. When set, it decides convulsive vs non-convulsive; otherwise the U-Net's own convulsive channel does. |
+| **Threshold** | An event's core must exceed this probability. Lower = more sensitive. Defaults to the model's training optimum. |
+| **Boundary threshold (hysteresis)** | Each event grows outward until the probability falls below this lower value, so onsets and offsets are not clipped. Equal to the threshold (or higher) disables growing. |
+| **Convulsive threshold** | Probability above which an event is labelled convulsive. |
+| **Min duration** | Discard events shorter than this (seconds). |
+| **Merge gap** | Merge events closer than this (seconds). |
 
-No rule-based parameters — U-Net is a learned model. To improve detection, \
-annotate more data and re-train via the Dataset / Model tab.
-
----
-
-## BENDR (ML)
-
-A self-supervised EEG foundation model (Kostas et al., 2021) adapted for \
-rodent seizure detection. BENDR uses a 6-layer convolutional encoder and \
-8-layer transformer contextualizer, pre-trained on unlabelled EEG via \
-contrastive masked prediction (wav2vec 2.0), then fine-tuned on annotated \
-seizures using the Training tab.
-
-**Parameters:**
-
-| Parameter | Description |
-|-----------|-------------|
-| **Model** | Select a trained BENDR model. Models are trained in the Training tab → Dataset/Model section. |
-| **Threshold** | Probability threshold for seizure detection (0.1–0.9). Lower = more sensitive, higher = more specific. |
-| **Min duration** | Discard predicted events shorter than this (seconds). |
-| **Merge gap** | Merge predicted segments closer than this (seconds). |
-
-No rule-based parameters — BENDR is a learned model. To improve detection, \
-annotate more data and re-train via the Training tab.
+No rule-based parameters: to improve detection, annotate more data and \
+re-train in the Dataset / Model tab.
 
 ---
 
@@ -4194,7 +4175,7 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
         return (
             False, True,
             alert("Batch “Detect All Files” supports Spike-Train, Spectral "
-                  "Band, Autocorrelation, U-Net and BENDR. For Ensemble, run "
+                  "Band, Autocorrelation and U-Net. For Ensemble, run "
                   "detection one file at a time.", "warning"),
             False,
         )

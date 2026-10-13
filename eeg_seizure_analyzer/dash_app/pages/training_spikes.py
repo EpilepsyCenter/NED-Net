@@ -606,6 +606,7 @@ def layout(sid: str | None) -> html.Div:
         n_samp = min(int(10 * rec.fs), rec.n_samples)
         ptps = [float(np.ptp(rec.data[i, :n_samp])) for i in range(rec.n_channels)]
         default_yrange = float(np.median(ptps)) * 1.5 if ptps else 1.0
+        default_yrange = float(f"{default_yrange:.3g}")  # 1.62, not 1.615618
     trs_yrange = state.extra.get("trs_yrange", viewer_saved.get("yrange", default_yrange))
 
     # Build filtered list for review mode

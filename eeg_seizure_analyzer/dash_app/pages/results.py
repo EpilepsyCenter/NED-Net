@@ -1485,7 +1485,10 @@ def _group_rollup(events: list[dict], fa_rows: list[dict]) -> list[dict]:
     Event counts come from ``events``; animals, files and recording hours come
     from ``fa_rows`` (one row per animal per file) so quiet animals still count
     toward the denominator. Older projects without observation data fall back to
-    animals/files derived from events, with hours = 0 (rates show as raw)."""
+    animals/files derived from events, with hours = 0 (rates show as raw).
+
+    "Files" counts (file, animal) pairs: a file holds several animals, often from
+    different groups, so counting distinct files gave every group the total."""
     groups: dict = {}
 
     def _st(g):
@@ -1502,12 +1505,12 @@ def _group_rollup(events: list[dict], fa_rows: list[dict]) -> list[dict]:
             st["nonconv"] += 1
         if e.get("animal_id"):
             st["animals"].add(e["animal_id"])
-        st["files"].add(e.get("chunk_id"))
+        st["files"].add((e.get("chunk_id"), e.get("animal_id")))
     for r in fa_rows:
         st = _st(r.get("group_id") or "(unlabeled)")
         if r.get("animal_id"):
             st["animals"].add(r["animal_id"])
-        st["files"].add(r.get("chunk_id"))
+        st["files"].add((r.get("chunk_id"), r.get("animal_id")))
         st["rec_sec"] += float(r.get("valid_sec") or 0)
 
     out = []
@@ -1665,7 +1668,7 @@ def _build_group_table(rollup, is_seizure):
         row = {
             "Group": r["group"],
             "Animals": r["n_animals"],
-            "Files": r["n_files"],
+            "Animal-files": r["n_files"],
             "Rec h": round(r["rec_hours"], 1),
             "Events": r["n"],
             "Events/h": round(r["rate"], 3) if r["rate"] is not None else "—",
@@ -1675,7 +1678,10 @@ def _build_group_table(rollup, is_seizure):
             row["Non-conv"] = r["nonconv"]
         rows.append(row)
     cols = [{"field": "Group", "width": 130}, {"field": "Animals", "width": 90},
-            {"field": "Files", "width": 80}, {"field": "Rec h", "width": 90}]
+            {"field": "Animal-files", "width": 135,
+             "headerTooltip": "Recordings summed over the group's animals "
+                              "(one file holds several animals)"},
+            {"field": "Rec h", "width": 90}]
     if is_seizure:
         cols += [{"field": "Conv", "width": 80},
                  {"field": "Non-conv", "width": 95}]

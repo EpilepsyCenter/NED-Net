@@ -144,8 +144,9 @@ def layout(sid: str | None) -> html.Div:
         children=[
             html.H4("Analysis", style={"marginBottom": "8px"}),
             html.P(
-                "Run CNN detection on single files, batches, or "
-                "monitor a folder for new recordings in real time.",
+                "Run a trained model (U-Net, with an optional convulsive "
+                "classifier) on single files, batches, or monitor a folder for "
+                "new recordings in real time.",
                 style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "16px"},
             ),
@@ -327,7 +328,7 @@ def layout(sid: str | None) -> html.Div:
             html.Div(
                 "Database: feeds Results and statistics. Sidecars: events are "
                 "merged into each EDF's _ned_annotations.json as pending — "
-                "confirm/reject them in the Annotation tab and they become "
+                "confirm/reject them in the Training tab and they become "
                 "training data. Existing human labels are never changed. "
                 "Seizure detection only (spikes always go to the database).",
                 style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
@@ -660,7 +661,7 @@ def _results_summary() -> list:
                        style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})]
 
     if summary["n_files"] == 0:
-        return [html.P("No analysis run yet.",
+        return [html.P("No events in this project database yet.",
                        style={"color": "var(--ned-text-muted)", "fontSize": "0.85rem"})]
 
     n_total = summary["total_events"]
@@ -674,7 +675,8 @@ def _results_summary() -> list:
     pct_nonconv = f"({round(100 * n_nonconv / n_total)}%)" if n_total else ""
 
     return [
-        html.H6("Results — last analysis run",
+        # Totals over the whole active project database, not just the last run.
+        html.H6(f"Project totals — {db.get_active_project()}",
                 style={"color": "var(--ned-accent)", "marginBottom": "12px"}),
         dbc.Row([
             dbc.Col(metric_card("Files", str(summary["n_files"])), width=2),
