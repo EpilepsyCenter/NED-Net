@@ -1,10 +1,22 @@
 # NED-Net
 
-**Neural Event Detection Network** — a desktop application for detecting and quantifying seizures and interictal spikes in rodent EEG recordings.
+**Neural Event Detection Network**: a desktop application for detecting, reviewing and
+quantifying seizures and interictal spikes in long-term rodent EEG.
 
-NED-Net combines multiple rule-based detection algorithms (Spike-Train, Spectral Band, Autocorrelation, Ensemble) with a trainable 1D U-Net deep-learning model. It ships as a multi-tab Dash web app that runs locally in your browser.
+NED-Net offers two routes to detection:
+- **rule-based detectors** that need no training: Spike-Train, Spectral Band, Autocorrelation
+  and Ensemble;
+- **a trained two-stage model**: a 1-D U-Net finds seizures, and a convulsive classifier
+  labels each one convulsive or not.
+
+Detections are reviewed in the app, and the reviewed events become training data for the
+next model. Retraining on each new cohort is part of the intended workflow. Results go to
+per-project databases for group statistics.
+
+It runs locally as a Dash app, in its own desktop window or in a browser.
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Licence](https://img.shields.io/badge/licence-GPL--3.0-green)
 
 ---
 
@@ -12,16 +24,16 @@ NED-Net combines multiple rule-based detection algorithms (Spike-Train, Spectral
 
 | Area | What it does |
 |---|---|
-| **File loading** | EDF files (primary) with multi-rate channel support, auto-pairing of EEG + activity channels. ADICHT (LabChart) files can be converted to EDF via the built-in converter |
-| **Viewer** | Scrollable multi-channel EEG with bandpass/notch filtering, min/max downsampling, activity overlay, and synchronized video playback |
-| **Seizure detection** | Four methods: Spike-Train, Spectral Band (17–25 Hz), Autocorrelation, and Ensemble. Boundary refinement, quality scoring, and seizure burden metrics |
-| **Spike detection** | Interictal spike detection with z-score thresholding, prominence/width filtering, morphology analysis, and spike-rate metrics |
-| **Training** | In-app annotation interface for reviewing and labeling detected events to build training datasets |
-| **Dataset / Model** | Build datasets from annotated files and train a 1D U-Net (2-class output for seizures, binary for spikes) with live progress |
-| **Analysis** | Run trained CNN models on single files, batch folders, or live-monitored directories. HVSW/HPD subtype classification |
-| **Results** | Aggregated results across all analysis runs with daily seizure burden, circadian charts, and CSV export |
-| **Video sync** | Convert LabChart WMV recordings to MP4, synchronized playhead overlay on EEG traces |
-| **Export** | CSV export of seizure events and interictal spikes with configurable field groups (core, morphology, context, spectral) |
+| **Loading** | EDF/EDF+ with multi-rate channels and automatic EEG–activity pairing. Animal ID, cohort and group per channel, from the table or a batch metadata template. Load one file or a folder. The start screen lists recent files and folders. ADICHT (LabChart) via the built-in converter. |
+| **Viewer** | Scrollable multi-channel EEG with band-pass/notch filters, min/max downsampling, activity overlay, event overlays, synchronised video, and vector SVG export of the current view. |
+| **Seizure detection** | Four rule-based methods plus the trained U-Net. The U-Net runs with an optional convulsive classifier and hysteresis boundaries. Result filters, an event inspector, CSV export, and "Add to project database". |
+| **Interictal spikes** | Rule-based or U-Net spike detection with morphology features, spike-rate metrics and filters. |
+| **Event inspector** | Pan through the recording, change the context (±10–120 s), and click an amplitude overview strip (±5 min, ±15 min or the whole recording) to jump. Step through events with Prev/Next or the keyboard. |
+| **Training (review)** | Confirm or reject candidates, edit boundaries, flag convulsive seizures, add or remove events by hand. Every candidate shows where it came from. Confirmed and rejected events become training data. |
+| **Dataset / Model** | Build datasets from reviewed recordings and train the U-Net or the convulsive classifier, with live progress. |
+| **Analysis** | Run a trained model on one file, a folder (batch) or a watched folder (live monitoring). Choosing a model fills in its recommended operating point. Output goes to a project database, the training review queue, or both. HVSW/HPD subtype classification. |
+| **Results** | Per-project statistics: group comparison (raw or per animal-hour), per-animal summary with include/valid-until controls, longitudinal, distributions, daily burden and circadian plots, an interictal-spike panel, and CSV/XLSX export. |
+| **Tools** | WMV→MP4 video conversion, and ADICHT→EDF conversion (Windows). |
 
 ---
 
@@ -29,162 +41,212 @@ NED-Net combines multiple rule-based detection algorithms (Spike-Train, Spectral
 
 ### Prerequisites
 
-- **Python 3.9+** (3.10 or later recommended)
+- **Python 3.9+** (3.11 or later recommended)
 - **ffmpeg** (optional, for video conversion)
+- **Linux only:** `zenity` or `kdialog` for the Browse dialogs. Most desktops ship one.
 
-### 1. Clone the repository
+### Install
 
 ```bash
 git clone https://github.com/EpilepsyCenter/NED-Net.git
 cd NED-Net
-```
-
-### 2. Create a virtual environment (recommended)
-
-```bash
 python -m venv .venv
-source .venv/bin/activate   # macOS / Linux
-# .venv\Scripts\activate    # Windows
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[desktop,ml]"
 ```
 
-### 3. Install the package
+Extras:
 
-```bash
-pip install -e .
-```
+| Extra | Adds | Needed for |
+|---|---|---|
+| (core) | numpy, scipy, pandas, pyEDFlib, plotly, matplotlib, dash, dash-bootstrap-components, dash-ag-grid, openpyxl, watchdog | everything else, incl. rule-based detection and live monitoring |
+| `ml` | PyTorch (plus scikit-learn/joblib for retained research code) | training models and running the U-Net / convulsive classifier |
+| `desktop` | pywebview, waitress | the native desktop window |
+| `windows` | adi-reader | opening ADICHT (LabChart) files on Windows |
 
-Core dependencies:
+PyTorch uses the Apple-silicon GPU (MPS) automatically. For an NVIDIA GPU, install the CUDA
+build of PyTorch first, following [pytorch.org](https://pytorch.org/get-started/locally/).
 
-| Package | Purpose |
-|---|---|
-| numpy | Numerical computing |
-| scipy | Signal processing, filtering |
-| pyedflib | EDF file reading/writing |
-| pandas | Tabular data handling |
-| plotly | Interactive graphs |
-| matplotlib | Vector (SVG) export of the viewer window |
-| dash | Web application framework |
-| dash-bootstrap-components | UI components |
-| dash-ag-grid | Interactive data tables |
-
-### ML extras
-
-To use the machine-learning pipeline (model training and CNN-based analysis), install the ML dependencies:
-
-```bash
-pip install -e ".[ml]"
-```
-
-This installs **PyTorch**. On Apple Silicon Macs (M1/M2/M3/M4), PyTorch automatically uses the Metal GPU backend for accelerated training. For NVIDIA GPU support on Linux/Windows, follow the [PyTorch installation guide](https://pytorch.org/get-started/locally/).
-
-### Windows extras (LabChart files)
-
-To directly open and convert ADICHT (LabChart) files on Windows:
-
-```bash
-pip install -e ".[windows]"
-```
-
-### Desktop app (native window)
-
-To run NED-Net as a standalone desktop app — its own window, no browser tab — install the desktop extra:
-
-```bash
-pip install -e ".[desktop]"
-```
-
-This adds **pywebview** (native window) and **waitress** (production WSGI server). The webview backend is automatic on Windows (WebView2) and macOS (WKWebView); on Linux the Qt backend is installed and bundles its own web engine.
+`pip install -r requirements.txt` installs the core and desktop dependencies without the
+editable package.
 
 ---
 
 ## Quick start
 
-### In a browser
-
-```bash
-python -m eeg_seizure_analyzer.dash_app.main
-```
-
-Open http://127.0.0.1:8050 in your browser.
-
-### As a native desktop app
-
-After installing the desktop extra, launch a standalone window with:
-
-```bash
-nednet
-# or:  python -m eeg_seizure_analyzer.dash_app.desktop
-```
-
-Or double-click the launcher for your platform (no terminal needed):
+**Desktop app.** Double-click the launcher for your platform, or run `nednet`
+(also `python -m eeg_seizure_analyzer.dash_app.desktop`):
 
 | Platform | Launcher |
 |---|---|
+| macOS | `NED-Net.app` |
 | Windows | `Start NED-Net (Native).bat` |
-| macOS | `NED-Net.app` (double-click in Finder) |
-| Linux | `start-nednet-native.sh` (first run: `chmod +x` it) |
+| Linux | `start-nednet-native.sh` (first time: `chmod +x start-nednet-native.sh`) |
 
-The native app serves on `127.0.0.1:8051` (auto-selecting a free port if busy), so it can run alongside the browser version.
+The desktop app serves on `127.0.0.1:8051`, or a free port if that one is taken.
 
-### Basic workflow
+**Browser.**
 
-1. **Load** → Enter the path to your EDF file, select channels, click Load
-2. **View** → Browse multi-channel EEG traces in the Viewer tab
-3. **Detect** → Go to Detection, choose a method, adjust parameters, click Detect Seizures
-4. **Review** → Inspect results in the table, click events to view EEG + spectrogram
-5. **Export** → Download CSV with selected field groups
-6. **Train** → Annotate events in the Training tab, build datasets, train a U-Net model
-7. **Analyse** → Run trained models on new recordings in the Analysis tab
+```bash
+python -m eeg_seizure_analyzer.dash_app.main      # then open http://127.0.0.1:8050
+```
+
+### Typical workflows
+
+**Rule-based, one recording**
+1. **Load** a recording and set the animal IDs.
+2. **Detection → Seizure:** pick a method, tune it, detect.
+3. Inspect events, filter them, export CSV, or add them to the project database.
+
+**Trained model, a whole study**
+1. **Analysis:** choose a project and a model (its recommended thresholds are filled in), then
+   run on a folder.
+2. **Results:** group and per-animal statistics.
+3. On a new cohort or implant, send output to the **training review queue** as well. Review a
+   sample in **Training**, then retrain in **Dataset / Model**. Models transfer poorly to
+   animals they have not seen, so plan to retrain on each new cohort.
 
 ---
 
 ## Tab structure
 
-| Tab | Subtabs | Description |
+| Tab | Subtabs | Purpose |
 |---|---|---|
-| **Load** | — | File loading and channel selection |
-| **Viewer** | — | Multi-channel EEG browser with filtering |
-| **Detection** | Seizure, Interictal Spikes | Rule-based detection with configurable parameters |
-| **Training** | Seizure, Interictal Spikes | Annotation interface for labeling events |
-| **Dataset / Model** | Dataset | Build datasets and train U-Net models |
-| **Analysis** | — | CNN inference (single file, batch, live monitoring) with HVSW/HPD classification |
-| **Results** | — | Aggregated analysis results with charts and filters |
-| **Tools** | Video Converter, ADICHT → EDF | File conversion utilities |
+| **Load** | — | Start screen with recent files, file and folder loading, channel selection, IDs and tags |
+| **Viewer** | — | Multi-channel EEG browser, filters, overlays, SVG export, video |
+| **Detection** | Seizure, Interictal Spikes | Rule-based and U-Net detection, filters, inspector, export |
+| **Training** | Seizure, Interictal Spikes | Review: label candidates, edit boundaries, add or remove events |
+| **Dataset / Model** | Dataset | Build datasets, train the U-Net or the convulsive classifier |
+| **Analysis** | — | Model inference: single file, batch, live monitoring |
+| **Results** | — | Per-project statistics, charts and exports |
+| **Tools** | Video Converter, ADICHT → EDF | Conversion utilities |
 
 ---
 
-## ML model architecture
+## Detection pipeline
 
-NED-Net uses a **1D U-Net** for per-sample event segmentation:
+### Rule-based seizure detectors
+- **Spike-Train:** spike detection with a baseline z-score, grouping into trains, and RMS
+  boundary refinement.
+- **Spectral Band:** power in a 17–25 Hz band relative to 1–50 Hz (spectral band index).
+- **Autocorrelation:** range autocorrelation (rhythmicity) and spike frequency; both must exceed
+  their thresholds.
+- **Ensemble:** a vote across the methods, with union or intersection boundaries.
 
-- **Seizure model**: 2-class output (seizure probability + convulsive probability)
-- **Spike model**: binary output (spike probability)
-- **Encoder**: 4-level progressive 2× downsampling with skip connections
-- **Decoder**: transposed convolutions with skip-connection concatenation
-- **Loss**: combined Dice + BCE with adjustable positive weight
-- **Validation**: train/val split by animal ID to prevent data leakage
-- **Training**: mixed precision (AMP), ReduceLROnPlateau scheduler, early stopping
+Each event gets quality metrics (local baseline ratio, amplitude, spike frequency and others),
+which the result filters use.
+
+### Trained two-stage model (seizures)
+1. **Stage 1: U-Net detection.** The U-Net outputs a seizure probability for every sample (EEG
+   at 250 Hz, 60 s windows, 15 s overlap). Events use **hysteresis**:
+   - a *core* must exceed the **detection threshold**;
+   - the event then grows outward until the probability falls below the lower **boundary
+     threshold**;
+   - then come a minimum duration and a merge gap.
+2. **Stage 2: convulsive classifier (optional).** A 1-D CNN scores a 60 s crop around each
+   detected event and sets the convulsive flag. It **labels events and never removes them**.
+   Without it, the U-Net's own convulsive output decides.
+
+**Operating points.** Choosing a model in Analysis, or in the Detection tab's U-Net panel,
+fills in its recommended operating point (`ml/operating_points.py`). In order of preference:
+- the model's own `operating_point` metadata;
+- a validated value;
+- the threshold that maximised event F1 during training.
+
+| Model | Detection / boundary | Convulsive classifier |
+|---|---|---|
+| `UNetv2_20260615` (production) | 0.5 / 0.1 | `Convulsive_v4LUNARC_20260616` at 0.45 |
+| `ramgdnf_temporal_pr`, `ramgdnf_all_prod_pr` (retrained) | 0.95 / 0.5 | `conv_temporal` at 0.6 |
+| `ramgdnf_armA3_holdB3_pr` | 0.9 / 0.5 | `conv_armA_holdB3` at 0.3 |
+
+**HVSW / HPD.** Non-convulsive events can be sub-classified as HVSW (slow, high-amplitude
+waves: low dominant frequency, high slow-wave index) or HPD (fast periodic discharges: high
+dominant frequency, high high-frequency index). The thresholds are set in Analysis →
+Advanced.
+
+### Models and training
+- **U-Net (Stage 1):**
+  - 1-D encoder–decoder with skip connections: 4 levels, 32 base filters, kernel 7;
+  - one EEG channel in, optionally the activity channel too;
+  - two outputs per sample: seizure and convulsive.
+- **Convulsive classifier (Stage 2):** the U-Net's encoder blocks, global average pooling and
+  a linear head, on 60 s crops.
+- **Training:**
+  - Dice + BCE loss with a positive-class weight, AdamW, ReduceLROnPlateau, early stopping on
+    patience;
+  - the checkpoint kept is the epoch with the best **event F1 over swept thresholds**, and
+    that threshold is saved as the model's training optimum;
+  - negatives are reviewed rejections (hard negatives) or random background;
+  - validation splits by animal (default), by recording, or temporally (each animal's later
+    recordings).
+- **Production recipe:** learning rate 1e-3, batch 8, positive weight 5, fp32. On CUDA, mixed
+  precision (bf16) is the default; pass `--fp32` to match production.
 
 ---
 
-## File formats
+## Projects and databases
 
-### Input
+Analysis and **Add to project database** write to the **active project**. Results reads from
+it.
+- Each project is a SQLite file in `~/.eeg_seizure_analyzer/projects/<name>.db`. The project
+  "Default" is `~/.eeg_seizure_analyzer/analysis.db`.
+- Create, switch and delete projects in Analysis. Use one project per experiment.
+- The database stores events, the files and animals analysed, and recorded time per animal,
+  so rates can be expressed per animal-hour.
 
-| Format | Extension | Platform | Notes |
-|---|---|---|---|
-| EDF / EDF+ | `.edf` | All | Primary format for all features |
-| ADICHT | `.adicht` | Windows | Convert to EDF first via Tools tab or `eeg-convert` CLI |
+---
 
-### Output
+## Files
 
-| File | Contents |
+### Next to each recording
+
+| File | Contents | Written by |
+|---|---|---|
+| `<name>_ned_annotations.json` | **Seizure review state, and the only source of training data.** Every candidate with its label (pending / confirmed / rejected), edits, notes and origin. | Training; a Detection-tab run (as pending); Analysis with the review-queue output |
+| `<name>_ned_detections.json` | The last Detection-tab seizure run: events, parameters and filter settings, so the tab can restore itself. Training edits never change it. | Detection → Seizure |
+| `<name>_ned_spikes.json` | The last interictal-spike run | Detection → Interictal Spikes |
+| `<name>_ned_spike_annotations.json` | Spike review state | Training → Interictal Spikes |
+| `<name>_ned_channels.json` | Animal ID per channel | Load |
+| `<name>_ned_meta.json` | Cohort and group per channel | Load |
+
+Model training uses only **confirmed** events (positives) and **rejected** events (hard
+negatives). Pending candidates never reach a model until someone reviews them.
+
+### `~/.eeg_seizure_analyzer/`
+
+| Path | Contents |
 |---|---|
-| `{name}_ned_detections.json` | Rule-based seizure detections |
-| `{name}_ned_spikes.json` | Detected interictal spikes |
-| `{name}_ned_spike_annotations.json` | Spike annotation labels |
-| `{name}_ned_annotations.json` | Seizure annotation labels |
-| `results.db` | SQLite database with CNN analysis results |
+| `models/<name>/` | Trained models: `best_model.pt` and `metadata.json` (configuration, metrics, threshold) |
+| `datasets/` | Saved dataset definitions |
+| `projects/`, `analysis.db`, `active_project.txt` | Project databases and the active project |
+| `defaults.json`, `spike_defaults.json` | Your saved detection parameters (Parameters menu) |
+| `recent.json`, `window.json`, `results_state.json` | Recent files, window size, Results view state |
+
+---
+
+## Headless use and HPC
+
+The trainers and batch detectors run without the UI, for clusters (job scripts for SLURM are
+in `scripts/lunarc/`):
+
+```bash
+# Stage 1: U-Net (--analyze reports the class balance and split, then exits)
+python -m eeg_seizure_analyzer.ml.train_unet --data-dir /path/to/edfs \
+    --model-name my_unet --neg-source hard --val-mode animal --fp32
+
+# Stage 2: convulsive classifier
+python -m eeg_seizure_analyzer.ml.train_convulsive --data-dir /path/to/edfs \
+    --model-name my_conv --conv-neg-from-rejected
+
+# Batch detection into a project database, in parallel across cores
+python scripts/lunarc/detect_batch.py --edf-dir /path/to/edfs \
+    --db-path ~/.eeg_seizure_analyzer/projects/my_project.db \
+    --model my_unet --convulsive-model my_conv --workers 48
+```
+
+Run any of them with `--help` for all options. `scripts/lunarc/detect_spikes_batch.py` does
+the same for interictal spikes. ADICHT files convert from the command line with
+`eeg-convert input.adicht output.edf` (Windows).
 
 ---
 
@@ -192,93 +254,57 @@ NED-Net uses a **1D U-Net** for per-sample event segmentation:
 
 ```
 eeg_seizure_analyzer/
-├── dash_app/                    # Dash web application
-│   ├── main.py                  # App entrypoint, routing, layout
-│   ├── server_state.py          # Server-side session state
-│   ├── components.py            # Shared UI components and helpers
-│   ├── pages/                   # Tab modules
-│   │   ├── upload.py            # File loading and channel selection
-│   │   ├── viewer.py            # Multi-channel EEG viewer
-│   │   ├── seizures.py          # Seizure detection (4 methods)
-│   │   ├── spikes.py            # Interictal spike detection
-│   │   ├── training.py          # Seizure annotation UI
-│   │   ├── training_spikes.py   # Spike annotation UI
-│   │   ├── ml_datasets.py       # Dataset builder + model training
-│   │   ├── analysis.py          # CNN inference + HVSW/HPD classification
-│   │   ├── results.py           # Aggregated results and charts
-│   │   ├── tools.py             # Video converter + ADICHT converter
-│   │   └── adicht_converter.py  # ADICHT → EDF conversion logic
-│   └── assets/                  # CSS, JS, manual, screenshots
-├── detection/                   # Detection algorithms
-│   ├── base.py                  # DetectedEvent dataclass
-│   ├── spike_train_seizure.py   # Spike-train seizure detection
-│   ├── spectral_band_seizure.py # Spectral band (17–25 Hz) method
-│   ├── autocorrelation_seizure.py # Autocorrelation method
-│   ├── ensemble_seizure.py      # Ensemble (vote across methods)
-│   ├── seizure.py               # Legacy seizure detector
-│   ├── spike.py                 # Interictal spike detection
-│   ├── spike_utils.py           # Spike feature extraction
-│   ├── boundary_utils.py        # Event boundary refinement
-│   ├── confidence.py            # Quality metrics and scoring
-│   └── burden.py                # Seizure burden calculation
-├── ml/                          # Machine learning pipeline
-│   ├── model.py                 # SeizureUNet architecture
-│   ├── dataset.py               # Seizure dataset loading
-│   ├── spike_dataset.py         # Spike dataset loading
-│   ├── train.py                 # Training loop with validation
-│   ├── predict.py               # Seizure inference
-│   ├── spike_predict.py         # Spike inference
-│   └── spike_train.py           # Spike model training
-├── processing/                  # Signal processing
-│   ├── preprocess.py            # Bandpass, notch, artifact rejection
-│   ├── features.py              # RMS, line-length, energy features
-│   ├── spectral.py              # PSD, band power, spectrograms
-│   └── activity.py              # Activity channel processing
-├── io/                          # File I/O
-│   ├── base.py                  # EEGRecording dataclass
-│   ├── edf_reader.py            # EDF/EDF+ reader
-│   ├── adicht_reader.py         # ADICHT reader (Windows)
-│   ├── adicht_to_edf.py         # ADICHT → EDF converter
-│   ├── channel_ids.py           # Channel / animal ID management
-│   ├── persistence.py           # Detection result save/load
-│   ├── annotations.py           # Annotation file handling
-│   ├── annotation_store.py      # Annotation persistence
-│   ├── dataset_store.py         # Training dataset persistence
-│   └── batch_metadata.py        # Batch Excel metadata parsing
-├── validation/                  # Validation utilities
-│   └── metrics.py               # Detection quality metrics
-├── analysis.py                  # CNN analysis orchestration
-├── db.py                        # SQLite results database
-├── config.py                    # Default parameters and frequency bands
-└── export/                      # CSV/JSON export utilities
+├── dash_app/
+│   ├── main.py, desktop.py        # app and routing; native desktop window
+│   ├── pages/                     # one module per tab (upload, viewer, seizures, spikes,
+│   │                              #   training, training_spikes, ml_datasets, analysis,
+│   │                              #   results, tools, adicht_converter)
+│   ├── components.py              # shared UI pieces (parameter controls, filter panel, menus)
+│   ├── inspector_view.py          # pan / context / overview strip / grid navigation
+│   ├── file_dialogs.py            # native file and folder dialogs per platform
+│   ├── recent.py                  # recent files on the start screen
+│   └── assets/                    # CSS, user manual, screenshots
+├── detection/                     # rule-based detectors, boundaries, quality metrics, burden
+├── ml/
+│   ├── model.py, convulsive_model.py           # U-Net and Stage-2 classifier
+│   ├── dataset.py, train.py, predict.py        # windows, training loop, inference
+│   ├── train_unet.py, train_convulsive.py      # headless trainers
+│   ├── operating_points.py                     # recommended thresholds per model
+│   └── spike_*.py                              # spike model
+├── io/                            # EDF/ADICHT reading, sidecars, channel IDs, datasets
+├── processing/                    # filtering, features, spectra, activity
+├── analysis.py                    # single / batch / live analysis (shared by UI and scripts)
+├── db.py                          # project databases
+└── config.py                      # default parameters
+scripts/lunarc/                    # HPC job scripts (training, batch detection, exports)
+scripts/local/                     # analysis and figure scripts for the methods paper
+docs/methods_paper/                # run log, model notes and data for the methods paper
 ```
+
+Earlier research code is kept in `ml/` but not used by the app: the BENDR foundation-model
+experiments (`bendr_*`, `train_bendr.py`, CLI `eeg-bendr-pretrain`) and an event re-ranker
+(`train_reranker.py`). Both were evaluated and set aside.
 
 ---
 
 ## User manual
 
-A comprehensive user manual is available at `eeg_seizure_analyzer/dash_app/assets/USER_MANUAL.md` and is also served in-app at http://127.0.0.1:8050/assets/manual.html when the app is running.
+The full manual is `USER_MANUAL.md`. The app serves it at **Help** in the sidebar.
 
 ---
 
-## CLI tools
+## Licence
 
-### Convert ADICHT to EDF (Windows)
-
-```bash
-eeg-convert input.adicht output.edf
-```
-
----
-
-## License
-
-This project is currently under development. License information will be added in a future release.
+NED-Net is released under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
 ---
 
 ## Citation
 
-If you use NED-Net in your research, please cite:
+If you use NED-Net, please cite the software:
 
-> Ledri, M. (2026). NED-Net: Neural Event Detection Network for automated seizure detection in rodent EEG. GitHub. https://github.com/EpilepsyCenter/NED-Net
+> Ledri, M. (2026). NED-Net: Neural Event Detection Network for automated seizure detection in
+> rodent EEG. GitHub. https://github.com/EpilepsyCenter/NED-Net
+
+A methods paper describing NED-Net and its validation is in preparation; its reference will
+be added here.

@@ -420,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
                         "trained on confirmed seizures but deployed on every detection, "
                         "most of which are false positives, so without this it has never "
                         "seen a non-seizure and its precision contribution vanishes after "
-                        "retraining (flat 11% at every threshold on RAM_GDNF). Mir's "
+                        "retraining (flat 11%% at every threshold on RAM_GDNF). Mir's "
                         "rejected rows are the right source: video-adjudicated 'not a "
                         "convulsive/behavioural seizure'.")
     p.add_argument("--conv-label-method", nargs="*", default=[], metavar="M",
@@ -429,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
                         "'manual' selects the reviewer's own additions (no method field). "
                         "Recommended: 'mir_candidate autocorrelation manual' — which "
                         "EXCLUDES ml_unet, whose convulsive flag came from the previous "
-                        "Stage 2 itself (26% of the convulsive positive class, measured "
+                        "Stage 2 itself (26%% of the convulsive positive class, measured "
                         "2026-10-09). Empty = use all (pre-2026-10-09 behaviour).")
     p.add_argument("--conv-neg-method", nargs="*", default=[], metavar="M",
                    help="restrict those negatives to these detection_method values; "
