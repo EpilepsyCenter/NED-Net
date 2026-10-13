@@ -181,7 +181,7 @@ def save_annotations(
 
     ``detector_runs`` records the Analysis-tab detector passes written into
     this file; when None, any runs already in the file are carried over so a
-    save from the Annotation tab doesn't erase them.
+    save from the Training tab doesn't erase them.
 
     Returns the path of the written JSON file.
     """
@@ -439,7 +439,7 @@ def write_detections_to_sidecar(
     """Merge model detections into the EDF's ``_ned_annotations.json``.
 
     New events go in as ``pending`` detector candidates — they only become
-    training labels once confirmed/rejected in the Annotation tab. Human-
+    training labels once confirmed/rejected in the Training tab. Human-
     reviewed events are never changed (see ``merge_annotations``); stale
     pending ML candidates from earlier runs are replaced, and pending
     candidates from other (classical) detectors are left alone.
