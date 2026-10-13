@@ -289,7 +289,8 @@ experiments (`bendr_*`, `train_bendr.py`, CLI `eeg-bendr-pretrain`) and an event
 
 ## User manual
 
-The full manual is `USER_MANUAL.md`. The app serves it at **Help** in the sidebar.
+The full manual is [`eeg_seizure_analyzer/dash_app/assets/USER_MANUAL.md`](eeg_seizure_analyzer/dash_app/assets/USER_MANUAL.md).
+The app shows the same file at **Help** in the sidebar, and it also works offline.
 
 ---
 

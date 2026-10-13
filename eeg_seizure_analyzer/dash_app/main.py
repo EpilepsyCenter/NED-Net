@@ -39,6 +39,20 @@ app = Dash(
 
 server = app.server
 
+# ── Vendored front-end libraries (outside assets/, which Dash would inject
+# into every page). The manual page loads marked from here, so Help also
+# works offline. marked v12.0.2 (MIT), sha256 15fabce5…a894.
+import os
+from flask import send_from_directory
+
+_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "vendor")
+
+
+@server.route("/vendor/<path:filename>")
+def _vendor_file(filename):
+    return send_from_directory(_VENDOR_DIR, filename)
+
+
 # ── Video streaming route (range-request support) ────────────────────
 
 import os
@@ -122,6 +136,24 @@ clientside_callback(
     """,
     Output("viewer-video-sync", "n_clicks"),
     Input("viewer-start-input", "value"),
+    prevent_initial_call=True,
+)
+
+# Viewer: "Sync to EEG" jumps the video to the current Start time (the button
+# had no click handler; only the automatic seek above existed).
+clientside_callback(
+    """
+    function(n, startSec) {
+        var video = document.getElementById('viewer-video-player');
+        if (n && video && startSec != null) {
+            video.currentTime = startSec;
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("viewer-video-sync", "title"),
+    Input("viewer-video-sync", "n_clicks"),
+    State("viewer-start-input", "value"),
     prevent_initial_call=True,
 )
 

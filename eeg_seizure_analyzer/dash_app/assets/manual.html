@@ -84,7 +84,8 @@
 </head>
 <body>
 <div id="content"></div>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- Served by the app (dash_app/vendor), so the manual renders offline -->
+<script src="/vendor/marked.min.js"></script>
 <script>
 fetch('/assets/USER_MANUAL.md')
   .then(r => r.text())

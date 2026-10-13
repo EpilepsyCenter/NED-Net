@@ -881,7 +881,7 @@ def layout(sid: str | None) -> html.Div:
                                "marginBottom": "8px"},
                         children=[
                             dbc.Button(
-                                "\u25C0 Prev (< ,)", id="trs-prev-btn", size="sm",
+                                "\u25C0 Prev (\u2190 ,)", id="trs-prev-btn", size="sm",
                                 className="btn-ned-secondary",
                             ),
                             html.Div(
@@ -899,7 +899,7 @@ def layout(sid: str | None) -> html.Div:
                                        "fontSize": "0.78rem", "textAlign": "center"},
                             ),
                             dbc.Button(
-                                "Next (> .) \u25B6", id="trs-next-btn", size="sm",
+                                "Next (. \u2192) \u25B6", id="trs-next-btn", size="sm",
                                 className="btn-ned-secondary",
                             ),
                         ],

@@ -73,6 +73,17 @@ def _save_file(default_name: str, title: str = "Save file") -> str | None:
 # ── Layout ─────────────────────────────────────────────────────────────
 
 
+def _keep_modes(rows: list[dict], modes) -> list[dict]:
+    """Keep rows whose analysis mode is ticked.
+
+    The database query takes one mode at most, so with two of the three ticked
+    it used to apply no mode filter at all; this filters in Python instead.
+    """
+    if modes and 0 < len(modes) < 3:
+        return [r for r in rows if r.get("mode") in modes]
+    return rows
+
+
 # Friendly labels for the `source` (specific detector) column / filter.
 _DETECTOR_LABELS = {
     "seizure_unet": "U-Net",
@@ -81,6 +92,7 @@ _DETECTOR_LABELS = {
     "spike_unet": "U-Net (spike)",
     "spike_bendr": "BENDR (spike)",
     "spike_cnn": "CNN spike (legacy)",
+    "spike_classical": "Classical (spike)",
     "spike_train": "Spike-Train",
     "spectral_band": "Spectral Band",
     "autocorrelation": "Autocorrelation",
@@ -222,8 +234,11 @@ def layout(sid: str | None) -> html.Div:
                             dcc.Dropdown(
                                 id="res-detector-filter",
                                 options=([{"label": "All detectors", "value": ""}]
+                                         # BENDR is retired from the app; its label
+                                         # stays for old rows but is not offered here.
                                          + [{"label": v, "value": k}
-                                            for k, v in _DETECTOR_LABELS.items()]),
+                                            for k, v in _DETECTOR_LABELS.items()
+                                            if "bendr" not in k]),
                                 value="",
                                 clearable=False,
                             ),
@@ -636,7 +651,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         filter_kw["mode"] = modes[0] if len(modes) == 1 else None
 
     try:
-        events = db.get_events(**filter_kw)
+        events = _keep_modes(db.get_events(**filter_kw), modes)
         # Daily burden is computed in Python from the filtered events (so it can
         # split by group and honour exclude/censor); circadian stays DB-side.
         circadian = db.get_circadian(
@@ -686,6 +701,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         status = db.get_animal_status()
     except Exception:
         fa_rows, status = [], {}
+    fa_rows = _keep_modes(fa_rows, modes)
     if file_ids:
         fa_rows = [r for r in fa_rows if r.get("chunk_id") in chunk_ids]
     if animals and len(animals) > 1:
@@ -2172,7 +2188,7 @@ def export_csv(n, source, detector, date_start, date_end, modes, animals,
     if modes and len(modes) < 3:
         filter_kw["mode"] = modes[0] if len(modes) == 1 else None
 
-    events = db.get_events(**filter_kw)
+    events = _keep_modes(db.get_events(**filter_kw), modes)
     if file_ids:
         chunk_ids = {int(fid) for fid in file_ids}
         events = [e for e in events if e.get("chunk_id") in chunk_ids]
@@ -2281,11 +2297,11 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
                      group_id=group_id or None)
     if modes and len(modes) < 3:
         filter_kw["mode"] = mode
-    events = db.get_events(**filter_kw)
-    fa = db.get_file_animals(
+    events = _keep_modes(db.get_events(**filter_kw), modes)
+    fa = _keep_modes(db.get_file_animals(
         date_start=date_start or None, date_end=date_end or None,
         animal_id=animal_id, mode=(mode if modes and len(modes) < 3 else None),
-        cohort=cohort or None, group_id=group_id or None)
+        cohort=cohort or None, group_id=group_id or None), modes)
     if file_ids:
         chunk_ids = {int(fid) for fid in file_ids}
         events = [e for e in events if e.get("chunk_id") in chunk_ids]
