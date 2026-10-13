@@ -153,7 +153,7 @@ def _recent_list() -> html.Div:
     rows = []
     for i, it in enumerate(items):
         p = it["path"]
-        name = os.path.basename(p.rstrip("/")) or p
+        name = os.path.basename(p.rstrip("/\\")) or p
         icon = "\U0001F4C1" if it["kind"] == "folder" else "\U0001F4C4"
         rows.append(html.Button(
             id={"type": "recent-open", "index": i},
@@ -164,7 +164,7 @@ def _recent_list() -> html.Div:
             children=[
                 html.Span(icon, style={"width": "22px"}),
                 html.Span(name, className="recent-name"),
-                html.Span(os.path.dirname(p.rstrip("/")) if it["exists"]
+                html.Span(os.path.dirname(p.rstrip("/\\")) if it["exists"]
                           else "no longer found", className="recent-dir"),
                 html.Span((it.get("opened_at") or "").replace("T", " "),
                           className="recent-date"),

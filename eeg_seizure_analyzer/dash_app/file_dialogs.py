@@ -3,7 +3,7 @@
 The webview window has no browser file-input or download capability, so every
 picker uses a native dialog:
 
-* desktop app        -> the pywebview window's own dialog (``set_native_window``).
+* desktop app, macOS -> the pywebview window's own dialog (``set_native_window``).
                         It belongs to the app's window, so it opens at once and
                         with keyboard focus.
 * macOS (browser)    -> AppleScript via ``osascript``
@@ -40,9 +40,19 @@ _native_window = None
 
 
 def set_native_window(window) -> None:
-    """Route every dialog through this pywebview window (desktop app)."""
+    """Route every dialog through this pywebview window (desktop app, macOS only).
+
+    macOS only, on purpose:
+    - The focus problem was macOS-specific (osascript is a separate background
+      process). On Windows the tkinter dialog is topmost and focused; on Linux
+      zenity/kdialog are focused by the window manager.
+    - pywebview's Windows backend shows the dialog on the calling thread, which
+      here is a server thread, not the GUI thread. When that fails it logs the
+      error and returns None, which looks like Cancel, so Browse would silently
+      do nothing. That cannot be tested from macOS, so the proven backends stay.
+    """
     global _native_window
-    _native_window = window
+    _native_window = window if platform.system() == "Darwin" else None
 
 
 def _webview_dialog(kind: str, title: str = "", exts=(), multiple: bool = False,
