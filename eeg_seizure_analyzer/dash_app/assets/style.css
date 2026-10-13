@@ -140,6 +140,10 @@ body {
 #main-content {
     margin-left: 280px;
     flex: 1;
+    /* A flex item defaults to min-width: auto, i.e. never narrower than its
+       content. Plotly graphs keep the pixel width they last autosized to, so
+       after widening the window the content could not shrink back. */
+    min-width: 0;
     padding: 0;
     min-height: 100vh;
     background: var(--ned-bg);
@@ -1070,6 +1074,23 @@ p, span, div, h1, h2, h3, h4, h5, h6 {
     }
     #main-content {
         margin-left: 240px;
+    }
+    /* Tighter top menu, so it fits beside the sidebar without the page
+       scrolling sideways (at 1100 px the Tools button stuck out 42 px). */
+    #tab-bar > .nav-tabs {
+        gap: 6px;
+    }
+    #tab-bar .nav-link {
+        padding: 8px 11px !important;
+        font-size: 0.78rem;
+    }
+}
+
+/* Last resort on very narrow windows: let the menu wrap (the inline style on
+   the Nav sets nowrap, hence !important). */
+@media (max-width: 1000px) {
+    #tab-bar > .nav-tabs {
+        flex-wrap: wrap !important;
     }
 }
 
