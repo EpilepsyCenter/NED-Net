@@ -220,7 +220,7 @@ def layout(sid: str | None) -> html.Div:
                     id="an-output",
                     options=[
                         {"label": " Project database", "value": "db"},
-                        {"label": " Annotation sidecars (for review → training)",
+                        {"label": " Training review queue (_ned_annotations.json)",
                          "value": "sidecar"},
                         {"label": " Both", "value": "both"},
                     ],
@@ -229,11 +229,12 @@ def layout(sid: str | None) -> html.Div:
                     style={"fontSize": "0.85rem"},
                 ),
                 html.Div(
-                    "Database: feeds Results and statistics. Sidecars: events are "
-                    "merged into each EDF's _ned_annotations.json as pending; "
-                    "confirm or reject them in the Training tab and they become "
-                    "training data. Existing human labels are never changed. "
-                    "Seizures only: spikes always go to the database.",
+                    "Database: feeds the Results tab and statistics. Training review "
+                    "queue: events are added to each EDF's _ned_annotations.json as "
+                    "pending, marked as coming from Analysis; confirm or reject them "
+                    "in the Training tab and they become training data. Existing "
+                    "labels are never changed. Seizures only: spikes always go to "
+                    "the database.",
                     style={**_HINT, "margin": "2px 0 10px"},
                 ),
                 dbc.Checklist(
@@ -923,7 +924,7 @@ def update_output_options(det_type):
     spike = det_type == "spike"
     return [
         {"label": " Project database", "value": "db"},
-        {"label": " Annotation sidecars (for review → training)",
+        {"label": " Training review queue (_ned_annotations.json)",
          "value": "sidecar", "disabled": spike},
         {"label": " Both", "value": "both", "disabled": spike},
     ]

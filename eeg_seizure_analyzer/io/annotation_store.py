@@ -270,14 +270,27 @@ def load_annotations_with_settings(edf_path: str) -> tuple[list[AnnotatedEvent] 
 # Conversion: DetectedEvent -> AnnotatedEvent
 # ---------------------------------------------------------------------------
 
+# Where a pending candidate entered the annotation file (features["origin"]),
+# shown in the Training tab so the review queue is traceable.
+ORIGIN_LABELS = {
+    "detection_tab": "Detection tab",
+    "detect_all": "Detection tab (Detect all files)",
+    "analysis_single": "Analysis (single file)",
+    "analysis_batch": "Analysis (batch)",
+    "analysis_live": "Analysis (live monitoring)",
+}
+
+
 def detections_to_annotations(
     events: list[DetectedEvent],
     file_path: str,
     animal_id: str = "",
+    origin: str = "",
 ) -> list[AnnotatedEvent]:
     """Convert a list of ``DetectedEvent`` to ``AnnotatedEvent`` with label="pending".
 
-    Preserves features and quality_metrics from the detector output.
+    Preserves features and quality_metrics from the detector output. ``origin``
+    (a key of ORIGIN_LABELS) is stored in ``features["origin"]``.
     """
     annotations: list[AnnotatedEvent] = []
     for ev in events:
@@ -295,7 +308,7 @@ def detections_to_annotations(
                 original_offset_sec=None,
                 event_type=ev.event_type,
                 detector_confidence=ev.confidence,
-                features=dict(ev.features),
+                features={**ev.features, **({"origin": origin} if origin else {})},
                 quality_metrics=dict(ev.quality_metrics),
                 notes="",
                 annotated_at="",
@@ -448,7 +461,9 @@ def write_detections_to_sidecar(
     n_total (events in the sidecar after the merge).
     """
     channel_ids = channel_ids or {}
-    new = detections_to_annotations(events, str(edf_path))
+    mode = (run_info or {}).get("mode", "")
+    new = detections_to_annotations(events, str(edf_path),
+                                    origin=f"analysis_{mode}" if mode else "")
     for a in new:
         a.animal_id = a.animal_id or channel_ids.get(a.channel, "")
         a.event_id = 0  # assigned below, after the merge

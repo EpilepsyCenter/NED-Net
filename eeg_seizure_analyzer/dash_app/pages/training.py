@@ -23,6 +23,7 @@ from eeg_seizure_analyzer.dash_app.components import (
     no_recording_placeholder,
 )
 from eeg_seizure_analyzer.io.annotation_store import (
+    ORIGIN_LABELS,
     AnnotatedEvent,
     save_annotations,
     load_annotations,
@@ -225,40 +226,9 @@ def _recompute_activity_zscore(state, ann):
             ann.features = {}
         ann.features["activity_zscore"] = round(z, 2)
         ann.features["mean_activity"] = round(event_mean, 4)
-
-        # Also update the matching seizure event in state
-        for ev in state.seizure_events:
-            if ev.channel == ann.channel and abs(ev.onset_sec - ann.onset_sec) < 0.01:
-                if ev.features is None:
-                    ev.features = {}
-                ev.features["activity_zscore"] = round(z, 2)
-                ev.features["mean_activity"] = round(event_mean, 4)
-                break
     except Exception:
         import traceback
         traceback.print_exc()
-
-
-def _sync_boundary_to_seizure_events(state, channel: int,
-                                     original_onset: float,
-                                     new_onset: float, new_offset: float):
-    """Push boundary changes from Training tab back to state.seizure_events.
-
-    This ensures the Seizure tab table reflects modified boundaries.
-    Also re-saves the detection JSON with updated events.
-    """
-    if not state.seizure_events:
-        return
-    for ev in state.seizure_events:
-        if ev.channel == channel and abs(ev.onset_sec - original_onset) < 0.01:
-            ev.onset_sec = new_onset
-            ev.offset_sec = new_offset
-            ev.duration_sec = new_offset - new_onset
-            break
-    # Update detected_events too
-    state.detected_events = list(state.seizure_events) + state.spike_events
-    # Re-save the detection file with updated boundaries
-    _save_detection_file(state)
 
 
 def _compute_manual_event_metrics(rec, event, state):
@@ -339,31 +309,6 @@ def _backfill_event_ids(annotations: list[AnnotatedEvent],
         if ann.event_id == 0:
             ann.event_id = next_id
             next_id += 1
-
-
-def _save_detection_file(state):
-    """Re-save the detection JSON with current seizure_events."""
-    try:
-        rec = state.recording
-        _src = getattr(rec, "source_path", None) or "" if rec else ""
-        if _src and _src.lower().endswith(".edf") and state.seizure_events:
-            from eeg_seizure_analyzer.io.persistence import save_detections
-            save_detections(
-                edf_path=_src,
-                events=state.seizure_events,
-                detection_info=state.st_detection_info,
-                params_dict=state.extra.get("sz_params", {}),
-                detector_name="SpikeTrainSeizureDetector",
-                channels=state.extra.get("sz_selected_channels", []),
-                animal_id=getattr(state, "animal_id", ""),
-                filter_settings={
-                    "filter_enabled": state.extra.get("sz_filter_enabled", True),
-                    "filter_values": state.extra.get("sz_filter_values", {}),
-                },
-            )
-    except Exception:
-        import traceback
-        traceback.print_exc()
 
 
 _LABEL_COLORS = {
@@ -481,7 +426,24 @@ def _event_badge(event) -> html.Span:
                                        "alignItems": "center"})
 
 
-def _build_event_properties(rec, event) -> dbc.Row:
+_METHOD_NAMES = {
+    "ml_unet": "U-Net", "spike_train": "Spike-Train", "spectral_band": "Spectral Band",
+    "autocorrelation": "Autocorrelation", "ensemble": "Ensemble",
+    "line_length_energy": "LL / Energy", "ml_bendr": "BENDR",
+}
+
+
+def _event_origin(event) -> str:
+    """Where this event entered the annotation file, e.g. 'Analysis (live) · U-Net'."""
+    if event.source == "manual":
+        return "Added by hand in the Training tab"
+    feat = event.features or {}
+    where = ORIGIN_LABELS.get(feat.get("origin", ""), "Detector (origin not recorded)")
+    method = feat.get("detection_method")
+    return where + (f" · {_METHOD_NAMES.get(method, method)}" if method else "")
+
+
+def _build_event_properties(rec, event) -> html.Div:
     """Build the seizure property info boxes for the current event."""
     if event is None:
         return dbc.Row(className="g-2 mb-2")
@@ -490,7 +452,7 @@ def _build_event_properties(rec, event) -> dbc.Row:
     feat = event.features or {}
     qm = event.quality_metrics or {}
     n_spikes = feat.get("n_spikes")
-    return dbc.Row([
+    return html.Div([dbc.Row([
         dbc.Col(metric_card("Channel", ch_name), width=2),
         dbc.Col(metric_card("Duration",
                             f"{event.offset_sec - event.onset_sec:.2f}s"), width=2),
@@ -502,7 +464,10 @@ def _build_event_properties(rec, event) -> dbc.Row:
                             f"{qm.get('local_baseline_ratio', 0):.1f}"), width=2),
         dbc.Col(metric_card("Top Amp",
                             f"{qm.get('top_spike_amplitude_x', 0):.1f}"), width=2),
-    ], className="g-2 mb-2")
+    ], className="g-2 mb-1"), html.Div(
+        f"From: {_event_origin(event)}",
+        style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
+               "textAlign": "right", "marginBottom": "8px"})])
 
 
 def _minmax_downsample(
@@ -2180,9 +2145,6 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
                             ann.offset_sec = new_off
                     # Recompute activity z-score for new boundaries
                     _recompute_activity_zscore(state, ann)
-                    # Propagate boundary changes to seizure_events (Seizure tab)
-                    _sync_boundary_to_seizure_events(
-                        state, ann.channel, event.onset_sec, ann.onset_sec, ann.offset_sec)
                     break
             _auto_save(state, annotations)
             # Re-filter after the label change (same list as above)
@@ -2757,7 +2719,9 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
         annotations.sort(key=lambda e: (e.channel, e.onset_sec))
         _auto_save(state, annotations)
 
-        # Propagate to seizure_events so it appears in the Seizure tab
+        # Compute the features and quality metrics for the annotation. The event
+        # stays in the annotation file only: Training never writes to the
+        # Detection tab's state or its _ned_detections.json.
         from eeg_seizure_analyzer.detection.base import DetectedEvent
         new_det = DetectedEvent(
             onset_sec=onset,
@@ -2785,11 +2749,6 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
             import traceback
             traceback.print_exc()
 
-        state.seizure_events.append(new_det)
-        state.seizure_events.sort(key=lambda e: (e.channel, e.onset_sec))
-        state.detected_events = list(state.seizure_events) + state.spike_events
-        # Re-save detection file with the new event
-        _save_detection_file(state)
 
         msg = f"Added manual seizure: {onset:.2f}s \u2013 {offset:.2f}s on Ch {channel}"
         # Deactivate Add button after adding
@@ -2838,14 +2797,6 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
         ]
         _auto_save(state, annotations)
 
-        # Also remove from seizure_events (Seizure tab)
-        state.seizure_events = [
-            ev for ev in state.seizure_events
-            if not (abs(ev.onset_sec - best.onset_sec) < 0.01 and
-                    ev.channel == best.channel)
-        ]
-        state.detected_events = list(state.seizure_events) + state.spike_events
-        _save_detection_file(state)
 
         msg = f"Removed seizure: {best.onset_sec:.2f}s \u2013 {best.offset_sec:.2f}s on Ch {best.channel}"
         # Deactivate Remove button after removing

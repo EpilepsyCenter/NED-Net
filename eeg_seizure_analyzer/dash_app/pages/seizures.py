@@ -2960,6 +2960,7 @@ def run_detection(
             new_annotations = detections_to_annotations(
                 seizures, _src,
                 animal_id=state.extra.get("tr_animal_id", ""),
+                origin="detection_tab",
             )
             existing = load_annotations(_src) if _src else None
             if existing:
@@ -4058,7 +4059,8 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
                 )
 
             try:
-                new_anns = detections_to_annotations(seizures, edf_path)
+                new_anns = detections_to_annotations(seizures, edf_path,
+                                                     origin="detect_all")
                 existing = load_annotations(edf_path)
                 if existing:
                     merged = merge_annotations(existing, new_anns, tolerance_sec=1.0)
