@@ -15,6 +15,9 @@ from eeg_seizure_analyzer.dash_app.components import (
     apply_fig_theme,
     alert,
     empty_state,
+    filter_panel,
+    filter_range,
+    filter_summary,
     get_plotly_theme,
     metric_card,
     no_recording_placeholder,
@@ -387,9 +390,28 @@ def _label_badge(label: str) -> html.Span:
     )
 
 
+def _channel_counts(rec, annotations) -> dict:
+    """Per-channel confirmed / rejected / pending counts over all annotations."""
+    out: dict = {}
+    for a in annotations:
+        name = (rec.channel_names[a.channel] if a.channel < len(rec.channel_names)
+                else f"Ch{a.channel}")
+        lbl = a.label if a.label in ("confirmed", "rejected") else "pending"
+        out.setdefault(name, {"confirmed": 0, "rejected": 0, "pending": 0})[lbl] += 1
+    return out
+
+
 def _build_annotation_counts(counts, counts_filtered, progress_pct,
                              ch_counts, filter_on):
-    """Build the annotation progress section at the bottom of the page."""
+    """Build the annotation progress section at the bottom of the page.
+
+    Progress is over all annotations of the file (``counts``). It once mixed the
+    filtered counts with an all-annotation percentage, e.g. "0 confirmed, 0
+    rejected, 0 pending (of 3 total)" next to "66%". ``counts_filtered`` and
+    ``progress_pct`` are kept for the callers' signature and not used.
+    """
+    reviewed = counts["confirmed"] + counts["rejected"]
+    progress_pct = int(100 * reviewed / counts["total"]) if counts["total"] else 0
     return html.Div(
         style={"marginBottom": "16px"},
         children=[
@@ -398,11 +420,10 @@ def _build_annotation_counts(counts, counts_filtered, progress_pct,
                        "marginBottom": "4px"},
                 children=[
                     html.Span(
-                        f"{counts_filtered['confirmed']} confirmed, "
-                        f"{counts_filtered['rejected']} rejected, "
-                        f"{counts_filtered['pending']} pending"
-                        + (f" (of {counts['total']} total)"
-                           if filter_on else ""),
+                        f"{reviewed} of {counts['total']} reviewed: "
+                        f"{counts['confirmed']} confirmed, "
+                        f"{counts['rejected']} rejected, "
+                        f"{counts['pending']} pending",
                         style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                     html.Span(f"{progress_pct}%",
                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
@@ -580,6 +601,52 @@ def _initial_spectral_row(rec, current_event, state):
 
 
 # ── Review Mode Plot ──────────────────────────────────────────────────
+
+
+_RANGE_FILTER_KEYS = ("min_conf", "max_conf", "min_dur", "max_dur", "min_lbl", "max_lbl",
+                      "min_spikes", "max_spikes", "min_amp", "max_amp",
+                      "min_top_amp", "max_top_amp", "min_freq", "max_freq")
+
+
+def _range_filter_values(state) -> dict:
+    """Training's range-filter values: its own when set, else the Detection tab's.
+
+    The same rule as the layout uses to fill the filter inputs.
+    """
+    sz_fv = state.extra.get("sz_filter_values", {})
+    return {k: state.extra.get(f"tr_{k}", sz_fv.get(k, 0 if k.startswith("min") else None))
+            for k in _RANGE_FILTER_KEYS}
+
+
+def _review_list(state, annotations, ch_filter, method=None):
+    """The events review mode steps through, and their count before the range filters.
+
+    Every callback that maps ``tr_current_idx`` to an event must build the list
+    here. Boundary drags and notes once used a shorter filter chain, so with
+    filters on they could edit a different event than the one shown.
+    """
+    out = _filter_by_channel(annotations, ch_filter)
+    method = method if method is not None else state.extra.get("tr_method_filter")
+    if method:
+        out = [a for a in out if a.features.get("detection_method") == method]
+    n_pre = len(out)
+    if state.extra.get("tr_filter_on", True):
+        out = _apply_annotation_filters(out, **_range_filter_values(state))
+    return out, n_pre
+
+
+def _empty_review(n_pre: int, filt_on: bool) -> tuple[go.Figure, str]:
+    """Figure and nav text when review mode has nothing to show, saying why."""
+    hidden = filt_on and n_pre > 0
+    fig = go.Figure()
+    apply_fig_theme(fig)
+    fig.add_annotation(
+        text=(f"All {n_pre} events are hidden by the filters.<br>"
+              "Loosen them, or switch Filters off above."
+              if hidden else "No events to review."),
+        showarrow=False, xref="paper", yref="paper", x=0.5, y=0.5, font=dict(size=15))
+    fig.update_layout(height=400, xaxis=dict(visible=False), yaxis=dict(visible=False))
+    return fig, ("No events match the filters" if hidden else "No events to review")
 
 
 def _view_key(event: AnnotatedEvent):
@@ -1119,18 +1186,8 @@ def layout(sid: str | None) -> html.Div:
 
     # Build filtered list for review mode
     method_filter = state.extra.get("tr_method_filter", None)
-    filtered = _filter_by_channel(annotations, channel_filter)
-    if method_filter:
-        filtered = [a for a in filtered
-                    if a.features.get("detection_method") == method_filter]
-    if tr_filter_on:
-        filtered = _apply_annotation_filters(
-            filtered, min_conf=tr_min_conf, min_dur=tr_min_dur, min_lbl=tr_min_lbl,
-            max_conf=tr_max_conf, max_dur=tr_max_dur, max_lbl=tr_max_lbl,
-            min_spikes=tr_min_spikes, max_spikes=tr_max_spikes,
-            min_amp=tr_min_amp, max_amp=tr_max_amp,
-            min_top_amp=tr_min_top_amp, max_top_amp=tr_max_top_amp,
-            min_freq=tr_min_freq, max_freq=tr_max_freq)
+    # n_prefilter: the channel/method subset, before the range filters
+    filtered, n_prefilter = _review_list(state, annotations, channel_filter)
     counts = _progress_counts(annotations)
     counts_filtered = _progress_counts(filtered) if tr_filter_on else counts
 
@@ -1200,7 +1257,7 @@ def layout(sid: str | None) -> html.Div:
         _suffix = f" — {_ch_name}" + (f" ({_animal})" if _animal else "")
         event_nav_text = f"Event {current_idx + 1} of {len(filtered)}{_id_str}{_suffix}"
     else:
-        event_nav_text = "No events"
+        event_nav_text = _empty_review(n_prefilter, tr_filter_on)[1]
 
     return html.Div(
         style={"padding": "24px"},
@@ -1284,17 +1341,6 @@ def layout(sid: str | None) -> html.Div:
                         style={"fontSize": "0.82rem"},
                     ),
                 ], width=2),
-                # Filter toggle
-                dbc.Col([
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "8px", "marginTop": "20px"},
-                             children=[
-                                 dbc.Switch(id="tr-filter-toggle", value=tr_filter_on,
-                                            style={"fontSize": "0.78rem"}),
-                                 html.Span("Filters",
-                                           style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                             ]),
-                ], width=1),
                 # Hidden: browse annotate channel (used by browse callback)
                 html.Div(
                     dcc.Dropdown(id="tr-browse-annotate-channel",
@@ -1305,146 +1351,29 @@ def layout(sid: str | None) -> html.Div:
                 ),
             ], className="g-2 mb-2"),
 
-            # Filter row 1: Confidence, Duration, Local BL, Spikes
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Confidence",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-conf", type="number", min=0, max=1,
-                                  step=0.05, value=tr_min_conf, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-conf", type="number", min=0, max=1,
-                                  step=0.05, value=tr_max_conf, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Duration (s)",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-dur", type="number", min=0, max=300,
-                                  step=0.5, value=tr_min_dur, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-dur", type="number", min=0, max=300,
-                                  step=0.5, value=tr_max_dur, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Local BL",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-lbl", type="number", min=0, max=20,
-                                  step=0.1, value=tr_min_lbl, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-lbl", type="number", min=0, max=20,
-                                  step=0.1, value=tr_max_lbl, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Spikes",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-spikes", type="number", min=0, max=100,
-                                  step=1, value=tr_min_spikes, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-spikes", type="number", min=0, max=100,
-                                  step=1, value=tr_max_spikes, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Amp (xBL)",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-amp", type="number", min=0, max=50,
-                                  step=0.5, value=tr_min_amp, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-amp", type="number", min=0, max=50,
-                                  step=0.5, value=tr_max_amp, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Top Amp",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-top-amp", type="number", min=0, max=20,
-                                  step=0.5, value=tr_min_top_amp, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-top-amp", type="number", min=0, max=20,
-                                  step=0.5, value=tr_max_top_amp, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-            ], className="g-2 mb-2"),
-
-            # Filter row 2: Freq
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Freq (Hz)",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="tr-min-freq", type="number", min=0, max=50,
-                                  step=0.5, value=tr_min_freq, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("–", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="tr-max-freq", type="number", min=0, max=50,
-                                  step=0.5, value=tr_max_freq, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-            ], className="g-2 mb-3"),
+            # Result filters (inherited from the Detection tab's values). The
+            # summary keeps it visible how many events they hide.
+            filter_panel(
+                "tr-filter-toggle", tr_filter_on, title="Filters",
+                summary_id="tr-filter-summary",
+                summary=filter_summary(len(filtered), n_prefilter, tr_filter_on),
+                ranges=[
+                    filter_range("Confidence", "tr-min-conf", "tr-max-conf",
+                                 0, 1, 0.05, tr_min_conf, tr_max_conf),
+                    filter_range("Duration (s)", "tr-min-dur", "tr-max-dur",
+                                 0, 300, 0.5, tr_min_dur, tr_max_dur),
+                    filter_range("Local BL", "tr-min-lbl", "tr-max-lbl",
+                                 0, 20, 0.1, tr_min_lbl, tr_max_lbl),
+                    filter_range("Spikes", "tr-min-spikes", "tr-max-spikes",
+                                 0, 100, 1, tr_min_spikes, tr_max_spikes),
+                    filter_range("Amp (xBL)", "tr-min-amp", "tr-max-amp",
+                                 0, 50, 0.5, tr_min_amp, tr_max_amp),
+                    filter_range("Top Amp", "tr-min-top-amp", "tr-max-top-amp",
+                                 0, 20, 0.5, tr_min_top_amp, tr_max_top_amp),
+                    filter_range("Freq (Hz)", "tr-min-freq", "tr-max-freq",
+                                 0, 50, 0.5, tr_min_freq, tr_max_freq),
+                ],
+            ),
 
             # ── Review Mode ──────────────────────────────────────────
             html.Div(
@@ -1625,7 +1554,7 @@ def layout(sid: str | None) -> html.Div:
                                 act_ymin=tr_act_ymin, act_ymax=tr_act_ymax,
                                 show_baseline=state.extra.get("tr_show_baseline", False),
                                 show_threshold=state.extra.get("tr_show_threshold", False),
-                            ) if current_event else go.Figure(),
+                            ) if current_event else _empty_review(n_prefilter, tr_filter_on)[0],
                             config={
                                 "editable": False,
                                 "edits": {"shapePosition": True},
@@ -2019,6 +1948,7 @@ def save_method_filter(val, sid):
     Output("tr-spectrogram", "figure"),
     Output("tr-band-power", "figure"),
     Output("tr-overview", "figure"),
+    Output("tr-filter-summary", "children"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-method-filter", "value"),
@@ -2074,14 +2004,14 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
                   onset_input, offset_input,
                   notes_val, sid):
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
-    _N_OUT = 14  # number of outputs
+    _N_OUT = 15  # number of outputs
     _no = no_update
     if mode != "review":
         return (_no,) * _N_OUT
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure(), go.Figure()
+        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure(), go.Figure(), ""
 
     trigger = ctx.triggered_id
 
@@ -2150,27 +2080,17 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
 
     rec = state.recording
     annotations = _get_annotations(state)
-    filtered = _filter_by_channel(annotations, ch_filter)
-    if method_filter:
-        filtered = [a for a in filtered
-                    if a.features.get("detection_method") == method_filter]
-    if filt_on:
-        filtered = _apply_annotation_filters(
-            filtered, min_conf=min_conf, min_dur=min_dur, min_lbl=min_lbl,
-            max_conf=max_conf, max_dur=max_dur, max_lbl=max_lbl,
-            min_spikes=min_spikes, max_spikes=max_spikes,
-            min_amp=min_amp, max_amp=max_amp,
-            min_top_amp=min_top_amp, max_top_amp=max_top_amp,
-            min_freq=min_freq, max_freq=max_freq)
+    filtered, n_pre = _review_list(state, annotations, ch_filter, method=method_filter or "")
+    filt_on = state.extra.get("tr_filter_on", True)
 
     if not filtered:
-        fig = go.Figure()
-        apply_fig_theme(fig)
-        fig.update_layout(height=400)
+        fig, nav = _empty_review(n_pre, filt_on)
         empty_counts = _build_annotation_counts(
             _progress_counts(annotations), _progress_counts([]),
-            0, {}, filt_on)
-        return fig, "No events to review", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), empty_counts, go.Figure(), go.Figure(), go.Figure()
+            0, _channel_counts(rec, annotations), filt_on)
+        return (fig, nav, html.Span(), "", 0, 0, "", 0, False, dbc.Row(), empty_counts,
+                go.Figure(), go.Figure(), go.Figure(),
+                filter_summary(0, n_pre, filt_on))
 
     current_idx = state.extra.get("tr_current_idx", 0)
 
@@ -2269,16 +2189,9 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
                         state, ann.channel, event.onset_sec, ann.onset_sec, ann.offset_sec)
                     break
             _auto_save(state, annotations)
-            # Re-filter after label change (apply same filters)
-            filtered = _filter_by_channel(annotations, ch_filter)
-            if filt_on:
-                filtered = _apply_annotation_filters(
-                    filtered, min_conf=min_conf, min_dur=min_dur, min_lbl=min_lbl,
-                    max_conf=max_conf, max_dur=max_dur, max_lbl=max_lbl,
-                    min_spikes=min_spikes, max_spikes=max_spikes,
-                    min_amp=min_amp, max_amp=max_amp,
-                    min_top_amp=min_top_amp, max_top_amp=max_top_amp,
-                    min_freq=min_freq, max_freq=max_freq)
+            # Re-filter after the label change (same list as above)
+            filtered, n_pre = _review_list(state, annotations, ch_filter,
+                                           method=method_filter or "")
             # Auto-advance to next pending
             next_pending = _find_next_pending(filtered, current_idx)
             if next_pending is not None:
@@ -2361,21 +2274,12 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
     is_convulsive = bool((event.features or {}).get("convulsive", False))
     props = _build_event_properties(rec, event)
 
-    # Recompute annotation counts
-    _all_counts = _progress_counts(annotations)
-    _filt_counts = _progress_counts(filtered)
-    _total = _all_counts["total"]
-    _reviewed = _filt_counts["confirmed"] + _filt_counts["rejected"]
-    _pct = int(100 * _reviewed / len(filtered)) if filtered else 0
-    _ch_counts = {}
-    for _a in filtered:
-        _chn = rec.channel_names[_a.channel] if _a.channel < len(rec.channel_names) else f"Ch{_a.channel}"
-        if _chn not in _ch_counts:
-            _ch_counts[_chn] = {"confirmed": 0, "rejected": 0, "pending": 0}
-        _lbl = _a.label if _a.label in ("confirmed", "rejected") else "pending"
-        _ch_counts[_chn][_lbl] += 1
+    # Progress over all annotations of the file; the filters only change what
+    # review mode steps through (see the filter summary).
     ann_counts = _build_annotation_counts(
-        _all_counts, _filt_counts, _pct, _ch_counts, filt_on)
+        _progress_counts(annotations), _progress_counts(filtered), 0,
+        _channel_counts(rec, annotations), filt_on)
+    filt_text = filter_summary(len(filtered), n_pre, filt_on)
 
     # Build spectral plots
     try:
@@ -2390,8 +2294,10 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
         # video follows the view.
         view_seek = round(_review_window(rec, event, state)[0], 1)
         return (fig, nav_text, badge, no_update, no_update, no_update, no_update,
-                view_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov)
-    return fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov
+                view_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov,
+                filt_text)
+    return (fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek,
+            is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov, filt_text)
 
 
 # Clientside callback: seek the training video when event changes
@@ -2449,15 +2355,8 @@ def handle_boundary_adjustment(relayout_data, ch_filter, sid):
         return (no_update,) * _n_out
 
     annotations = _get_annotations(state)
-    # Apply SAME filters as update_review so current_idx matches
-    filt_on = state.extra.get("tr_filter_on", False)
-    filtered = _filter_by_channel(annotations, ch_filter)
-    if filt_on:
-        filtered = _apply_annotation_filters(
-            filtered,
-            min_conf=state.extra.get("tr_min_conf", 0),
-            min_dur=state.extra.get("tr_min_dur", 0),
-            min_lbl=state.extra.get("tr_min_lbl", 0))
+    # The same list update_review shows, so current_idx is the same event
+    filtered, _ = _review_list(state, annotations, ch_filter)
     current_idx = state.extra.get("tr_current_idx", 0)
 
     if not filtered or current_idx >= len(filtered):
@@ -2546,7 +2445,8 @@ def save_notes(notes_val, ch_filter, sid):
     """Save notes on blur/change for the current event."""
     state = server_state.get_session(sid)
     annotations = _get_annotations(state)
-    filtered = _filter_by_channel(annotations, ch_filter)
+    # The same list update_review shows, so the notes go to the event on screen
+    filtered, _ = _review_list(state, annotations, ch_filter)
     current_idx = state.extra.get("tr_current_idx", 0)
 
     if filtered and 0 <= current_idx < len(filtered):

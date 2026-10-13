@@ -21,6 +21,10 @@ from eeg_seizure_analyzer.dash_app.components import (
     collapsible_section,
     alert,
     empty_state,
+    filter_dropdown,
+    filter_panel,
+    filter_range,
+    hidden_by_filters,
 )
 from eeg_seizure_analyzer.config import SpikeDetectionParams
 
@@ -634,35 +638,6 @@ def _detect_spikes_unet(rec, channels, model_name, threshold,
 # ── Filter controls ─────────────────────────────────────────────────
 
 
-def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
-                  value_min, value_max=None):
-    """A compact min–max input pair for filter controls."""
-    _inp_style = {"width": "100%", "height": "28px", "fontSize": "0.78rem"}
-    return dbc.Col([
-        html.Label(label, style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-        html.Div(
-            style={"display": "flex", "alignItems": "center", "gap": "4px"},
-            children=[
-                dcc.Input(
-                    id=fid_min, type="number",
-                    min=min_val, max=max_val, step=step, value=value_min,
-                    placeholder="min",
-                    debounce=True, className="form-control",
-                    style=_inp_style,
-                ),
-                html.Span("–", style={"color": "var(--ned-text-muted)", "fontSize": "0.8rem"}),
-                dcc.Input(
-                    id=fid_max, type="number",
-                    min=min_val, max=max_val, step=step, value=value_max,
-                    placeholder="max",
-                    debounce=True, className="form-control",
-                    style=_inp_style,
-                ),
-            ],
-        ),
-    ], width=2)
-
-
 def _spike_filter_controls(visible, rec=None, fv=None,
                             filter_enabled=True):
     fv = fv or dict(_SP_FILTER_DEFAULTS)
@@ -671,51 +646,37 @@ def _spike_filter_controls(visible, rec=None, fv=None,
         ch_options = [{"label": rec.channel_names[i], "value": i}
                       for i in range(rec.n_channels)]
 
-    return html.Div(
-        id="sp-filter-section",
-        style={"display": "block" if visible else "none",
-               "marginBottom": "16px"},
-        children=[
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "8px"},
-                children=[
-                    html.Span("Result Filters",
-                              style={"fontSize": "0.82rem", "fontWeight": "600",
-                                     "color": "var(--ned-text-muted)"}),
-                    dbc.Switch(
-                        id="sp-filter-enabled",
-                        value=filter_enabled,
-                        style={"fontSize": "0.78rem"},
-                    ),
-                ],
-            ),
-            dbc.Row([
-                _filter_range("Amplitude", "sp-filter-min-amp", "sp-filter-max-amp",
-                              0, 1000, 1, fv.get("min_amp", 0), fv.get("max_amp")),
-                _filter_range("x Baseline", "sp-filter-min-xbl", "sp-filter-max-xbl",
-                              0, 100, 0.1, fv.get("min_xbl", 0), fv.get("max_xbl")),
-                _filter_range("Duration (ms)", "sp-filter-min-dur-ms", "sp-filter-max-dur-ms",
-                              0, 500, 1, fv.get("min_dur_ms", 0), fv.get("max_dur_ms")),
-                _filter_range("Confidence", "sp-filter-min-conf", "sp-filter-max-conf",
-                              0, 1, 0.05, fv.get("min_conf", 0), fv.get("max_conf")),
-                _filter_range("Local SNR", "sp-filter-min-snr", "sp-filter-max-snr",
-                              0, 100, 0.5, fv.get("min_snr", 0), fv.get("max_snr")),
-                _filter_range("Sharpness", "sp-filter-min-sharp", "sp-filter-max-sharp",
-                              0, 20, 0.1, fv.get("min_sharp", 0), fv.get("max_sharp")),
-                dbc.Col([
-                    html.Label("Channel", style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="sp-filter-channel",
-                        options=ch_options,
-                        value=None,
-                        placeholder="All", clearable=True,
-                        style={"fontSize": "0.8rem"},
-                    ),
-                ], width=2),
-            ], className="g-2"),
+    return filter_panel(
+        "sp-filter-enabled", filter_enabled,
+        section_id="sp-filter-section", visible=visible,
+        extras=[filter_dropdown("Channel", dcc.Dropdown(
+            id="sp-filter-channel", options=ch_options, value=None,
+            placeholder="All channels", clearable=True, style={"fontSize": "0.8rem"}))],
+        ranges=[
+            filter_range("Amplitude", "sp-filter-min-amp", "sp-filter-max-amp",
+                         0, 1000, 1, fv.get("min_amp", 0), fv.get("max_amp")),
+            filter_range("x Baseline", "sp-filter-min-xbl", "sp-filter-max-xbl",
+                         0, 100, 0.1, fv.get("min_xbl", 0), fv.get("max_xbl")),
+            filter_range("Duration (ms)", "sp-filter-min-dur-ms", "sp-filter-max-dur-ms",
+                         0, 500, 1, fv.get("min_dur_ms", 0), fv.get("max_dur_ms")),
+            filter_range("Confidence", "sp-filter-min-conf", "sp-filter-max-conf",
+                         0, 1, 0.05, fv.get("min_conf", 0), fv.get("max_conf")),
+            filter_range("Local SNR", "sp-filter-min-snr", "sp-filter-max-snr",
+                         0, 100, 0.5, fv.get("min_snr", 0), fv.get("max_snr")),
+            filter_range("Sharpness", "sp-filter-min-sharp", "sp-filter-max-sharp",
+                         0, 20, 0.1, fv.get("min_sharp", 0), fv.get("max_sharp")),
         ],
     )
+
+
+@callback(
+    Output("sp-filter-enabled", "value", allow_duplicate=True),
+    Input("sp-filter-show-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_all_spikes(n_clicks):
+    """'Show all' on the hidden-by-filters notice switches the result filters off."""
+    return False if n_clicks else no_update
 
 
 def _sp_inspector_controls(visible: bool, opts=None) -> html.Div:
@@ -1624,6 +1585,9 @@ def _build_results(rec, all_spikes, spikes, total_count=None):
     ``spikes`` is the filtered list to display.
     """
     if not spikes:
+        if total_count:
+            return (hidden_by_filters(total_count, "detected spikes", "sp-filter-show-all"),
+                    html.Div())
         return (empty_state("\u2714", "No Spikes Found",
                             "No interictal spikes detected with current parameters."),
                 html.Div())

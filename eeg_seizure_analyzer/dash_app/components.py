@@ -104,6 +104,108 @@ def empty_state(icon: str, title: str, text: str) -> html.Div:
     )
 
 
+# ── Result filters (Detection, Training, Spikes) ─────────────────────
+# One layout for every filter block: a header row (title, on/off switch, any
+# dropdowns, a "N of M shown" summary) and a uniform grid of min–max pairs that
+# fits seven pairs on one row at normal widths and wraps evenly below that.
+
+_FILTER_LABEL_STYLE = {"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
+                       "marginBottom": "2px"}
+
+
+def filter_range(label: str, fid_min: str, fid_max: str, min_val, max_val, step,
+                 value_min, value_max=None) -> html.Div:
+    """A compact min–max input pair; one cell of the filter grid."""
+    inp = {"width": "100%", "height": "28px", "fontSize": "0.78rem"}
+
+    def _num(fid, value, ph):
+        return dcc.Input(id=fid, type="number", min=min_val, max=max_val, step=step,
+                         value=value, placeholder=ph, debounce=True,
+                         className="form-control", style=inp)
+
+    return html.Div([
+        html.Label(label, style=_FILTER_LABEL_STYLE),
+        html.Div(style={"display": "flex", "alignItems": "center", "gap": "4px"},
+                 children=[_num(fid_min, value_min, "min"),
+                           html.Span("–", style={"color": "var(--ned-text-muted)",
+                                                 "fontSize": "0.8rem"}),
+                           _num(fid_max, value_max, "max")]),
+    ])
+
+
+def filter_dropdown(label: str, dropdown) -> html.Div:
+    """A labelled dropdown for the filter header row."""
+    return html.Div([html.Label(label, style=_FILTER_LABEL_STYLE), dropdown],
+                    style={"minWidth": "170px"})
+
+
+def filter_panel(switch_id: str, enabled: bool, ranges: list, *, title="Result filters",
+                 extras=(), summary_id: str | None = None, summary="",
+                 section_id: str | None = None, visible: bool = True,
+                 hidden=()) -> html.Div:
+    """Header row (title, switch, extras, summary) plus a uniform grid of ranges.
+
+    ``hidden`` holds components that must stay in the layout for callbacks but
+    are not shown.
+    """
+    header = [
+        html.Span(title, style={"fontSize": "0.82rem", "fontWeight": "600",
+                                "color": "var(--ned-text-muted)"}),
+        dbc.Switch(id=switch_id, value=enabled, style={"fontSize": "0.78rem"}),
+    ]
+    if summary_id:
+        header.append(html.Span(summary, id=summary_id,
+                                style={"fontSize": "0.78rem",
+                                       "color": "var(--ned-text-muted)"}))
+    header.append(html.Div(style={"flex": "1"}))
+    header.extend(extras)
+    # The outer div carries the id and only display/margin: pages show/hide the
+    # section by replacing its whole style, which must not wipe the panel's look.
+    kw = {"id": section_id} if section_id else {}
+    return html.Div(
+        **kw,
+        style={"display": "block" if visible else "none", "marginBottom": "16px"},
+        children=html.Div(
+            style={"padding": "10px 14px", "border": "1px solid var(--ned-border)",
+                   "borderRadius": "8px"},
+            children=[
+                html.Div(header, style={"display": "flex", "alignItems": "flex-end",
+                                        "gap": "14px", "flexWrap": "wrap",
+                                        "marginBottom": "8px"}),
+                html.Div(ranges, style={
+                    "display": "grid", "gap": "8px 14px",
+                    "gridTemplateColumns": "repeat(auto-fill, minmax(130px, 1fr))"}),
+                *([html.Div(list(hidden), style={"display": "none"})] if hidden else []),
+            ],
+        ),
+    )
+
+
+def filter_summary(n_shown: int, n_total: int, enabled: bool, noun: str = "events") -> str:
+    """'Filters on: 12 of 40 events shown' / 'Filters off: all 40 events shown'."""
+    if not enabled:
+        return f"Filters off: all {n_total} {noun} shown"
+    if n_shown == n_total:
+        return f"Filters on: all {n_total} {noun} pass"
+    return f"Filters on: {n_shown} of {n_total} {noun} shown"
+
+
+def hidden_by_filters(n_total: int, noun: str, button_id: str) -> html.Div:
+    """Empty state for when results exist but the filters hide all of them."""
+    return html.Div(
+        className="empty-state",
+        children=[
+            html.Div("⧗", className="empty-icon"),
+            html.Div(f"All {n_total} {noun} are hidden by the filters",
+                     className="empty-title"),
+            html.Div("Loosen the result filters above, or show everything.",
+                     className="empty-text"),
+            dbc.Button("Show all (turn filters off)", id=button_id, size="sm",
+                       color="secondary", outline=True, className="mt-2"),
+        ],
+    )
+
+
 def alert(message: str, variant: str = "info") -> html.Div:
     """Styled alert.  variant: info, warning, danger, success."""
     cls = f"ned-alert {variant}" if variant != "info" else "ned-alert"

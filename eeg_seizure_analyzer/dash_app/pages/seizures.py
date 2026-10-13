@@ -20,6 +20,10 @@ from eeg_seizure_analyzer.dash_app.components import (
     collapsible_section,
     alert,
     empty_state,
+    filter_dropdown,
+    filter_panel,
+    filter_range,
+    hidden_by_filters,
 )
 from eeg_seizure_analyzer.config import (
     SpikeTrainSeizureParams,
@@ -719,35 +723,6 @@ def layout(sid: str | None) -> html.Div:
 # ── Confidence filtering controls ──────────────────────────────────
 
 
-def _filter_range(label, fid_min, fid_max, min_val, max_val, step,
-                   value_min, value_max=None):
-    """A compact min–max input pair for filter controls."""
-    _inp_style = {"width": "100%", "height": "28px", "fontSize": "0.78rem"}
-    return dbc.Col([
-        html.Label(label, style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-        html.Div(
-            style={"display": "flex", "alignItems": "center", "gap": "4px"},
-            children=[
-                dcc.Input(
-                    id=fid_min, type="number",
-                    min=min_val, max=max_val, step=step, value=value_min,
-                    placeholder="min",
-                    debounce=True, className="form-control",
-                    style=_inp_style,
-                ),
-                html.Span("–", style={"color": "var(--ned-text-muted)", "fontSize": "0.8rem"}),
-                dcc.Input(
-                    id=fid_max, type="number",
-                    min=min_val, max=max_val, step=step, value=value_max,
-                    placeholder="max",
-                    debounce=True, className="form-control",
-                    style=_inp_style,
-                ),
-            ],
-        ),
-    ], width=2)
-
-
 _METHOD_LABELS_FILTER = {
     "spike_train": "Spike-Train",
     "spectral_band": "Spectral Band",
@@ -780,81 +755,46 @@ def _confidence_filter_controls(visible: bool, rec=None, fv=None,
                       for i in range(rec.n_channels)]
     method_opts = _method_filter_options(seizure_events or [])
 
-    return html.Div(
-        id="sz-confidence-section",
-        style={"display": "block" if visible else "none",
-               "marginBottom": "16px"},
-        children=[
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "8px"},
-                children=[
-                    html.Span("Result Filters",
-                              style={"fontSize": "0.82rem", "fontWeight": "600",
-                                     "color": "var(--ned-text-muted)"}),
-                    dbc.Switch(
-                        id="sz-filter-enabled",
-                        value=filter_enabled,
-                        style={"fontSize": "0.78rem"},
-                    ),
-                ],
-            ),
-            # Row 1: basic filters (min–max)
-            dbc.Row([
-                _filter_range("Confidence", "sz-filter-min-conf", "sz-filter-max-conf",
-                              0, 1, 0.05, fv.get("min_conf", 0), fv.get("max_conf")),
-                _filter_range("Duration (s)", "sz-filter-min-dur", "sz-filter-max-dur",
-                              0, 120, 0.5, fv.get("min_dur", 0), fv.get("max_dur")),
-                _filter_range("Spikes", "sz-filter-min-spikes", "sz-filter-max-spikes",
-                              0, 100, 1, fv.get("min_spikes", 0), fv.get("max_spikes")),
-                _filter_range("Amp (xBL)", "sz-filter-min-amp", "sz-filter-max-amp",
-                              0, 50, 0.5, fv.get("min_amp", 0), fv.get("max_amp")),
-                _filter_range("Local BL", "sz-filter-min-lbl", "sz-filter-max-lbl",
-                              0, 10, 0.1, fv.get("min_lbl", 0), fv.get("max_lbl")),
-                _filter_range("Top Amp", "sz-filter-min-top-amp", "sz-filter-max-top-amp",
-                              0, 20, 0.5, fv.get("min_top_amp", 0), fv.get("max_top_amp")),
-            ], className="g-2 mb-2"),
-            # Row 2: quality metric filters + channel/severity
-            dbc.Row([
-                _filter_range("Freq (Hz)", "sz-filter-min-freq", "sz-filter-max-freq",
-                              0, 50, 0.5, fv.get("min_freq", 0), fv.get("max_freq")),
-                dbc.Col([
-                    html.Label("Channel", style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="sz-filter-channel",
-                        options=ch_options,
-                        value=fv.get("channel", None),
-                        placeholder="All", clearable=True,
-                        style={"fontSize": "0.8rem"},
-                    ),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Method", style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="sz-filter-method",
-                        options=method_opts,
-                        value=fv.get("method", None),
-                        placeholder="All methods", clearable=True,
-                        style={"fontSize": "0.8rem"},
-                    ),
-                ], width=2),
-                # Hidden: severity filter (kept for callback compatibility)
-                html.Div(
-                    dcc.Dropdown(id="sz-filter-severity", value="", clearable=False),
-                    style={"display": "none"},
-                ),
-            ], className="g-2"),
-            # Hidden filters — kept for callback compatibility / future use
-            html.Div(style={"display": "none"}, children=[
-                _filter_range("LL (z)", "sz-filter-min-ll", "sz-filter-max-ll",
-                              0, 50, 0.5, fv.get("min_ll", 0), fv.get("max_ll")),
-                _filter_range("Energy (z)", "sz-filter-min-energy", "sz-filter-max-energy",
-                              0, 50, 0.5, fv.get("min_energy", 0), fv.get("max_energy")),
-                _filter_range("Sig/BL", "sz-filter-min-sigbl", "sz-filter-max-sigbl",
-                              0, 50, 0.5, fv.get("min_sigbl", 0), fv.get("max_sigbl")),
-                _filter_range("θ/δ", "sz-filter-min-td", "sz-filter-max-td",
-                              0, 10, 0.1, fv.get("min_td", 0), fv.get("max_td")),
-            ]),
+    return filter_panel(
+        "sz-filter-enabled", filter_enabled,
+        section_id="sz-confidence-section", visible=visible,
+        extras=[
+            filter_dropdown("Channel", dcc.Dropdown(
+                id="sz-filter-channel", options=ch_options,
+                value=fv.get("channel", None), placeholder="All channels",
+                clearable=True, style={"fontSize": "0.8rem"})),
+            filter_dropdown("Method", dcc.Dropdown(
+                id="sz-filter-method", options=method_opts,
+                value=fv.get("method", None), placeholder="All methods",
+                clearable=True, style={"fontSize": "0.8rem"})),
+        ],
+        ranges=[
+            filter_range("Confidence", "sz-filter-min-conf", "sz-filter-max-conf",
+                         0, 1, 0.05, fv.get("min_conf", 0), fv.get("max_conf")),
+            filter_range("Duration (s)", "sz-filter-min-dur", "sz-filter-max-dur",
+                         0, 120, 0.5, fv.get("min_dur", 0), fv.get("max_dur")),
+            filter_range("Spikes", "sz-filter-min-spikes", "sz-filter-max-spikes",
+                         0, 100, 1, fv.get("min_spikes", 0), fv.get("max_spikes")),
+            filter_range("Amp (xBL)", "sz-filter-min-amp", "sz-filter-max-amp",
+                         0, 50, 0.5, fv.get("min_amp", 0), fv.get("max_amp")),
+            filter_range("Local BL", "sz-filter-min-lbl", "sz-filter-max-lbl",
+                         0, 10, 0.1, fv.get("min_lbl", 0), fv.get("max_lbl")),
+            filter_range("Top Amp", "sz-filter-min-top-amp", "sz-filter-max-top-amp",
+                         0, 20, 0.5, fv.get("min_top_amp", 0), fv.get("max_top_amp")),
+            filter_range("Freq (Hz)", "sz-filter-min-freq", "sz-filter-max-freq",
+                         0, 50, 0.5, fv.get("min_freq", 0), fv.get("max_freq")),
+        ],
+        # Kept in the layout for callback compatibility / future use
+        hidden=[
+            dcc.Dropdown(id="sz-filter-severity", value="", clearable=False),
+            filter_range("LL (z)", "sz-filter-min-ll", "sz-filter-max-ll",
+                         0, 50, 0.5, fv.get("min_ll", 0), fv.get("max_ll")),
+            filter_range("Energy (z)", "sz-filter-min-energy", "sz-filter-max-energy",
+                         0, 50, 0.5, fv.get("min_energy", 0), fv.get("max_energy")),
+            filter_range("Sig/BL", "sz-filter-min-sigbl", "sz-filter-max-sigbl",
+                         0, 50, 0.5, fv.get("min_sigbl", 0), fv.get("max_sigbl")),
+            filter_range("θ/δ", "sz-filter-min-td", "sz-filter-max-td",
+                         0, 10, 0.1, fv.get("min_td", 0), fv.get("max_td")),
         ],
     )
 
@@ -934,6 +874,16 @@ def _inspector_controls(visible: bool, y_range: float, opts=None,
             ),
         ],
     )
+
+
+@callback(
+    Output("sz-filter-enabled", "value", allow_duplicate=True),
+    Input("sz-filter-show-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_all_seizures(n_clicks):
+    """'Show all' on the hidden-by-filters notice switches the result filters off."""
+    return False if n_clicks else no_update
 
 
 # Keyboard: [ and ] pan the inspector, \ re-centres it. Clicks the buttons, so the
@@ -3391,8 +3341,10 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
     """Build the results display (summary line + table)."""
     excluded_ids = excluded_ids or set()
     if not seizures:
+        if n_total:
+            return hidden_by_filters(n_total, "detected seizures", "sz-filter-show-all")
         return empty_state("\u2714", "No Seizures Found",
-                           "No seizure events match the current parameters / filters.")
+                           "No seizure events match the current parameters.")
 
     n_shown = len(seizures)
     n_all = n_total if n_total is not None else n_shown
