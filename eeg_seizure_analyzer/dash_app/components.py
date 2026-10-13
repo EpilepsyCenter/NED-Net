@@ -104,6 +104,33 @@ def empty_state(icon: str, title: str, text: str) -> html.Div:
     )
 
 
+# ── Parameter presets menu (Detection: Seizure / Interictal Spikes) ──
+
+def params_menu(prefix: str, has_results: bool) -> dbc.DropdownMenu:
+    """The four parameter-preset actions in one menu.
+
+    The item ids keep the old button ids (``<prefix>-recall-defaults-btn`` …), so the
+    callbacks that read their ``n_clicks`` are unchanged.
+    """
+    return dbc.DropdownMenu(
+        label="Parameters",
+        size="sm", color="secondary", align_end=True,
+        toggle_style={"whiteSpace": "nowrap"},
+        children=[
+            dbc.DropdownMenuItem("Load my saved defaults",
+                                 id=f"{prefix}-recall-settings-btn"),
+            dbc.DropdownMenuItem("Save current as my defaults",
+                                 id=f"{prefix}-save-settings-btn"),
+            dbc.DropdownMenuItem("Reset to factory defaults",
+                                 id=f"{prefix}-recall-defaults-btn"),
+            dbc.DropdownMenuItem(divider=True),
+            dbc.DropdownMenuItem("Load the parameters used for this file's detections",
+                                 id=f"{prefix}-recall-det-btn",
+                                 disabled=not has_results),
+        ],
+    )
+
+
 # ── Result filters (Detection, Training, Spikes) ─────────────────────
 # One layout for every filter block: a header row (title, on/off switch, any
 # dropdowns, a "N of M shown" summary) and a uniform grid of min–max pairs that
@@ -234,6 +261,10 @@ def param_control(
 
     display_val = int(value) if is_int else value
 
+    # Dash 4's slider has its own number field, but shows it only when the slider
+    # is wide enough, so it appeared on some cards and not others. It is off;
+    # this helper's own synced number box is shown on every card instead
+    # (the MATCH clientside callback in main.py syncs slider, box and label).
     return html.Div(
         className="param-row",
         children=[
@@ -241,11 +272,11 @@ def param_control(
                 className="param-label",
                 children=[
                     label,
+                    # Synced value text; the box below shows the value now
                     html.Span(
                         f"  {display_val}",
                         id={"type": "param-display", "key": id_key},
-                        style={"color": "#58a6ff", "fontWeight": "500",
-                               "marginLeft": "6px", "fontSize": "0.80rem"},
+                        style={"display": "none"},
                     ),
                     html.Span(
                         " (?)",
@@ -254,24 +285,34 @@ def param_control(
                     ) if tooltip else None,
                 ],
             ),
-            dcc.Slider(
-                id=slider_id,
-                min=min_val,
-                max=max_val,
-                step=step,
-                value=value,
-                marks=marks,
-                tooltip={"placement": "bottom", "always_visible": False},
-                className="param-slider",
-            ),
-            # Hidden input — keeps auto-save + sync working
-            dcc.Input(
-                id=input_id,
-                type="number",
-                min=min_val, max=max_val, step=step,
-                value=display_val,
-                debounce=True,
-                style={"display": "none"},
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "8px"},
+                children=[
+                    html.Div(
+                        dcc.Slider(
+                            id=slider_id,
+                            min=min_val,
+                            max=max_val,
+                            step=step,
+                            value=value,
+                            marks=marks,
+                            tooltip={"placement": "bottom", "always_visible": False},
+                            allow_direct_input=False,
+                            className="param-slider",
+                        ),
+                        style={"flex": "1 1 auto", "minWidth": "0"},
+                    ),
+                    dcc.Input(
+                        id=input_id,
+                        type="number",
+                        min=min_val, max=max_val, step=step,
+                        value=display_val,
+                        debounce=True,
+                        className="form-control",
+                        style={"width": "64px", "height": "26px",
+                               "fontSize": "0.78rem", "flex": "0 0 64px"},
+                    ),
+                ],
             ),
         ],
     )

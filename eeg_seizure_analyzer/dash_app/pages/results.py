@@ -186,7 +186,7 @@ def layout(sid: str | None) -> html.Div:
                                            "border": "1px solid var(--ned-border)"},
                                 ), width=6),
                             ], className="g-1"),
-                        ], width=2),
+                        ], width=3),  # was 2: dates like 2023-10-09 were cut off
                         dbc.Col([
                             html.Label("Mode",
                                        style={"fontSize": "0.82rem",
@@ -318,10 +318,13 @@ def layout(sid: str | None) -> html.Div:
                 ],
             ),
 
+            # Every responsive graph here needs an explicit height: in Dash 4 a
+            # responsive graph takes its container's height, and without one it
+            # collapsed to 0 px (only the header of each panel showed).
             # ── Longitudinal (cohort progression — post-hoc) ───────
             html.Div(id="res-panel-long", children=[
                 dcc.Graph(id="res-longitudinal", className="mb-3",
-                          config={"responsive": True}),
+                          config={"responsive": True}, style={"height": "420px"}),
             ]),
 
             # ── Cross-group / per-animal analysis ──────────────────
@@ -379,13 +382,13 @@ def layout(sid: str | None) -> html.Div:
                                "marginTop": "8px"}),
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="res-dist-duration",
-                                      config={"responsive": True}), width=6),
+                                      config={"responsive": True}, style={"height": "320px"}), width=6),
                     dbc.Col(dcc.Graph(id="res-dist-confidence",
-                                      config={"responsive": True}), width=6),
+                                      config={"responsive": True}, style={"height": "320px"}), width=6),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="res-dist-duration-group",
-                                      config={"responsive": True}), width=12),
+                                      config={"responsive": True}, style={"height": "320px"}), width=12),
                 ], className="mb-3"),
             ]),
 
@@ -396,23 +399,23 @@ def layout(sid: str | None) -> html.Div:
                                "marginTop": "8px"}),
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="res-is-isi",
-                                      config={"responsive": True}), width=6),
+                                      config={"responsive": True}, style={"height": "320px"}), width=6),
                     dbc.Col(dcc.Graph(id="res-is-isi-cdf",
-                                      config={"responsive": True}), width=6),
+                                      config={"responsive": True}, style={"height": "320px"}), width=6),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Col(dcc.Graph(id="res-is-diurnal",
-                                      config={"responsive": True}), width=12),
+                                      config={"responsive": True}, style={"height": "320px"}), width=12),
                 ], className="mb-3"),
             ]),
 
             # ── Daily burden + circadian (timeline — live monitoring) ──
             dbc.Row([
                 dbc.Col(dcc.Graph(id="res-daily-burden",
-                                  config={"responsive": True}),
+                                  config={"responsive": True}, style={"height": "320px"}),
                         id="res-col-daily", width=6),
                 dbc.Col(dcc.Graph(id="res-circadian",
-                                  config={"responsive": True}),
+                                  config={"responsive": True}, style={"height": "320px"}),
                         id="res-col-circadian", width=6),
             ], className="mb-3"),
 
