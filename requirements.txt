@@ -16,6 +16,7 @@ dash
 dash-bootstrap-components
 dash-ag-grid
 openpyxl>=3.1   # Excel engine for metadata / channel-ID templates and XLSX export
+watchdog>=3.0   # Analysis → Live monitoring (watches a folder for new EDFs)
 
 # ── Native desktop window + production WSGI server ────────────────────
 waitress>=3.0

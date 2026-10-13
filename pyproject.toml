@@ -14,6 +14,7 @@ dependencies = [
     "dash>=2.14",
     "dash-bootstrap-components>=1.5",
     "dash-ag-grid>=31.0",
+    "watchdog>=3.0",  # Analysis → Live monitoring (watches a folder for new EDFs)
 ]
 
 [project.optional-dependencies]
