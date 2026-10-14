@@ -126,11 +126,14 @@ class DatasetConfig:
     #   sidecars (as refresh_training_tree.py did) destroys that second use.
     target: str = "seizure"  # what the detector learns: "seizure" (all confirmed
     #   seizures) or "convulsive" (convulsive seizures only). With "convulsive",
-    #   positive windows are centred on convulsive events and labelled with them;
-    #   non-convulsive seizures are left out of training rather than used as
-    #   negatives: no window is centred on them, background avoids them, and any
-    #   window overlapping one is dropped (there is no loss masking). Recorded in
+    #   positive windows are centred on convulsive events and labelled with them,
+    #   and non-convulsive seizures are handled by nonconv_negatives. Recorded in
     #   the model metadata, so predict_seizures marks every detection convulsive.
+    nonconv_negatives: bool = True  # target="convulsive" only. True (primary,
+    #   decided 2026-10-14): non-convulsive seizures are hard negatives -- windows
+    #   centred on them, labelled 0 -- the most informative negatives against a
+    #   convulsive-only reference. False: left out of training instead (no window
+    #   centred on them, any window overlapping one dropped; no loss masking).
     val_pairs_file: str = ""  # JSON from `train_unet --analyze --dump-val-split`:
     #   use exactly those (animal, recording) pairs as validation instead of
     #   computing a split. For a run that must share another run's split even
@@ -422,9 +425,12 @@ def build_window_specs(
             conv_target = config.target == "convulsive"
             ch_label_intervals = (ch_convulsive_intervals if conv_target
                                   else ch_seizure_intervals)
-            ch_nonconv = ([(a["onset_sec"], a["offset_sec"]) for a in ch_confirmed
-                           if not (a.get("features") or {}).get("convulsive", False)]
-                          if conv_target else [])
+            ch_nonconv_ann = ([a for a in ch_confirmed
+                               if not (a.get("features") or {}).get("convulsive", False)]
+                              if conv_target else [])
+            # Intervals that disqualify a window: only when they are left out.
+            ch_nonconv = ([(a["onset_sec"], a["offset_sec"]) for a in ch_nonconv_ann]
+                          if conv_target and not config.nonconv_negatives else [])
 
             def _hits_nonconv(ws, we):
                 return any(s[1] > ws and s[0] < we for s in ch_nonconv)
@@ -486,7 +492,10 @@ def build_window_specs(
             # many to keep based on config.neg_pos_ratio.  Skipped entirely in
             # random-background mode, where rejected labels are ignored and all
             # negatives are sampled from the recording instead.
-            for ann in (ch_rejected_neg if config.use_hard_negatives else []):
+            # Non-convulsive seizures as hard negatives (target="convulsive").
+            _nc_neg = ch_nonconv_ann if config.nonconv_negatives else []
+            _CONV_TARGET_DROPPED["nonconv_negative"] += len(_nc_neg)
+            for ann in ((ch_rejected_neg + _nc_neg) if config.use_hard_negatives else []):
                 onset = ann["onset_sec"]
                 offset = ann["offset_sec"]
                 centre = (onset + offset) / 2
@@ -496,6 +505,12 @@ def build_window_specs(
                 win_start = max(0, win_end - config.window_sec)
                 if conv_target and _hits_nonconv(win_start, win_end):
                     _CONV_TARGET_DROPPED["hard_negative"] += 1
+                    continue
+                # A negative window is labelled 0 throughout, so one centred on a
+                # non-convulsive seizure must not contain a convulsive one.
+                if ann in _nc_neg and any(c[1] > win_start and c[0] < win_end
+                                          for c in ch_convulsive_intervals):
+                    _CONV_TARGET_DROPPED["nonconv_overlaps_conv"] += 1
                     continue
 
                 hard_neg_specs.append(WindowSpec(
@@ -539,10 +554,17 @@ def build_window_specs(
         _balance_negatives(hard_neg_specs, neg_ctx, n_pos, config, rng)
     )
     if config.target == "convulsive":
-        print(f"target=convulsive: {n_pos} convulsive positive windows; dropped "
-              f"{_CONV_TARGET_DROPPED['positive']} positive and "
-              f"{_CONV_TARGET_DROPPED['hard_negative']} hard-negative windows "
-              f"overlapping a non-convulsive seizure")
+        if config.nonconv_negatives:
+            print(f"target=convulsive: {n_pos} convulsive positive windows; "
+                  f"{_CONV_TARGET_DROPPED['nonconv_negative']} non-convulsive seizures "
+                  f"as hard negatives, of which "
+                  f"{_CONV_TARGET_DROPPED['nonconv_overlaps_conv']} dropped because "
+                  f"their window contains a convulsive seizure")
+        else:
+            print(f"target=convulsive (non-convulsive left out): {n_pos} convulsive "
+                  f"positive windows; dropped {_CONV_TARGET_DROPPED['positive']} "
+                  f"positive and {_CONV_TARGET_DROPPED['hard_negative']} hard-negative "
+                  f"windows overlapping a non-convulsive seizure")
     return specs
 
 
@@ -822,20 +844,25 @@ def split_specs(specs: list[WindowSpec], config: "DatasetConfig",
     """
     if config.val_pairs_file:
         vp = json.loads(Path(config.val_pairs_file).read_text())
-        keys = {(p["animal_id"], p["edf"]) for p in vp["val_pairs"]}
-        val = [s for s in specs if (s.animal_id, s.edf_path) in keys]
-        train = [s for s in specs if (s.animal_id, s.edf_path) not in keys]
-        found = {(s.animal_id, s.edf_path) for s in val}
+        # Matched on (animal, file NAME), so a run on another flat tree with the
+        # same file names (e.g. super_model/tree_c2 vs ~/train_nomirneg) reuses it.
+        keys = {(p["animal_id"], os.path.basename(p["edf"])) for p in vp["val_pairs"]}
+
+        def _k(s):
+            return (s.animal_id, os.path.basename(s.edf_path))
+        val = [s for s in specs if _k(s) in keys]
+        train = [s for s in specs if _k(s) not in keys]
+        found = {_k(s) for s in val}
         if len(found) < len(keys):
             missing = sorted(keys - found)[:3]
             # Not fatal: a pair with no windows under this target (e.g. no
             # convulsive events) is expected. A path mismatch is not, so say so.
             print(f"val pairs: {len(found)}/{len(keys)} matched; unmatched e.g. "
                   f"{missing} (pairs with no windows under this target, or a "
-                  f"different --data-dir path)")
+                  f"files missing from this tree)")
         if not found:
             raise ValueError(f"no validation pairs from {config.val_pairs_file} "
-                             "matched: is --data-dir the same path the file records?")
+                             "matched any (animal, file name) in this data dir")
         return train, val
     if config.val_mode in ("recording", "temporal"):
         return split_by_recording(specs, val_fraction=val_fraction, seed=config.seed,

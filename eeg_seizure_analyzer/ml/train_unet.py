@@ -49,7 +49,8 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
             val_mode: str = "animal",
             dump_val_split: str | None = None,
             target: str = "seizure",
-            val_pairs_file: str = "") -> dict:
+            val_pairs_file: str = "",
+            nonconv_negatives: bool = True) -> dict:
     """Report class balance + the per-animal train/val split, and recommend a
     neg/pos ratio and pos_weight.  Returns the recommendation dict.
 
@@ -75,7 +76,8 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
                         bg_avoid_rejected=bg_avoid_rejected,
                         hard_neg_exclude_methods=tuple(hard_neg_exclude_methods),
                         val_mode=val_mode, stable_convulsive_val=stable_val_split,
-                        target=target, val_pairs_file=val_pairs_file)
+                        target=target, val_pairs_file=val_pairs_file,
+                        nonconv_negatives=nonconv_negatives)
     specs = build_window_specs(dataset_def, cfg)
     pos = [s for s in specs if s.is_positive]
     neg = [s for s in specs if not s.is_positive]
@@ -222,8 +224,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--target", choices=["seizure", "convulsive"], default="seizure",
                    help="what the detector learns: all confirmed seizures (default) "
                         "or convulsive seizures only. With 'convulsive', non-convulsive "
-                        "seizures are left out of training (never negatives), and every "
+                        "seizures are hard negatives (see --nonconv-left-out), and every "
                         "detection of the trained model is convulsive.")
+    p.add_argument("--nonconv-left-out", action="store_true",
+                   help="with --target convulsive: leave non-convulsive seizures out of "
+                        "training instead of using them as hard negatives (no window "
+                        "centred on them; windows overlapping one are dropped).")
     p.add_argument("--val-pairs-file", default="", metavar="JSON",
                    help="use exactly the (animal, recording) validation pairs in this "
                         "file (from --analyze --dump-val-split) instead of computing a "
@@ -264,7 +270,8 @@ def main(argv: list[str] | None = None) -> int:
         analyze(dataset_def, tuple(args.exclude_animals), args.stable_val_split,
                 args.max_positive_sec, args.bg_avoid_rejected,
                 tuple(args.hard_neg_exclude_method), args.val_mode,
-                args.dump_val_split, args.target, args.val_pairs_file)
+                args.dump_val_split, args.target, args.val_pairs_file,
+                not args.nonconv_left_out)
         return 0
 
     use_hard = args.neg_source == "hard"
@@ -298,9 +305,12 @@ def main(argv: list[str] | None = None) -> int:
         val_mode=args.val_mode,
         target=args.target,
         val_pairs_file=args.val_pairs_file,
+        nonconv_negatives=not args.nonconv_left_out,
     )
     if args.target != "seizure" or args.val_pairs_file:
-        print(f"Target: {args.target}   val pairs file: {args.val_pairs_file or 'none'}")
+        print(f"Target: {args.target}   val pairs file: {args.val_pairs_file or 'none'}"
+              + (f"   non-convulsive: {'LEFT OUT' if args.nonconv_left_out else 'hard negatives'}"
+                 if args.target == "convulsive" else ""))
     if args.val_mode != "animal":
         print(f"Split mode: {args.val_mode} — every animal appears in BOTH train and val. "
               f"This measures deployment, NOT generalisation to a new animal.")
