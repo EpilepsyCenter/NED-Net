@@ -299,7 +299,7 @@ NED-Net is released under the **GNU General Public License v3.0**. See [LICENSE]
 If you use NED-Net, please cite the software:
 
 > Ledri, M. (2026). NED-Net: Neural Event Detection Network for automated seizure detection in
-> rodent EEG (v1.0.0). Zenodo. https://github.com/EpilepsyCenter/NED-Net
+> rodent EEG (v1.0.1). Zenodo. https://github.com/EpilepsyCenter/NED-Net
 
 Each release is archived on Zenodo with its own DOI; GitHub's "Cite this repository" button
 (from [CITATION.cff](CITATION.cff)) gives the current reference.
