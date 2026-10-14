@@ -149,15 +149,11 @@ which the result filters use.
 
 **Operating points.** Choosing a model in Analysis, or in the Detection tab's U-Net panel,
 fills in its recommended operating point (`ml/operating_points.py`). In order of preference:
-- the model's own `operating_point` metadata;
-- a validated value;
+- the model's own `operating_point` entry in its `metadata.json`, for a point you validated
+  yourself (detection and boundary thresholds, convulsive classifier and its threshold);
 - the threshold that maximised event F1 during training.
 
-| Model | Detection / boundary | Convulsive classifier |
-|---|---|---|
-| `UNetv2_20260615` (production) | 0.5 / 0.1 | `Convulsive_v4LUNARC_20260616` at 0.45 |
-| `ramgdnf_temporal_pr`, `ramgdnf_all_prod_pr` (retrained) | 0.95 / 0.5 | `conv_temporal` at 0.6 |
-| `ramgdnf_armA3_holdB3_pr` | 0.9 / 0.5 | `conv_armA_holdB3` at 0.3 |
+NED-Net ships no trained models: you train them on your own annotated recordings.
 
 **HVSW / HPD.** Non-convulsive events can be sub-classified as HVSW (slow, high-amplitude
 waves: low dominant frequency, high slow-wave index) or HPD (fast periodic discharges: high
@@ -179,8 +175,8 @@ Advanced.
   - negatives are reviewed rejections (hard negatives) or random background;
   - validation splits by animal (default), by recording, or temporally (each animal's later
     recordings).
-- **Production recipe:** learning rate 1e-3, batch 8, positive weight 5, fp32. On CUDA, mixed
-  precision (bf16) is the default; pass `--fp32` to match production.
+- **Recommended recipe:** learning rate 1e-3, batch 8, positive weight 5, fp32. On CUDA, mixed
+  precision (bf16) is the default; pass `--fp32` for full fp32.
 
 ---
 
@@ -226,8 +222,8 @@ negatives). Pending candidates never reach a model until someone reviews them.
 
 ## Headless use and HPC
 
-The trainers and batch detectors run without the UI, for clusters (job scripts for SLURM are
-in `scripts/lunarc/`):
+The trainers and batch detectors run without the UI, for clusters (example SLURM job scripts
+are in `scripts/slurm/`):
 
 ```bash
 # Stage 1: U-Net (--analyze reports the class balance and split, then exits)
@@ -239,12 +235,12 @@ python -m eeg_seizure_analyzer.ml.train_convulsive --data-dir /path/to/edfs \
     --model-name my_conv --conv-neg-from-rejected
 
 # Batch detection into a project database, in parallel across cores
-python scripts/lunarc/detect_batch.py --edf-dir /path/to/edfs \
+python scripts/slurm/detect_batch.py --edf-dir /path/to/edfs \
     --db-path ~/.eeg_seizure_analyzer/projects/my_project.db \
     --model my_unet --convulsive-model my_conv --workers 48
 ```
 
-Run any of them with `--help` for all options. `scripts/lunarc/detect_spikes_batch.py` does
+Run any of them with `--help` for all options. `scripts/slurm/detect_spikes_batch.py` does
 the same for interictal spikes. ADICHT files convert from the command line with
 `eeg-convert input.adicht output.edf` (Windows).
 
@@ -276,9 +272,7 @@ eeg_seizure_analyzer/
 ├── analysis.py                    # single / batch / live analysis (shared by UI and scripts)
 ├── db.py                          # project databases
 └── config.py                      # default parameters
-scripts/lunarc/                    # HPC job scripts (training, batch detection, exports)
-scripts/local/                     # analysis and figure scripts for the methods paper
-docs/methods_paper/                # run log, model notes and data for the methods paper
+scripts/slurm/                     # example SLURM job scripts (setup, training, batch detection)
 ```
 
 Earlier research code is kept in `ml/` but not used by the app: the BENDR foundation-model
@@ -309,6 +303,3 @@ If you use NED-Net, please cite the software:
 
 Each release is archived on Zenodo with its own DOI; GitHub's "Cite this repository" button
 (from [CITATION.cff](CITATION.cff)) gives the current reference.
-
-A methods paper describing NED-Net and its validation is in preparation; its reference will
-be added here.

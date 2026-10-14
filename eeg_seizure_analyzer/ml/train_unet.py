@@ -5,7 +5,7 @@ Builds a dataset definition by scanning a folder of EDFs + their
 (``eeg_seizure_analyzer.ml.train.train_model`` with ``architecture="unet"``).
 
 Mirrors the BENDR pre-training CLI (``bendr_pretrain``) so it slots into the
-same LUNARC job pattern.
+same cluster job pattern (see ``scripts/slurm/``).
 
 Examples
 --------
@@ -16,8 +16,8 @@ Analyse the class balance and per-animal split (no training)::
 Train::
 
     python -m eeg_seizure_analyzer.ml.train_unet \
-        --data-dir /lunarc/nobackup/projects/lu2026-2-60/edf_data \
-        --model-name unet_kaha_v1 --neg-pos-ratio 8 --epochs 50
+        --data-dir /path/to/edfs \
+        --model-name unet_v1 --neg-pos-ratio 8 --epochs 50
 """
 from __future__ import annotations
 
@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--data-dir", required=True,
                    help="folder of EDFs + *_ned_annotations.json (scanned recursively)")
-    p.add_argument("--model-name", default="unet_kaha")
+    p.add_argument("--model-name", default="unet_v1")
     p.add_argument("--analyze", action="store_true",
                    help="report class balance + split and a recommended ratio, then exit")
 
@@ -205,21 +205,20 @@ def main(argv: list[str] | None = None) -> int:
                         "generalisation, nor compared with 'animal'-split runs.")
     p.add_argument("--max-positive-sec", type=float, default=0.0,
                    help="drop confirmed events LONGER than this from the positive "
-                        "windows (0 = no cap). Mir's long 'convulsive' rows are "
-                        "chained seizures annotated as one block, and 0 of 13 events "
-                        "over 120 s were ever detected. Capped events are still "
+                        "windows (0 = no cap). Long imported 'convulsive' rows can be "
+                        "chained seizures annotated as one block, which a 60 s window "
+                        "cannot learn from. Capped events are still "
                         "labelled where they fall inside other windows and still "
                         "block background sampling. Suggested: 100.")
     p.add_argument("--hard-neg-exclude-method", nargs="*", default=[], metavar="M",
                    help="detection_method values whose `rejected` rows are not used "
                         "as hard negatives, while their regions still block random "
-                        "background (with --bg-avoid-rejected). Use "
-                        "'mir_candidate' for RAM_GDNF.")
+                        "background (with --bg-avoid-rejected). For imported reference "
+                        "annotations whose rejections can contain real seizures.")
     p.add_argument("--bg-avoid-rejected", action="store_true",
                    help="random background windows avoid `rejected` regions as well "
-                        "as `confirmed` ones. Mir's `rejected` means 'not a "
-                        "convulsive/behavioural seizure' and contains real "
-                        "non-convulsive activity, so background drawn there trains "
+                        "as `confirmed` ones. A rejection meaning 'not a convulsive "
+                        "seizure' can contain real non-convulsive activity, so background drawn there trains "
                         "the detector to suppress real events.")
     p.add_argument("--target", choices=["seizure", "convulsive"], default="seizure",
                    help="what the detector learns: all confirmed seizures (default) "
@@ -237,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop from the dataset entirely (no "
                         "train/val windows), e.g. noisy recordings: "
-                        "--exclude-animals 355676")
+                        "--exclude-animals A12 A17")
 
     # Training
     p.add_argument("--epochs", type=int, default=50)
@@ -256,8 +255,8 @@ def main(argv: list[str] | None = None) -> int:
                         "configuration produces (un-augmented model inputs + masks + a "
                         "per-window table) to DIR, then exit. Same code path as training.")
     p.add_argument("--fp32", action="store_true",
-                   help="disable bf16 mixed precision (and TF32) on CUDA, matching how "
-                        "the production model was trained")
+                   help="disable bf16 mixed precision (and TF32) on CUDA (full fp32, the "
+                        "same numerics as training on Apple MPS)")
     args = p.parse_args(argv)
 
     dataset_def = _build_dataset_def(args.data_dir, args.model_name)

@@ -10,7 +10,7 @@ NED-Net ships the *training capability*, not a model — this mirrors the U-Net 
 convulsive trainers (same ``train_*_model`` signature, saved under MODELS_DIR
 with a ``metadata.json``) so the existing UI training machinery drives it.
 
-Design notes baked in (validated on SV2A, see commit history):
+Design notes baked in:
 - Labels = the confirmed/rejected annotation decision. Negatives are real
   detector false positives (U-Net + classical both present in typical data).
 - Features are computed on DETECTOR boundaries for both classes (the annotator

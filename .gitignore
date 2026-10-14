@@ -70,3 +70,8 @@ Logo.png
 # Legacy Streamlit app
 Streamlit/
 eeg_seizure_analyzer/app/
+
+# Cluster job logs
+logs/
+*.out
+*.err

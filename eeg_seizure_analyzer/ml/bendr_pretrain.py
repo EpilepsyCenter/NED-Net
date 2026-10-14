@@ -4,11 +4,10 @@ Trains the convolutional encoder and transformer contextualizer with a
 masked-prediction objective. The default ``--method data2vec`` uses an EMA
 teacher (data2vec / Baevski et al., 2022) — it learns and generalises to
 unseen recordings without the representation collapse that sank the legacy
-``--method contrastive`` (wav2vec 2.0 style) objective. See
-``BENDR_PRETRAIN_FIX_TODO.md`` for the diagnosis. No annotations required —
+``--method contrastive`` (wav2vec 2.0 style) objective. No annotations required —
 only raw EDF files.
 
-Designed to run on a GPU cluster (e.g., LUNARC COSMOS with A100 GPUs).
+Designed to run on a GPU cluster (e.g. A100 nodes on a SLURM cluster).
 Not part of the Dash GUI.
 
 Usage
@@ -437,8 +436,8 @@ def pretrain_bendr(
     print(f"Device: {device}")
 
     if method == "data2vec":
-        # EMA-teacher objective — does not collapse on continuous EEG targets
-        # (see BENDR_PRETRAIN_FIX_TODO.md). This is the default.
+        # EMA-teacher objective — does not collapse on continuous EEG targets.
+        # This is the default.
         model = build_data2vec_pretrain_model(
             n_eeg_channels=n_input_channels,
             encoder_h=encoder_h,

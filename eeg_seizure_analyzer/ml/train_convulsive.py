@@ -16,7 +16,7 @@ Example
 -------
     python -m eeg_seizure_analyzer.ml.train_convulsive \
         --data-dir /path/to/edfs --model-name conv_v1 \
-        --epochs 20 --exclude-animals 355676
+        --epochs 20 --exclude-animals A12
 """
 
 from __future__ import annotations
@@ -406,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="folder of EDFs + *_ned_annotations.json (scanned recursively)")
     p.add_argument("--model-name", default="conv_v1")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
-                   help="animal IDs to drop entirely, e.g. --exclude-animals 355676")
+                   help="animal IDs to drop entirely, e.g. --exclude-animals A12 A17")
     p.add_argument("--val-mode", choices=["animal", "recording", "temporal"],
                    default="animal",
                    help="how the train/val split is drawn; must MATCH the Stage-1 run or "
@@ -419,28 +419,25 @@ def main(argv: list[str] | None = None) -> int:
                    help="emit `rejected` events as NON-convulsive windows. Stage 2 is "
                         "trained on confirmed seizures but deployed on every detection, "
                         "most of which are false positives, so without this it has never "
-                        "seen a non-seizure and its precision contribution vanishes after "
-                        "retraining (flat 11%% at every threshold on RAM_GDNF). Mir's "
-                        "rejected rows are the right source: video-adjudicated 'not a "
-                        "convulsive/behavioural seizure'.")
+                        "seen a non-seizure and its precision contribution can vanish after "
+                        "retraining. Video-adjudicated 'not a convulsive seizure' "
+                        "rejections are a good source.")
     p.add_argument("--conv-label-method", nargs="*", default=[], metavar="M",
                    help="use ONLY events with these detection_method values as labelled "
                         "samples, because the convulsive flag must have human provenance. "
                         "'manual' selects the reviewer's own additions (no method field). "
-                        "Recommended: 'mir_candidate autocorrelation manual' — which "
-                        "EXCLUDES ml_unet, whose convulsive flag came from the previous "
-                        "Stage 2 itself (26%% of the convulsive positive class, measured "
-                        "2026-10-09). Empty = use all (pre-2026-10-09 behaviour).")
+                        "Leaving out ml_unet excludes rows whose convulsive flag may have "
+                        "come from the previous Stage 2 itself. Empty = use all.")
     p.add_argument("--conv-neg-method", nargs="*", default=[], metavar="M",
                    help="restrict those negatives to these detection_method values; "
-                        "empty = every rejected event. e.g. 'mir_candidate'")
+                        "empty = every rejected event.")
     p.add_argument("--conv-neg-pos-ratio", type=float, default=5.0,
                    help="cap on TOTAL negatives per convulsive positive (default 5). "
                         "Non-convulsive seizures are always kept in full; rejected events "
                         "fill the remaining room. <=0 keeps every rejected event (~1:17).")
     p.add_argument("--max-positive-sec", type=float, default=0.0,
-                   help="drop confirmed events longer than this (0 = no cap). Mir's long "
-                        "rows are chained seizures; a 240 s block fills a 60 s window edge "
+                   help="drop confirmed events longer than this (0 = no cap). Long imported "
+                        "rows can be chained seizures; a 240 s block fills a 60 s window edge "
                         "to edge. Suggested: 100.")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=16)

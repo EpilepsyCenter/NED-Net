@@ -800,7 +800,7 @@ def process_spike_chunk_classical(
     :class:`detection.spike.SpikeDetector` instead of the spike CNN. This lets a
     precise classical detector populate a project DB across the whole dataset
     without training a model — used by the headless cluster sweep
-    (``scripts/lunarc/detect_spikes_batch.py``).
+    (``scripts/slurm/detect_spikes_batch.py``).
 
     Events are written with ``source="spike_classical"``, ``category="spike"``.
     """

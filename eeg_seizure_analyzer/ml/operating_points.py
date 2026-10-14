@@ -5,45 +5,22 @@ convulsive threshold from here when a model is chosen.
 
 Sources, in order of preference:
 
-1. ``metadata.json`` → ``"operating_point"``. A model can carry its own.
-2. ``VALIDATED`` below: operating points chosen and validated outside training, for
-   the models in use.
-3. The training optimum from ``best_metrics``: the threshold that maximised event-F1
+1. ``metadata.json`` → ``"operating_point"``. A model can carry its own: an operating
+   point chosen and validated outside training, e.g.::
+
+       "operating_point": {"threshold": 0.5, "boundary": 0.1,
+                           "convulsive_model": "my_classifier",
+                           "convulsive_threshold": 0.45,
+                           "source": "held-out validation"}
+
+2. The training optimum from ``best_metrics``: the threshold that maximised event-F1
    on validation windows. This is not the same as a validated cascade operating
-   point. The production model's training optimum is 0.7, but it runs at 0.5. Training
-   records no boundary threshold, so that one is left as it is.
+   point. Training records no boundary threshold, so that one is left as it is.
 """
 
 from __future__ import annotations
 
 import json
-
-# threshold / boundary: Stage 1 (U-Net) core and hysteresis thresholds.
-# convulsive_model / convulsive_threshold: the Stage-2 classifier it was validated with.
-VALIDATED: dict[str, dict] = {
-    "UNetv2_20260615": {
-        "threshold": 0.5, "boundary": 0.1,
-        "convulsive_model": "Convulsive_v4LUNARC_20260616", "convulsive_threshold": 0.45,
-        "source": "SV2A production pipeline",
-    },
-    # RAM-GDNF retrained models: pre-registered rule, maximum cascade convulsive F1 on
-    # the held-in batches over a joint Stage-1 x Stage-2 grid (NED-Net methods paper).
-    "ramgdnf_temporal_pr": {
-        "threshold": 0.95, "boundary": 0.5,
-        "convulsive_model": "conv_temporal", "convulsive_threshold": 0.6,
-        "source": "methods paper, pre-registered max-F1 selection",
-    },
-    "ramgdnf_all_prod_pr": {
-        "threshold": 0.95, "boundary": 0.5,
-        "convulsive_model": "conv_temporal", "convulsive_threshold": 0.6,
-        "source": "methods paper, pre-registered max-F1 selection",
-    },
-    "ramgdnf_armA3_holdB3_pr": {
-        "threshold": 0.9, "boundary": 0.5,
-        "convulsive_model": "conv_armA_holdB3", "convulsive_threshold": 0.3,
-        "source": "methods paper, pre-registered max-F1 selection",
-    },
-}
 
 
 def _metadata(model_name: str) -> dict:
@@ -78,8 +55,6 @@ def recommended_operating_point(model_name: str) -> dict:
     op = meta.get("operating_point")
     if isinstance(op, dict) and op:
         return {**op, "source": op.get("source", "model metadata")}
-    if model_name in VALIDATED:
-        return dict(VALIDATED[model_name])
     bm = meta.get("best_metrics") or {}
     out: dict = {"source": "training optimum (validation event F1)"}
     if bm.get("best_threshold") is not None:

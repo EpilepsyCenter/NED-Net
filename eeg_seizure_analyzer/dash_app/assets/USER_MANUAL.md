@@ -465,16 +465,11 @@ match the validated operating points below, which were measured without it.
 When you choose a model, the thresholds and classifier are set to its **recommended operating
 point**, and a note says where it came from. You can still change them. The source is, in order:
 
-1. an operating point stored with the model;
-2. a validated operating point for the models in use:
-
-| Model | Threshold / boundary | Classifier and convulsive threshold |
-|---|---|---|
-| `UNetv2_20260615` (production) | 0.5 / 0.1 | `Convulsive_v4LUNARC_20260616`, 0.45 |
-| `ramgdnf_temporal_pr`, `ramgdnf_all_prod_pr` (retrained) | 0.95 / 0.5 | `conv_temporal`, 0.6 |
-| `ramgdnf_armA3_holdB3_pr` | 0.9 / 0.5 | `conv_armA_holdB3`, 0.3 |
-
-3. otherwise, the **training optimum**: the threshold that gave the best event F1 on validation
+1. an operating point stored with the model: an `operating_point` entry in the model's
+   `metadata.json`, for a point you validated yourself, e.g.
+   `"operating_point": {"threshold": 0.5, "boundary": 0.1, "convulsive_model": "my_conv",
+   "convulsive_threshold": 0.45, "source": "held-out validation"}`;
+2. otherwise, the **training optimum**: the threshold that gave the best event F1 on validation
    during training. This is a reasonable start, but it is not the same as an operating point
    chosen for a real study.
 
@@ -800,7 +795,7 @@ Click **🚀 Start Training**. **■ Stop** ends early and keeps the best model 
 
 ![Screenshot: training progress table](screenshots/ml_training_progress.png)
 
-*The per-epoch table of a real run (24 epochs on RAM-GDNF data).*
+*The per-epoch table of a training run.*
 
 The progress panel shows the settings in use and a live per-epoch table:
 - train and validation loss;
@@ -1094,7 +1089,7 @@ All files are plain JSON and can be read by your own scripts.
       "label": "confirmed",
       "source": "detector",
       "original_onset_sec": 1236.0, "original_offset_sec": 1260.1,
-      "annotator": "Mir", "animal_id": "Mouse_01",
+      "annotator": "AB", "animal_id": "Mouse_01",
       "detector_confidence": 0.92, "notes": "", "event_id": 1,
       "features": {"detection_method": "ml_unet", "origin": "analysis_live",
                    "convulsive": true},
@@ -1183,13 +1178,13 @@ python -m eeg_seizure_analyzer.ml.train_convulsive --data-dir /path/to/edfs \
     --model-name my_conv --conv-neg-from-rejected
 
 # Batch detection into a project database, across all CPU cores
-python scripts/lunarc/detect_batch.py --edf-dir /path/to/edfs \
+python scripts/slurm/detect_batch.py --edf-dir /path/to/edfs \
     --db-path ~/.eeg_seizure_analyzer/projects/my_project.db \
     --model my_unet --convulsive-model my_conv --workers 48
 ```
 
 Each accepts `--help`. The trainers read the same `_ned_annotations.json` files as the app, and
-models they save appear in the app. Job scripts for SLURM clusters are in `scripts/lunarc/`.
+models they save appear in the app. Example job scripts for SLURM clusters are in `scripts/slurm/`.
 
 ---
 

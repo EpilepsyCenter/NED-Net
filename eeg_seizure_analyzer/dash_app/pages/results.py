@@ -1349,7 +1349,7 @@ def _isis_by_group(events) -> dict:
     """Map group_id -> list of inter-spike intervals (seconds).
 
     ISIs are diffs of sorted spike onset times within each (animal, file); the
-    file's group label is used so SV2A vs Control can be compared directly.
+    file's group label is used so groups can be compared directly.
     """
     from collections import defaultdict
     onsets: dict = defaultdict(list)
@@ -1401,7 +1401,7 @@ def _build_isi_distribution(events) -> go.Figure:
 def _build_isi_cdf(events) -> go.Figure:
     """Cumulative probability of inter-spike intervals, one curve per group.
     A rightward shift = longer intervals (sparser firing); good for KS-style
-    visual comparison between SV2A and Control."""
+    visual comparison between groups."""
     fig = go.Figure()
     isis = _isis_by_group(events)
     if not any(isis.values()):

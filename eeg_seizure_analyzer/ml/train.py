@@ -150,8 +150,7 @@ def _compute_metrics(
 
         Vectorised (2026-10-14): the per-sample Python loop it replaces was ~all of
         an epoch's time (~0.175 s per validation window). Returns the same list of
-        plain ints, so every metric is bit-identical
-        (scripts/local/check_metrics_equivalence.py).
+        plain ints, so every metric is bit-identical to the loop.
         """
         b = np.asarray(binary_arr) != 0
         if not b.any():
@@ -262,7 +261,7 @@ class TrainConfig:
     dropout: float = 0.2
     num_workers: int = 0  # DataLoader workers (0 = main process)
     mixed_precision: bool = True  # bf16 autocast on CUDA. False = true fp32 (TF32
-    #   off too), which is how the production UNetv2_20260615 was trained (on MPS).
+    #   off too), the same numerics as training on Apple MPS.
 
     # Architecture selection: "unet" or "bendr"
     architecture: str = "unet"

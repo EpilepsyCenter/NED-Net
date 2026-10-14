@@ -59,23 +59,21 @@ class DatasetConfig:
     #   (no train/val windows) — e.g. noisy recordings.
     stable_convulsive_val: bool = False  # fill the convulsive val stratum with the
     #   SMALLEST animals first instead of at random, so the dominant animals stay in
-    #   train. Positives are heavily concentrated (e.g. 355675 carries ~1/3 of all
-    #   convulsive events), and a random draw can put half of them in validation —
+    #   train. Positives are often concentrated in a few animals (one animal can
+    #   carry a third of all convulsive events), and a random draw can put half of
+    #   them in validation —
     #   which both wastes training data and makes the result a lottery on the seed.
     #   Default False so runs predating this flag reproduce exactly; the spike path
     #   has always passed True. Use True for any run being compared against another.
     max_positive_sec: float = 0.0  # drop confirmed events LONGER than this from
-    #   the positive windows (0 = no cap). Mir's long "convulsive" rows are chained
-    #   seizures annotated as one block (reviewer, 2026-10-06: "real convulsive
-    #   seizures are never minutes long"), and a 150-240 s block centred in a 60 s
+    #   the positive windows (0 = no cap). Imported reference annotations can mark
+    #   chained seizures as one long block, and a 150-240 s block centred in a 60 s
     #   window fills it edge to edge, so per-channel z-scoring leaves no
-    #   event-vs-baseline contrast to learn from. Measured: 0 of 13 events over
-    #   120 s were ever detected. Capped events stay in the interval lists, so a
+    #   event-vs-baseline contrast to learn from. Capped events stay in the interval lists, so a
     #   window overlapping one is still labelled seizure and background is never
     #   sampled from it -- only the "centre a window on it" step is skipped.
     val_mode: str = "animal"  # how the train/val split is drawn:
-    #   "animal"    — whole animals held out (the default, and what every run before
-    #                 2026-10-09 used). Answers "will this work on an animal I never
+    #   "animal"    — whole animals held out (the default). Answers "will this work on an animal I never
     #                 annotated?" — the transfer question.
     #   "recording" — whole RECORDINGS held out, every animal present on both sides.
     #                 Answers "having annotated some of this animal, does the model find
@@ -91,26 +89,17 @@ class DatasetConfig:
     conv_neg_from_rejected: bool = False  # convulsive-classifier path only: emit
     #   `rejected` events as NON-convulsive windows. Stage 2 is trained on confirmed
     #   seizures but deployed on every detection, most of which are false positives, so
-    #   it has never seen a non-seizure. With the frozen classifier that failed safely
-    #   (RAM_GDNF noise was unfamiliar, scored low, precision 33% -> 61%); after
-    #   retraining on RAM_GDNF convulsive events the same noise resembles them and
-    #   precision is flat at 11% at EVERY threshold. Negatives, not tuning, fix that.
-    #   Mir's `rejected` rows are the right source: video-adjudicated "not a
-    #   convulsive/behavioural seizure", i.e. wrong for the detector and exactly right
-    #   here (`build_merged_sidecars.py:76`).
+    #   it has never seen a non-seizure. Noise that resembles the convulsive training
+    #   events then scores high at every threshold, and no threshold separates classes
+    #   the classifier has never been shown. Negatives, not tuning, fix that.
+    #   Video-adjudicated "not a convulsive seizure" rejections are a good source:
+    #   wrong as detector negatives, exactly right here.
     conv_label_methods: tuple = ()  # convulsive-classifier path only: use ONLY events
     #   whose `features.detection_method` is listed here as labelled samples, because the
-    #   convulsive flag must have HUMAN provenance. Measured 2026-10-09 on the live tree:
-    #     autocorrelation (SV2A, human review)   457 non-conv / 204 conv
-    #     mir_candidate   (video adjudication)    70 non-conv / 340 conv
-    #     ml_unet         (STAGE 2'S OWN OUTPUT) 218 non-conv / 194 conv   <-- circular
-    #     None            (manual additions)      52 non-conv /   0 conv
-    #   `ml_unet` rows are real seizures — a human confirmed them — but their convulsive
-    #   flag came from `events.type`, i.e. the previous Stage 2 (`build_merged_sidecars.py:187`).
-    #   Training on them teaches the classifier to reproduce its predecessor's mistakes, and
-    #   the reviewer reported (2026-10-06) that those detections were *misclassified as
-    #   convulsive*. 26% of the convulsive positive class was affected. Empty = use all
-    #   (the pre-2026-10-09 behaviour).
+    #   convulsive flag must have HUMAN provenance. `ml_unet` rows are real seizures — a
+    #   human confirmed them — but unless the reviewer also corrected the flag, their
+    #   convulsive label came from the previous Stage 2. Training on them teaches the
+    #   classifier to reproduce its predecessor's mistakes. Empty = use all.
     conv_neg_methods: tuple = ()  # restrict those negatives to these
     #   `features.detection_method` values; empty = every rejected event.
     conv_neg_pos_ratio: float = 5.0  # cap on TOTAL negatives per convulsive positive.
@@ -119,18 +108,18 @@ class DatasetConfig:
     #   swamped by easy noise. <= 0 keeps every rejected event (~1:17 here).
     hard_neg_exclude_methods: tuple = ()  # `features.detection_method` values whose
     #   `rejected` rows are NOT used as hard negatives, while their regions are still
-    #   honoured by bg_avoid_rejected. Use ("mir_candidate",) for RAM_GDNF: Mir's
-    #   `rejected` means "not a convulsive/behavioural seizure" and contains real
-    #   non-convulsive activity, so it is wrong as a negative -- but it is exactly
-    #   right as a region to keep background out of. Deleting those rows from the
-    #   sidecars (as refresh_training_tree.py did) destroys that second use.
+    #   honoured by bg_avoid_rejected. For imported reference annotations whose
+    #   `rejected` means "not a convulsive seizure": such rows can contain real
+    #   non-convulsive activity, so they are wrong as negatives -- but exactly
+    #   right as regions to keep background out of. Deleting those rows from the
+    #   sidecars would destroy that second use.
     target: str = "seizure"  # what the detector learns: "seizure" (all confirmed
     #   seizures) or "convulsive" (convulsive seizures only). With "convulsive",
     #   positive windows are centred on convulsive events and labelled with them,
     #   and non-convulsive seizures are handled by nonconv_negatives. Recorded in
     #   the model metadata, so predict_seizures marks every detection convulsive.
-    nonconv_negatives: bool = True  # target="convulsive" only. True (primary,
-    #   decided 2026-10-14): non-convulsive seizures are hard negatives -- windows
+    nonconv_negatives: bool = True  # target="convulsive" only. True (default):
+    #   non-convulsive seizures are hard negatives -- windows
     #   centred on them, labelled 0 -- the most informative negatives against a
     #   convulsive-only reference. False: left out of training instead (no window
     #   centred on them, any window overlapping one dropped; no loss masking).
@@ -139,11 +128,10 @@ class DatasetConfig:
     #   computing a split. For a run that must share another run's split even
     #   though its positives differ (the temporal split is drawn from positives).
     bg_avoid_rejected: bool = False  # random background windows avoid regions
-    #   annotated `rejected` as well as `confirmed`. Mir's `rejected` means "not a
-    #   convulsive/behavioural seizure" and was shown to contain real
-    #   non-convulsive activity (2026-10-07, a 180 s block of clear bursting on UI
-    #   Ch6), so drawing background there trains the detector to suppress real
-    #   events -- the same reason those rows are excluded as hard negatives.
+    #   annotated `rejected` as well as `confirmed`. A rejection that means "not a
+    #   convulsive seizure" can contain real non-convulsive activity, so drawing
+    #   background there trains the detector to suppress real events -- the same
+    #   reason such rows can be excluded as hard negatives.
     #   Default False so runs predating this flag reproduce exactly.
     cache_windows: bool = True  # keep each window's read+resampled signal in RAM
     #   after the first read, so no epoch re-reads from disk. (Compute, not I/O,
@@ -820,8 +808,8 @@ def _rec_date(path: str) -> str:
 
     Two conventions coexist and the field order differs, so disambiguate on which
     half is a plausible year:
-      * SV2A      ``D36-20240408(5).edf``      -> YYYYMMDD
-      * RAM_GDNF  ``B2_W1_D1_27102025(9).edf`` -> DDMMYYYY
+      * ``D36-20240408(5).edf``      -> YYYYMMDD
+      * ``B2_W1_D1_27102025(9).edf`` -> DDMMYYYY
     """
     for m in _DATE_RE.finditer(Path(path).name):
         d = m.group(1)
@@ -986,7 +974,7 @@ def split_by_animal(
         the *smallest* convulsive animals first (instead of a random shuffle), so
         the largest, most influential convulsive animals always stay in train.
         This kills the huge seed-to-seed variance (F1 swung 0.67↔0.93 depending
-        purely on whether one dominant animal — e.g. 355675 with ~⅓ of all
+        purely on whether one dominant animal — e.g. one with ~⅓ of all
         convulsive events — happened to land in val) while keeping the split
         leakage-free (val still tests genuinely unseen animals). Used by the
         convulsive classifier; the seizure detector keeps the default (random)

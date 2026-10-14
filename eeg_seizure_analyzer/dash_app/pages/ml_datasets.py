@@ -365,7 +365,7 @@ def layout(sid: str | None) -> html.Div:
                                 "so excluding here guarantees no leakage from that "
                                 "animal into the model."),
                             dbc.Input(id="ml-exclude-animals", type="text",
-                                      value="", placeholder="e.g. 355676",
+                                      value="", placeholder="e.g. A12, A17",
                                       className="form-control", size="sm"),
                         ], width=6),
                     ], className="g-2 mb-3"),

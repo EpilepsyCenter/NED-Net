@@ -1,27 +1,27 @@
 """CLI entrypoint for fine-tuning a pre-trained BENDR seizure detector.
 
 Mirror of ``train_unet`` (same dataset scan, same per-animal split, same
-LUNARC job pattern) but selects ``architecture="bendr"`` and loads a
+cluster job pattern) but selects ``architecture="bendr"`` and loads a
 self-supervised pre-trained encoder/contextualizer
 (``bendr_pretrain.py`` -> ``best_model.pt``) for fine-tuning.
 
 This exists because BENDR fine-tuning was previously GUI-only; the one BENDR
 detector trained that way ran on Apple MPS (a backend known to silently corrupt
 training, see the convulsive-classifier divergence) and scored event_f1 ~0.06.
-This CLI lets the same fine-tune run headless on a clean CUDA backend (LUNARC
-A100) so the MPS confound can be ruled out before BENDR is shelved.
+This CLI lets the same fine-tune run headless on a clean CUDA backend (e.g. an
+A100 cluster node), away from the MPS confound.
 
 Examples
 --------
 Analyse the class balance / split (no training)::
 
     python -m eeg_seizure_analyzer.ml.train_bendr \
-        --data-dir /lunarc/nobackup/projects/lu2026-2-60/edf_data --analyze
+        --data-dir /path/to/edfs --analyze
 
 Fine-tune::
 
     python -m eeg_seizure_analyzer.ml.train_bendr \
-        --data-dir /lunarc/nobackup/projects/lu2026-2-60/edf_data \
+        --data-dir /path/to/edfs \
         --model-name bendr_cuda_v1 \
         --pretrained ~/.eeg_seizure_analyzer/pretrained/run1_best.pt \
         --neg-pos-ratio 4 --pos-weight 5 --epochs 40
