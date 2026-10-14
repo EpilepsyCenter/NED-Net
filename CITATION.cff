@@ -5,7 +5,15 @@ title: "NED-Net: Neural Event Detection Network for automated seizure detection 
 version: 1.0.1
 date-released: 2026-10-14
 license: GPL-3.0-only
+doi: 10.5281/zenodo.23372245
 repository-code: "https://github.com/EpilepsyCenter/NED-Net"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23372245
+    description: "Concept DOI: all versions, resolves to the latest"
+  - type: doi
+    value: 10.5281/zenodo.23372246
+    description: "Version 1.0.1"
 authors:
   - family-names: Ledri
     given-names: Marco
