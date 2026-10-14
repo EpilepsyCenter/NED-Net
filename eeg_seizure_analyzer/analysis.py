@@ -169,6 +169,9 @@ class ClassificationParams:
     # Events shorter than this are non-convulsive whatever the classifier says
     # (they stay seizures). 0 = off.
     convulsive_min_duration_sec: float = 0.0
+    # Which model output finds events: "seizure" (default) or "convulsive"
+    # (the U-Net's convulsive output; every event is then convulsive).
+    detect_on: str = "seizure"
 
 
 def classify_event_types(
@@ -493,6 +496,8 @@ def process_chunk(
             convulsive_min_duration_sec=(
                 classification_params.convulsive_min_duration_sec
                 if classification_params else 0.0),
+            detect_on=(classification_params.detect_on
+                       if classification_params else "seizure"),
         )
 
         # Classify event types (convulsive, HVSW, HPD)

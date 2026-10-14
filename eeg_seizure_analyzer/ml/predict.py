@@ -39,6 +39,7 @@ def predict_seizures(
     progress_callback=None,
     convulsive_model_name: str | None = None,
     convulsive_min_duration_sec: float = 0.0,
+    detect_on: str = "seizure",
 ) -> list[DetectedEvent]:
     """Run seizure detection on an EDF file using a trained model.
 
@@ -83,6 +84,12 @@ def predict_seizures(
         Events shorter than this are labelled non-convulsive whatever the
         classifier says (convulsive seizures last tens of seconds). They stay
         detected as seizures. 0 = off.
+    detect_on : str
+        Which model output finds events: "seizure" (channel 0, the default) or
+        "convulsive" (channel 1, the U-Net's own convulsive output, thresholded at
+        ``threshold``). With "convulsive", or with a model trained with
+        ``target="convulsive"`` (its channel 0 is then convulsive), every event is
+        convulsive and no Stage-2 classifier runs.
 
     Returns
     -------
@@ -97,6 +104,13 @@ def predict_seizures(
     include_activity = metadata.get("include_activity", False)
     n_classes = metadata.get("n_classes", 1)
     has_convulsive = n_classes >= 2
+    model_target = (metadata.get("dataset_config") or {}).get("target", "seizure")
+    if detect_on not in ("seizure", "convulsive"):
+        raise ValueError(f"detect_on must be 'seizure' or 'convulsive', not {detect_on!r}")
+    if detect_on == "convulsive" and not has_convulsive:
+        raise ValueError(f"{model_name} has no convulsive output to detect on")
+    # Events found by a convulsive output are convulsive by definition.
+    convulsive_detector = detect_on == "convulsive" or model_target == "convulsive"
 
     # Device
     if torch.cuda.is_available():
@@ -211,9 +225,10 @@ def predict_seizures(
         avg_conv = (conv_sum / pred_count) if conv_sum is not None else None
 
         # Extract events for this channel
-        binary = (avg_probs > threshold).astype(int)
+        det_probs = avg_conv if detect_on == "convulsive" else avg_probs
+        binary = (det_probs > threshold).astype(int)
         ch_events = _extract_events(
-            binary, avg_probs, target_fs,
+            binary, det_probs, target_fs,
             boundary_threshold=boundary_threshold,
             min_duration_sec=min_duration_sec,
             merge_gap_sec=merge_gap_sec,
@@ -232,7 +247,12 @@ def predict_seizures(
     # seizure crop and override the detector's ch1 flag. Convulsive ⊂ seizure,
     # so the classifier only ever sees seizure crops — a balanced, well-posed
     # task compared with ch1 firing against the whole recording.
-    if convulsive_model_name and all_events:
+    if convulsive_detector:
+        for ev in all_events:
+            ev.features["convulsive"] = True
+            ev.features["detected_on"] = ("convulsive output" if detect_on == "convulsive"
+                                          else "convulsive-only model")
+    elif convulsive_model_name and all_events:
         _apply_convulsive_classifier(
             all_events, edf_path, convulsive_model_name,
             convulsive_threshold, device,

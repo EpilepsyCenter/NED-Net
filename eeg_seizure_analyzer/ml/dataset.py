@@ -8,6 +8,7 @@ binary seizure mask as the label.
 
 from __future__ import annotations
 
+import collections
 import json
 import math
 import os
@@ -123,6 +124,17 @@ class DatasetConfig:
     #   non-convulsive activity, so it is wrong as a negative -- but it is exactly
     #   right as a region to keep background out of. Deleting those rows from the
     #   sidecars (as refresh_training_tree.py did) destroys that second use.
+    target: str = "seizure"  # what the detector learns: "seizure" (all confirmed
+    #   seizures) or "convulsive" (convulsive seizures only). With "convulsive",
+    #   positive windows are centred on convulsive events and labelled with them;
+    #   non-convulsive seizures are left out of training rather than used as
+    #   negatives: no window is centred on them, background avoids them, and any
+    #   window overlapping one is dropped (there is no loss masking). Recorded in
+    #   the model metadata, so predict_seizures marks every detection convulsive.
+    val_pairs_file: str = ""  # JSON from `train_unet --analyze --dump-val-split`:
+    #   use exactly those (animal, recording) pairs as validation instead of
+    #   computing a split. For a run that must share another run's split even
+    #   though its positives differ (the temporal split is drawn from positives).
     bg_avoid_rejected: bool = False  # random background windows avoid regions
     #   annotated `rejected` as well as `confirmed`. Mir's `rejected` means "not a
     #   convulsive/behavioural seizure" and was shown to contain real
@@ -331,6 +343,7 @@ def build_window_specs(
     list[WindowSpec]
     """
     rng = np.random.default_rng(config.seed)
+    _CONV_TARGET_DROPPED.clear()
     exclude_set = set(config.exclude_animals or ())
     specs: list[WindowSpec] = []  # positive windows
     hard_neg_specs: list[WindowSpec] = []  # all rejected-event windows
@@ -405,6 +418,16 @@ def build_window_specs(
                 (a["onset_sec"], a["offset_sec"]) for a in ch_confirmed
                 if (a.get("features") or {}).get("convulsive", False)
             ]
+            # What the detector is trained to find (see DatasetConfig.target).
+            conv_target = config.target == "convulsive"
+            ch_label_intervals = (ch_convulsive_intervals if conv_target
+                                  else ch_seizure_intervals)
+            ch_nonconv = ([(a["onset_sec"], a["offset_sec"]) for a in ch_confirmed
+                           if not (a.get("features") or {}).get("convulsive", False)]
+                          if conv_target else [])
+
+            def _hits_nonconv(ws, we):
+                return any(s[1] > ws and s[0] < we for s in ch_nonconv)
 
             # --- Positive windows (centred on confirmed seizures) ---
             # Only events at or under the cap get a window centred on them; see
@@ -414,7 +437,9 @@ def build_window_specs(
             cap = config.max_positive_sec
             ch_positive = [
                 a for a in ch_confirmed
-                if cap <= 0 or (a["offset_sec"] - a["onset_sec"]) <= cap
+                if (cap <= 0 or (a["offset_sec"] - a["onset_sec"]) <= cap)
+                and (not conv_target
+                     or (a.get("features") or {}).get("convulsive", False))
             ]
             for ann in ch_positive:
                 onset = ann["onset_sec"]
@@ -426,11 +451,14 @@ def build_window_specs(
                 win_end = min(rec_duration, win_start + config.window_sec)
                 win_start = max(0, win_end - config.window_sec)
 
-                # All seizures on this channel within the window
+                if conv_target and _hits_nonconv(win_start, win_end):
+                    _CONV_TARGET_DROPPED["positive"] += 1
+                    continue
+                # All target events (seizures, or convulsive only) in the window
                 win_seizures = [
                     (max(s[0], win_start) - win_start,
                      min(s[1], win_end) - win_start)
-                    for s in ch_seizure_intervals
+                    for s in ch_label_intervals
                     if s[1] > win_start and s[0] < win_end
                 ]
                 # Convulsive seizures within the window
@@ -466,6 +494,9 @@ def build_window_specs(
                 win_start = max(0, centre - half_win)
                 win_end = min(rec_duration, win_start + config.window_sec)
                 win_start = max(0, win_end - config.window_sec)
+                if conv_target and _hits_nonconv(win_start, win_end):
+                    _CONV_TARGET_DROPPED["hard_negative"] += 1
+                    continue
 
                 hard_neg_specs.append(WindowSpec(
                     edf_path=edf_path,
@@ -507,6 +538,11 @@ def build_window_specs(
     specs.extend(
         _balance_negatives(hard_neg_specs, neg_ctx, n_pos, config, rng)
     )
+    if config.target == "convulsive":
+        print(f"target=convulsive: {n_pos} convulsive positive windows; dropped "
+              f"{_CONV_TARGET_DROPPED['positive']} positive and "
+              f"{_CONV_TARGET_DROPPED['hard_negative']} hard-negative windows "
+              f"overlapping a non-convulsive seizure")
     return specs
 
 
@@ -774,6 +810,40 @@ def _rec_date(path: str) -> str:
     return ""
 
 
+_CONV_TARGET_DROPPED: collections.Counter = collections.Counter()
+
+
+def split_specs(specs: list[WindowSpec], config: "DatasetConfig",
+                val_fraction: float = 0.2):
+    """Train/val split for the detector path, honouring ``config.val_pairs_file``.
+
+    With a pairs file, validation is exactly those (animal, recording) pairs.
+    Otherwise the split is drawn by ``config.val_mode`` as before.
+    """
+    if config.val_pairs_file:
+        vp = json.loads(Path(config.val_pairs_file).read_text())
+        keys = {(p["animal_id"], p["edf"]) for p in vp["val_pairs"]}
+        val = [s for s in specs if (s.animal_id, s.edf_path) in keys]
+        train = [s for s in specs if (s.animal_id, s.edf_path) not in keys]
+        found = {(s.animal_id, s.edf_path) for s in val}
+        if len(found) < len(keys):
+            missing = sorted(keys - found)[:3]
+            # Not fatal: a pair with no windows under this target (e.g. no
+            # convulsive events) is expected. A path mismatch is not, so say so.
+            print(f"val pairs: {len(found)}/{len(keys)} matched; unmatched e.g. "
+                  f"{missing} (pairs with no windows under this target, or a "
+                  f"different --data-dir path)")
+        if not found:
+            raise ValueError(f"no validation pairs from {config.val_pairs_file} "
+                             "matched: is --data-dir the same path the file records?")
+        return train, val
+    if config.val_mode in ("recording", "temporal"):
+        return split_by_recording(specs, val_fraction=val_fraction, seed=config.seed,
+                                  temporal=config.val_mode == "temporal")
+    return split_by_animal(specs, val_fraction=val_fraction, seed=config.seed,
+                           stable_convulsive_val=config.stable_convulsive_val)
+
+
 def split_by_recording(
     specs: list[WindowSpec],
     val_fraction: float = 0.2,
@@ -1020,14 +1090,7 @@ def build_datasets(
         raise ValueError("No training windows could be extracted. "
                          "Check that the dataset has confirmed annotations.")
 
-    if config.val_mode in ("recording", "temporal"):
-        train_specs, val_specs = split_by_recording(
-            specs, seed=config.seed,
-            temporal=config.val_mode == "temporal")
-    else:
-        train_specs, val_specs = split_by_animal(
-            specs, seed=config.seed,
-            stable_convulsive_val=config.stable_convulsive_val)
+    train_specs, val_specs = split_specs(specs, config)
 
     train_ds = SeizureDataset(train_specs, config, augment=config.augment)
     val_ds = SeizureDataset(val_specs, config, augment=False)

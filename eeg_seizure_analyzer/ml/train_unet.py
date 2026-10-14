@@ -31,8 +31,7 @@ from eeg_seizure_analyzer.io.dataset_store import scan_annotation_files
 from eeg_seizure_analyzer.ml.dataset import (
     DatasetConfig,
     build_window_specs,
-    split_by_animal,
-    split_by_recording,
+    split_specs,
 )
 from eeg_seizure_analyzer.ml.train import TrainConfig, train_model
 
@@ -48,7 +47,9 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
             bg_avoid_rejected: bool = False,
             hard_neg_exclude_methods: tuple = (),
             val_mode: str = "animal",
-            dump_val_split: str | None = None) -> dict:
+            dump_val_split: str | None = None,
+            target: str = "seizure",
+            val_pairs_file: str = "") -> dict:
     """Report class balance + the per-animal train/val split, and recommend a
     neg/pos ratio and pos_weight.  Returns the recommendation dict.
 
@@ -73,7 +74,8 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
                         max_positive_sec=max_positive_sec,
                         bg_avoid_rejected=bg_avoid_rejected,
                         hard_neg_exclude_methods=tuple(hard_neg_exclude_methods),
-                        val_mode=val_mode)
+                        val_mode=val_mode, stable_convulsive_val=stable_val_split,
+                        target=target, val_pairs_file=val_pairs_file)
     specs = build_window_specs(dataset_def, cfg)
     pos = [s for s in specs if s.is_positive]
     neg = [s for s in specs if not s.is_positive]
@@ -94,13 +96,7 @@ def analyze(dataset_def: dict, exclude_animals: tuple = (),
 
     # Simulate the split the real run will use -- including the stable-stratum
     # option, or --analyze reports a split training will not produce.
-    if val_mode in ("recording", "temporal"):
-        train_specs, val_specs = split_by_recording(
-            specs, val_fraction=0.2, seed=42, temporal=val_mode == "temporal")
-    else:
-        train_specs, val_specs = split_by_animal(
-            specs, val_fraction=0.2, seed=42,
-            stable_convulsive_val=stable_val_split)
+    train_specs, val_specs = split_specs(specs, cfg, val_fraction=0.2)
     # Record the held-out side so detection can be scored on it alone. The split is
     # deterministic in (specs, seed, val_fraction, val_mode), so re-running --analyze
     # with the same flags reproduces exactly what training used.
@@ -223,6 +219,15 @@ def main(argv: list[str] | None = None) -> int:
                         "convulsive/behavioural seizure' and contains real "
                         "non-convulsive activity, so background drawn there trains "
                         "the detector to suppress real events.")
+    p.add_argument("--target", choices=["seizure", "convulsive"], default="seizure",
+                   help="what the detector learns: all confirmed seizures (default) "
+                        "or convulsive seizures only. With 'convulsive', non-convulsive "
+                        "seizures are left out of training (never negatives), and every "
+                        "detection of the trained model is convulsive.")
+    p.add_argument("--val-pairs-file", default="", metavar="JSON",
+                   help="use exactly the (animal, recording) validation pairs in this "
+                        "file (from --analyze --dump-val-split) instead of computing a "
+                        "split; to share another run's split.")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop from the dataset entirely (no "
                         "train/val windows), e.g. noisy recordings: "
@@ -259,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         analyze(dataset_def, tuple(args.exclude_animals), args.stable_val_split,
                 args.max_positive_sec, args.bg_avoid_rejected,
                 tuple(args.hard_neg_exclude_method), args.val_mode,
-                args.dump_val_split)
+                args.dump_val_split, args.target, args.val_pairs_file)
         return 0
 
     use_hard = args.neg_source == "hard"
@@ -291,7 +296,11 @@ def main(argv: list[str] | None = None) -> int:
         bg_avoid_rejected=args.bg_avoid_rejected,
         hard_neg_exclude_methods=tuple(args.hard_neg_exclude_method),
         val_mode=args.val_mode,
+        target=args.target,
+        val_pairs_file=args.val_pairs_file,
     )
+    if args.target != "seizure" or args.val_pairs_file:
+        print(f"Target: {args.target}   val pairs file: {args.val_pairs_file or 'none'}")
     if args.val_mode != "animal":
         print(f"Split mode: {args.val_mode} — every animal appears in BOTH train and val. "
               f"This measures deployment, NOT generalisation to a new animal.")
