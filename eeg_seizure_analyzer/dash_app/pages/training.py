@@ -49,8 +49,11 @@ def _get_annotations(state) -> list[AnnotatedEvent]:
             ann = AnnotatedEvent.from_dict(item)
         else:
             continue
-        # Deduplicate by (onset_sec rounded, channel, source)
-        key = (round(ann.onset_sec, 4), ann.channel, ann.source)
+        # Drop only true duplicates. Keying on (onset, channel, source) alone
+        # silently deleted distinct events that shared an onset, and the next
+        # autosave wrote the shortened list to disk (2026-10-14).
+        key = (round(ann.onset_sec, 4), round(ann.offset_sec, 4), ann.channel,
+               ann.source, ann.label, ann.event_id)
         if key not in seen:
             seen.add(key)
             out.append(ann)
@@ -1079,7 +1082,11 @@ def layout(sid: str | None) -> html.Div:
         if rec.source_path:
             disk_annotations = load_annotations(rec.source_path)
             if disk_annotations:
-                annotations = disk_annotations
+                # The order review steps through: by channel, then time. Files
+                # can list rows in any order (e.g. carried-over reviews first),
+                # and adding an event re-sorts like this, so sort up front.
+                annotations = sorted(disk_annotations,
+                                     key=lambda e: (e.channel, e.onset_sec))
                 # Filter settings are loaded from the detection file
                 # (done in _try_load_saved_detections at upload time)
             elif state.seizure_events:
@@ -1535,6 +1542,10 @@ def layout(sid: str | None) -> html.Div:
                         children=[
                             html.Label("Onset (s)",
                                        style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"}),
+                            # Identity of the event the inputs below belong to; see
+                            # the stale-press check in update_review.
+                            dcc.Store(id="tr-shown-key",
+                                      data=_view_key(current_event) if current_event else None),
                             dcc.Input(
                                 id="tr-onset-input", type="number",
                                 value=round(current_event.onset_sec, 3) if current_event else 0,
@@ -1910,6 +1921,7 @@ def save_method_filter(val, sid):
     Output("tr-band-power", "figure"),
     Output("tr-overview", "figure"),
     Output("tr-filter-summary", "children"),
+    Output("tr-shown-key", "data"),
     Input("tr-mode-toggle", "value"),
     Input("tr-channel-filter", "value"),
     Input("tr-method-filter", "value"),
@@ -1950,6 +1962,7 @@ def save_method_filter(val, sid):
     State("tr-onset-input", "value"),
     State("tr-offset-input", "value"),
     State("tr-notes", "value"),
+    State("tr-shown-key", "data"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
@@ -1963,16 +1976,16 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
                   show_baseline, show_threshold, convulsive_toggle,
                   _pan_l, _pan_r, _pan_c, context_val, ov_click, ovspan_val,
                   onset_input, offset_input,
-                  notes_val, sid):
+                  notes_val, shown_key, sid):
     """Handle review mode: navigation, confirm, reject, skip, keyboard."""
-    _N_OUT = 15  # number of outputs
+    _N_OUT = 16  # number of outputs
     _no = no_update
     if mode != "review":
         return (_no,) * _N_OUT
 
     state = server_state.get_session(sid)
     if state.recording is None:
-        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure(), go.Figure(), ""
+        return go.Figure(), "No events", html.Span(), "", 0, 0, "", 0, False, dbc.Row(), html.Div(), go.Figure(), go.Figure(), go.Figure(), "", None
 
     trigger = ctx.triggered_id
 
@@ -2051,7 +2064,7 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
             0, _channel_counts(rec, annotations), filt_on)
         return (fig, nav, html.Span(), "", 0, 0, "", 0, False, dbc.Row(), empty_counts,
                 go.Figure(), go.Figure(), go.Figure(),
-                filter_summary(0, n_pre, filt_on))
+                filter_summary(0, n_pre, filt_on), None)
 
     current_idx = state.extra.get("tr_current_idx", 0)
 
@@ -2104,8 +2117,19 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
     elif trigger == "tr-ovspan":
         action = "ovspan"
 
+    # Stale press: the server already moved on (an earlier press advanced it), but
+    # the screen still shows the previous event, so the boundaries, notes and
+    # convulsive switch sent with this press belong to that event. Applying them
+    # here moved events onto their neighbours' boundaries and labelled events the
+    # reviewer never saw (2026-10-14). Ignore the press; the re-render shows the
+    # current event.
+    stale = (shown_key is not None and 0 <= current_idx < len(filtered)
+             and list(shown_key) != _view_key(filtered[current_idx]))
+    if stale and action in ("confirm", "reject", "toggle_convulsive", "set_convulsive"):
+        action = None
+
     # Save notes for current event before moving
-    if action in ("confirm", "reject", "skip", "prev", "next", "jump"):
+    if not stale and action in ("confirm", "reject", "skip", "prev", "next", "jump"):
         if 0 <= current_idx < len(filtered):
             event = filtered[current_idx]
             # Find in full annotations list and update notes
@@ -2253,9 +2277,10 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
         view_seek = round(_review_window(rec, event, state)[0], 1)
         return (fig, nav_text, badge, no_update, no_update, no_update, no_update,
                 view_seek, is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov,
-                filt_text)
+                filt_text, no_update)
     return (fig, nav_text, badge, notes, ev_onset, ev_offset, ev_dur, video_seek,
-            is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov, filt_text)
+            is_convulsive, props, ann_counts, fig_spec, fig_bp, fig_ov, filt_text,
+            _view_key(event))
 
 
 # Clientside callback: seek the training video when event changes
@@ -2276,12 +2301,9 @@ clientside_callback(
 
 
 def _find_next_pending(filtered: list[AnnotatedEvent], current_idx: int):
-    """Find next pending event after current_idx, wrapping around."""
-    n = len(filtered)
-    if n == 0:
-        return None
-    for offset in range(1, n):
-        idx = (current_idx + offset) % n
+    """Next pending event after current_idx, or None. Does not wrap: jumping back
+    to an earlier event looked like the order changing."""
+    for idx in range(current_idx + 1, len(filtered)):
         if filtered[idx].label == "pending":
             return idx
     return None
