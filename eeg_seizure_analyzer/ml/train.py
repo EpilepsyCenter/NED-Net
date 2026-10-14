@@ -145,20 +145,20 @@ def _compute_metrics(
     merge_gap = int(merge_gap_sec * fs)
 
     def _segments(binary_arr):
-        """Extract contiguous segments as (start, end) index pairs."""
-        segs = []
-        in_seg = False
-        start = 0
-        for i, v in enumerate(binary_arr):
-            if v and not in_seg:
-                start = i
-                in_seg = True
-            elif not v and in_seg:
-                segs.append((start, i))
-                in_seg = False
-        if in_seg:
-            segs.append((start, len(binary_arr)))
+        """Contiguous runs of nonzero samples as (start, end) index pairs, end
+        exclusive, then merged across gaps <= merge_gap.
 
+        Vectorised (2026-10-14): the per-sample Python loop it replaces was ~all of
+        an epoch's time (~0.175 s per validation window). Returns the same list of
+        plain ints, so every metric is bit-identical
+        (scripts/local/check_metrics_equivalence.py).
+        """
+        b = np.asarray(binary_arr) != 0
+        if not b.any():
+            return []
+        edges = np.diff(np.concatenate(([0], b.view(np.int8), [0])))
+        segs = list(zip(np.flatnonzero(edges == 1).tolist(),
+                        np.flatnonzero(edges == -1).tolist()))
         # Merge close segments
         if merge_gap > 0 and len(segs) > 1:
             merged = [segs[0]]
@@ -170,22 +170,21 @@ def _compute_metrics(
             segs = merged
         return segs
 
-    # Compute event-level metrics across all windows
+    # Compute event-level metrics across all windows. Segments are extracted
+    # once per window and shared by the recall and precision passes.
     total_true_events = 0
     total_pred_events = 0
     total_matched = 0
+    matched_pred = 0
 
     for pred_prob, target in zip(all_preds, all_targets):
-        pred_bin = (pred_prob > threshold).astype(int)
-        target_bin = (target > 0.5).astype(int)
-
-        true_segs = _segments(target_bin)
-        pred_segs = _segments(pred_bin)
+        true_segs = _segments(target > 0.5)
+        pred_segs = _segments(pred_prob > threshold)
 
         total_true_events += len(true_segs)
         total_pred_events += len(pred_segs)
 
-        # Match: a true event is "detected" if any predicted segment
+        # Recall: a true event is "detected" if any predicted segment
         # overlaps it by at least 20%
         for ts, te in true_segs:
             t_len = te - ts
@@ -195,14 +194,8 @@ def _compute_metrics(
                     total_matched += 1
                     break
 
-    event_recall = total_matched / max(total_true_events, 1)
-    # Precision: fraction of predicted events that match a true event
-    matched_pred = 0
-    for pred_prob, target in zip(all_preds, all_targets):
-        pred_bin = (pred_prob > threshold).astype(int)
-        target_bin = (target > 0.5).astype(int)
-        true_segs = _segments(target_bin)
-        pred_segs = _segments(pred_bin)
+        # Precision: a predicted event matches if it overlaps a true event by
+        # at least 20% of its own length
         for ps, pe in pred_segs:
             p_len = pe - ps
             for ts, te in true_segs:
@@ -211,6 +204,7 @@ def _compute_metrics(
                     matched_pred += 1
                     break
 
+    event_recall = total_matched / max(total_true_events, 1)
     event_precision = matched_pred / max(total_pred_events, 1)
     event_f1 = (
         2 * event_precision * event_recall
