@@ -693,7 +693,10 @@ hide everything, the plot says so. **Channel** and **Method** narrow the queue f
 **📄 Browse Mode** scrolls freely through the recording (**Window (s)**, **Start (s)**,
 **Channels**) to find seizures the detector missed.
 - **Add Seizure:** turn it on, choose **Channel (for manual add)**, then box-select the seizure
-  on the plot. It is added as confirmed.
+  on the plot. It is added as confirmed, convulsive or not as set by the **Convulsive** box
+  next to the buttons (the box keeps its setting; check it before each selection). Convulsive
+  annotations are marked **C** on the plot. To change one afterwards, use the Convulsive
+  toggle in Review mode.
 - **Remove Seizure:** turn it on, then click a seizure to delete it.
 
 ### 10.7 What becomes training data

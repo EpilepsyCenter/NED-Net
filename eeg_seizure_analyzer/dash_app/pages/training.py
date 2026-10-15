@@ -1026,6 +1026,8 @@ def _build_browse_figure(rec, annotations: list[AnnotatedEvent], state,
         # Event ID label inside the shadow (absolute ID that never changes)
         if ann.event_id > 0:
             label_text = f"#{ann.event_id}"
+            if (ann.features or {}).get("convulsive"):
+                label_text += " C"
             fig.add_annotation(
                 x=(x0 + x1) / 2,
                 y=ch_offset + half * 0.7,
@@ -1672,9 +1674,21 @@ def layout(sid: str | None) -> html.Div:
                                         size="sm",
                                         active=False,
                                     ),
+                                    # Written on every added seizure: a manual
+                                    # seizure without the flag would train as
+                                    # non-convulsive.
+                                    dbc.Checkbox(
+                                        id="tr-browse-convulsive",
+                                        label="Convulsive",
+                                        value=bool(state.extra.get("tr_browse_convulsive", False)),
+                                        style={"fontSize": "0.8rem", "marginLeft": "6px",
+                                               "alignSelf": "center"},
+                                        label_style={"fontWeight": "600",
+                                                     "fontSize": "0.8rem"},
+                                    ),
                                 ],
                             ),
-                        ], width=3),
+                        ], width=4),
                     ], className="g-2 mb-3"),
                     # Channel selection for browse view
                     html.Div(
@@ -2649,6 +2663,7 @@ def sync_annotate_channel(val):
     State("tr-add-seizure-btn", "active"),
     State("tr-remove-seizure-btn", "active"),
     State("tr-browse-annotate-channel", "value"),
+    State("tr-browse-convulsive", "value"),
     State("tr-annotations-version", "data"),
     State("tr-filter-toggle", "value"),
     State("tr-min-conf", "value"),
@@ -2661,7 +2676,7 @@ def sync_annotate_channel(val):
 def handle_add_remove_seizure(add_clicks, remove_clicks,
                                selected_data, click_data,
                                add_active, remove_active,
-                               annotate_channel, ann_version,
+                               annotate_channel, add_convulsive, ann_version,
                                filt_on, min_conf, min_dur, min_lbl,
                                ch_filter, sid):
     """Handle Add/Remove seizure button toggles and actions."""
@@ -2713,6 +2728,8 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
             return no_update, no_update, alert("Selection too small (< 0.1s)", "warning"), None, no_update
 
         channel = int(annotate_channel) if annotate_channel is not None else 0
+        convulsive = bool(add_convulsive)
+        state.extra["tr_browse_convulsive"] = convulsive
 
         # Assign next available event_id (max of existing + 1)
         annotations = _get_annotations(state)
@@ -2735,6 +2752,7 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
             event_type="seizure",
             annotated_at=datetime.now(timezone.utc).isoformat(),
             event_id=next_id,
+            features={"convulsive": convulsive},
         )
 
         annotations.append(new_ann)
@@ -2763,7 +2781,7 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
             new_det = _compute_manual_event_metrics(rec, new_det, state)
             # Copy computed metrics back to the annotation
             new_ann.detector_confidence = new_det.confidence
-            new_ann.features = dict(new_det.features)
+            new_ann.features = {**new_det.features, "convulsive": convulsive}
             new_ann.quality_metrics = dict(new_det.quality_metrics)
             # Re-save annotations with computed metrics
             _auto_save(state, annotations)
@@ -2772,7 +2790,9 @@ def handle_add_remove_seizure(add_clicks, remove_clicks,
             traceback.print_exc()
 
 
-        msg = f"Added manual seizure: {onset:.2f}s \u2013 {offset:.2f}s on Ch {channel}"
+        kind = "convulsive" if convulsive else "non-convulsive"
+        msg = (f"Added manual {kind} seizure: {onset:.2f}s \u2013 {offset:.2f}s "
+               f"on Ch {channel}")
         # Deactivate Add button after adding
         return False, False, alert(msg, "success"), None, ann_version + 1
 
