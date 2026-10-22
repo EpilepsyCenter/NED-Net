@@ -130,7 +130,7 @@ def layout(sid: str | None) -> html.Div:
             # ── Project database (read-only selector) ─────────────
             html.Div(
                 style={"marginBottom": "16px", "padding": "12px",
-                       "border": "1px solid #30363d", "borderRadius": "6px"},
+                       "border": "1px solid var(--ned-border)", "borderRadius": "6px"},
                 children=[
                     html.Label(
                         "Project database",
@@ -300,7 +300,7 @@ def layout(sid: str | None) -> html.Div:
                     ),
                 ]),
                 style={"backgroundColor": "var(--ned-sidebar)",
-                       "border": "1px solid #21262d",
+                       "border": "1px solid var(--ned-border)",
                        "marginBottom": "20px"},
             ),
 
@@ -1180,7 +1180,7 @@ def _inspector_params_panel(ev_data: dict, computed: dict | None = None):
                 style={"width": "100%"},
             ),
         ]),
-        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid #21262d",
+        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid var(--ned-border)",
                "marginTop": "12px"},
     )
 

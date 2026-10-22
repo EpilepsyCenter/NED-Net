@@ -153,11 +153,12 @@ def amplitude_profile(rec, ch: int) -> tuple[np.ndarray, np.ndarray]:
 
 def overview_figure(state, prefix: str, rec, ch: int, view: tuple[float, float],
                     events: list[tuple[float, float, str]],
-                    current: tuple[float, float]) -> go.Figure:
+                    current: tuple[float, float],
+                    current_color: str = "#f85149") -> go.Figure:
     """Thin strip: amplitude profile, event markers, the current view as a box.
 
     ``events`` are (onset, offset, colour) on this channel; ``current`` is the event
-    being reviewed, drawn outlined on top of its marker.
+    being reviewed, drawn outlined on top of its marker in ``current_color``.
     """
     from eeg_seizure_analyzer.dash_app.components import apply_fig_theme
 
@@ -189,7 +190,7 @@ def overview_figure(state, prefix: str, rec, ch: int, view: tuple[float, float],
             fig.add_vrect(x0=on, x1=max(off, on + 0.5), fillcolor=colour, opacity=0.55,
                           line_width=0, layer="below")
     fig.add_vrect(x0=current[0], x1=current[1], fillcolor="rgba(0,0,0,0)",
-                  line=dict(color="#f85149", width=1.5), layer="above")
+                  line=dict(color=current_color, width=1.5), layer="above")
     fig.add_vrect(x0=view[0], x1=view[1], fillcolor="rgba(88,166,255,0.15)",
                   line=dict(color="#58a6ff", width=1.5), layer="above")
     fig.update_layout(

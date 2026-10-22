@@ -12,7 +12,7 @@ import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 
 from eeg_seizure_analyzer.dash_app import server_state
-from eeg_seizure_analyzer.dash_app.components import alert, metric_card
+from eeg_seizure_analyzer.dash_app.components import alert, loading, metric_card
 from eeg_seizure_analyzer.io.dataset_store import (
     scan_annotation_files,
     save_dataset,
@@ -43,6 +43,69 @@ def _param_label(text: str, tip: str | None = None,
                       style={"fontSize": font_size, "color": "var(--ned-text-muted)"})
 
 
+# Background source choices shown in the UI (value = DatasetConfig.background_source,
+# label, what it needs: None, "proposed" = any background stretch, "confirmed").
+_BG_SOURCE_CHOICES = [
+    ("random", "Random background (default)", None),
+    ("none", "Rejected events only", None),
+    ("proposed", "Proposed background (unreviewed)", "proposed"),
+    ("confirmed", "Confirmed background", "confirmed"),
+    ("confirmed+random", "Confirmed background + random", "confirmed"),
+]
+# What we know about each option (internal tests, 2026-10). Kept honest: one
+# cohort, one or two trainings each.
+_BG_SOURCE_HELP = (
+    "Besides your rejected events, the model also needs examples of normal EEG. "
+    "This sets where they come from."
+)
+_BG_SOURCE_OPTION_HELP = {
+    "random": (
+        "What the current models use, and the safest choice. Random stretches of "
+        "your recordings are used as normal EEG. Some may contain seizures nobody "
+        "annotated, which teaches the model to miss a few of them. Best when the "
+        "model will run on animals you haven't annotated."),
+    "none": (
+        "Only your rejected events are used as negatives. The model flags more: "
+        "with a lower threshold it can find more of your seizures than random "
+        "background allows, but it produces many more detections to review. Its "
+        "best threshold varies a lot between trainings, so check it on your own "
+        "recordings. Not recommended for animals you haven't annotated. Needs a "
+        "good number of rejected events."),
+    "proposed": (
+        "Uses the quiet stretches proposed on the Seizures page (Propose background) "
+        "instead of random time, whether or not you reviewed them; your rejected "
+        "background stretches are left out. In our tests it found as many seizures as "
+        "random background at normal numbers of detections, and more when more "
+        "detections were allowed. Confirmed background is the cleaner version of the "
+        "same stretches."),
+    "confirmed": (
+        "Uses only the background stretches you confirmed (Training > Background): "
+        "the proposed stretches, checked by you, so no hidden seizures among the "
+        "negatives. The unreviewed version tested as safe in our tests; this one needs "
+        "confirmed stretches from every animal, asleep and awake."),
+    "confirmed+random": (
+        "Uses your confirmed background first, then random stretches to make up the "
+        "number. A middle ground while you have few confirmed stretches."),
+}
+
+
+def _bg_source_options(has_confirmed: bool, has_proposed: bool = False) -> list[dict]:
+    """Select options; the background-file ones are disabled without the stretches
+    they need."""
+    have = {"confirmed": has_confirmed, "proposed": has_proposed or has_confirmed}
+    opts = []
+    for value, label, needs in _BG_SOURCE_CHOICES:
+        off = needs is not None and not have[needs]
+        why = " (no confirmed background)" if needs == "confirmed" else " (no background proposed)"
+        opts.append({"label": label + (why if off else ""), "value": value, "disabled": off})
+    return opts
+
+
+def _fmt_minutes(sec: float) -> str:
+    m = (sec or 0) / 60.0
+    return f"{m:.0f} min" if m >= 10 else f"{m:.1f} min"
+
+
 def layout(sid: str | None) -> html.Div:
     """Return the ML dataset builder layout."""
     state = server_state.get_session(sid)
@@ -62,7 +125,7 @@ def layout(sid: str | None) -> html.Div:
             html.P(
                 "Select a folder containing annotated EDF recordings to "
                 "build a training dataset. Annotations are discovered "
-                "automatically from files saved by the Training tab.",
+                "automatically from files saved by the annotation pages.",
                 style={"color": "var(--ned-text-muted)", "fontSize": "0.9rem",
                        "marginBottom": "24px"},
             ),
@@ -128,7 +191,7 @@ def layout(sid: str | None) -> html.Div:
             ], className="mb-3"),
 
             # ── Scan results ─────────────────────────────────────
-            dcc.Loading(
+            loading(
                 html.Div(id="ml-scan-results"),
                 type="circle", color="#58a6ff",
             ),
@@ -346,6 +409,49 @@ def layout(sid: str | None) -> html.Div:
                                       className="form-control", size="sm"),
                         ], width=2),
                     ], className="g-2 mb-3"),
+
+                    # Where "no seizure" windows come from (seizure U-Net only;
+                    # DatasetConfig.background_source). "proposed" is research-only
+                    # and deliberately not offered here.
+                    html.Div(id="ml-bg-source-wrap", children=[
+                        dbc.Row([
+                            dbc.Col([
+                                _param_label(
+                                    "Background source",
+                                    "Where the negative (no seizure) windows come "
+                                    "from besides your rejected events. Rejected "
+                                    "background stretches are never used as "
+                                    "negatives."),
+                                dbc.Select(
+                                    id="ml-bg-source",
+                                    options=_bg_source_options(has_confirmed=False),
+                                    value="random",
+                                    size="sm",
+                                ),
+                            ], width=4),
+                            dbc.Col([
+                                html.Div(
+                                    _BG_SOURCE_HELP,
+                                    style={"fontSize": "0.75rem",
+                                           "color": "var(--ned-text-muted)",
+                                           "marginTop": "18px"},
+                                ),
+                                html.Div(
+                                    _BG_SOURCE_OPTION_HELP["random"],
+                                    id="ml-bg-source-help",
+                                    style={"fontSize": "0.75rem",
+                                           "color": "var(--ned-text)",
+                                           "marginTop": "2px"},
+                                ),
+                                html.Div(
+                                    id="ml-bg-source-note",
+                                    style={"fontSize": "0.75rem",
+                                           "color": "var(--ned-text-muted)",
+                                           "marginTop": "2px"},
+                                ),
+                            ], width=8),
+                        ], className="g-2 mb-3"),
+                    ]),
                     ]),  # /ml-train-hyperparams
 
                     # Note shown in place of the hyperparameters for the re-ranker.
@@ -377,7 +483,7 @@ def layout(sid: str | None) -> html.Div:
                         className="mb-3",
                         children=[
                             dbc.Button(
-                                "🚀 Start Training",
+                                "Start Training",
                                 id="ml-train-btn",
                                 style={
                                     "backgroundColor": "#238636",
@@ -473,7 +579,7 @@ def scan_folder(n_clicks, folder, ann_type, sid):
         return (
             alert(
                 f"No {type_label} annotation files found in {folder}. "
-                "Annotate recordings in the Training tab first.",
+                "Annotate recordings in Seizure Annotation first.",
                 "warning",
             ),
             no_update,
@@ -506,6 +612,11 @@ def scan_folder(n_clicks, folder, ann_type, sid):
             "confirmed_nonconv": r["n_confirmed_nonconv"],
             "rejected_conv": r["n_rejected_conv"],
             "rejected_nonconv": r["n_rejected_nonconv"],
+            # background stretches (seizures only; 0 without a background file)
+            "bg_confirmed": r.get("n_bg_confirmed", 0),
+            "bg_rejected": r.get("n_bg_rejected", 0),
+            "bg_pending": r.get("n_bg_pending", 0),
+            "bg_confirmed_sec": r.get("bg_confirmed_sec", 0.0),
             "is_seizure": is_seizure,
         })
 
@@ -515,17 +626,27 @@ def scan_folder(n_clicks, folder, ann_type, sid):
             "headerName": "File",
             "checkboxSelection": True,
             "headerCheckboxSelection": True,
-            "flex": 2,
-            "minWidth": 250,
+            "flex": 3,
+            "minWidth": 160,
         },
-        {"field": "confirmed", "headerName": "Confirmed", "width": 110,
+        {"field": "confirmed", "headerName": "Confirmed", "flex": 1, "minWidth": 78,
          "type": "numericColumn"},
-        {"field": "rejected", "headerName": "Rejected", "width": 110,
+        {"field": "rejected", "headerName": "Rejected", "flex": 1, "minWidth": 78,
          "type": "numericColumn"},
-        {"field": "pending", "headerName": "Pending", "width": 110,
+        {"field": "pending", "headerName": "Pending", "flex": 1, "minWidth": 78,
          "type": "numericColumn"},
-        {"field": "total", "headerName": "Total", "width": 100,
+        {"field": "total", "headerName": "Total", "flex": 1, "minWidth": 78,
          "type": "numericColumn"},
+        # background stretches (Training > Background); seizure datasets only
+        {"field": "bg_confirmed", "headerName": "BG confirmed", "flex": 1, "minWidth": 78,
+         "type": "numericColumn", "hide": not is_seizure,
+         "headerTooltip": "Confirmed seizure-free background stretches"},
+        {"field": "bg_rejected", "headerName": "BG rejected", "flex": 1, "minWidth": 78,
+         "type": "numericColumn", "hide": not is_seizure},
+        {"field": "bg_pending", "headerName": "BG pending", "flex": 1, "minWidth": 78,
+         "type": "numericColumn", "hide": not is_seizure,
+         "headerTooltip": "Proposed background stretches not yet reviewed"},
+        {"field": "bg_confirmed_sec", "hide": True},
         # hidden — used only to re-aggregate the summary on selection change
         {"field": "confirmed_conv", "hide": True},
         {"field": "confirmed_nonconv", "hide": True},
@@ -538,13 +659,16 @@ def scan_folder(n_clicks, folder, ann_type, sid):
         id="ml-file-grid",
         rowData=rows,
         columnDefs=col_defs,
-        defaultColDef={"sortable": True, "resizable": True},
+        defaultColDef={"sortable": True, "resizable": True,
+                       "wrapHeaderText": True, "autoHeaderHeight": True},
+        # Flex columns share the grid's width and refit when the window resizes;
+        # each can still be dragged wider or narrower (minimum ~700 px in total).
         dashGridOptions={
             "rowSelection": {"mode": "multiRow"},
             "suppressRowClickSelection": True,
         },
         selectedRows=rows,  # select all by default
-        style={"height": f"{min(60 + len(rows) * 42, 500)}px"},
+        style={"height": f"{min(80 + len(rows) * 42, 520)}px", "width": "100%"},
         className="ag-theme-alpine-dark",
     )
 
@@ -560,6 +684,7 @@ def scan_folder(n_clicks, folder, ann_type, sid):
         rej_conv=sum(r["n_rejected_conv"] for r in results),
         rej_nonconv=sum(r["n_rejected_nonconv"] for r in results),
         is_seizure=is_seizure,
+        bg=_bg_totals(rows),
     )
 
     # Animal ID warning
@@ -567,7 +692,7 @@ def scan_folder(n_clicks, folder, ann_type, sid):
     if files_missing_ids:
         id_warning = [alert(
             f"Animal IDs not assigned for: {', '.join(files_missing_ids)}. "
-            "Load each file and fill in the Animal ID column on the Load tab "
+            "Load each file and fill in the Animal ID column on the Load page "
             "before training. Animal IDs are needed for proper train/validation splitting.",
             "warning",
         )]
@@ -584,13 +709,40 @@ def scan_folder(n_clicks, folder, ann_type, sid):
     return content, rows, {"display": "block", "marginTop": "24px"}, {"display": "block", "marginTop": "8px"}
 
 
+def _bg_totals(rows: list[dict] | None) -> dict:
+    """Sum the background columns of grid rows (scan rows or selected rows)."""
+    rows = rows or []
+    return {
+        "confirmed": sum(r.get("bg_confirmed", 0) or 0 for r in rows),
+        "rejected": sum(r.get("bg_rejected", 0) or 0 for r in rows),
+        "pending": sum(r.get("bg_pending", 0) or 0 for r in rows),
+        "confirmed_sec": sum(r.get("bg_confirmed_sec", 0) or 0 for r in rows),
+    }
+
+
+def _bg_summary_line(bg: dict) -> html.Div:
+    """One muted line with the background-stretch totals."""
+    if not (bg["confirmed"] or bg["rejected"] or bg["pending"]):
+        text = ("Background: no background stretches yet (propose them in "
+                "Detection, review them in Training > Background).")
+    else:
+        text = (f"Background: {bg['confirmed']} confirmed stretch"
+                f"{'es' if bg['confirmed'] != 1 else ''} "
+                f"({_fmt_minutes(bg['confirmed_sec'])}), "
+                f"{bg['rejected']} rejected, {bg['pending']} pending")
+    return html.Div(text, style={"fontSize": "0.82rem", "marginTop": "8px",
+                                 "color": "var(--ned-text-muted)"})
+
+
 def _build_summary(n_files, n_confirmed, n_rejected, n_pending,
                    conf_conv=0, conf_nonconv=0, rej_conv=0, rej_nonconv=0,
-                   is_seizure=True):
+                   is_seizure=True, bg=None):
     """Build metric cards summarising the selected dataset.
 
     For seizures the confirmed/rejected counts are split into separate
     convulsive vs non-convulsive cards; for spikes the plain cards are used.
+    For seizures a line with the background-stretch totals (``bg``, from
+    ``_bg_totals``) follows the cards.
     """
     if is_seizure:
         confirmed_cards = [
@@ -605,7 +757,7 @@ def _build_summary(n_files, n_confirmed, n_rejected, n_pending,
         confirmed_cards = [metric_card("Confirmed", str(n_confirmed), accent=True)]
         rejected_cards = [metric_card("Rejected", str(n_rejected))]
 
-    return html.Div(
+    cards = html.Div(
         style={"display": "flex", "gap": "16px", "flexWrap": "wrap"},
         children=[
             metric_card("Files", str(n_files)),
@@ -616,6 +768,9 @@ def _build_summary(n_files, n_confirmed, n_rejected, n_pending,
                         str(n_confirmed + n_rejected + n_pending)),
         ],
     )
+    if not is_seizure:
+        return cards
+    return html.Div([cards, _bg_summary_line(bg or _bg_totals([]))])
 
 
 # ── Update summary on selection change ───────────────────────────────
@@ -645,6 +800,7 @@ def update_summary(selected_rows, ann_type):
         rej_conv=sum(r.get("rejected_conv", 0) for r in selected_rows),
         rej_nonconv=sum(r.get("rejected_nonconv", 0) for r in selected_rows),
         is_seizure=bool(selected_rows[0].get("is_seizure", True)),
+        bg=_bg_totals(selected_rows),
     )
 
 
@@ -1059,6 +1215,68 @@ def toggle_arch_train_params(architecture):
 
 
 @callback(
+    Output("ml-bg-source-wrap", "style"),
+    Input("ml-architecture", "value"),
+    Input("ml-type-radio", "value"),
+)
+def toggle_bg_source(architecture, ann_type):
+    """Background source applies only to the seizure U-Net (DatasetConfig);
+    the convulsive classifier and the spike pipeline don't use it."""
+    show = (architecture or "unet") == "unet" and ann_type != "spike"
+    return {"display": "block"} if show else {"display": "none"}
+
+
+def _bg_source_state(rows, current):
+    """Options, value and note for ml-bg-source from the selected grid rows."""
+    bg = _bg_totals(rows)
+    has_confirmed = bg["confirmed"] > 0
+    has_proposed = (bg["confirmed"] + bg["pending"]) > 0
+    options = _bg_source_options(has_confirmed, has_proposed)
+    value = current or "random"
+    if not has_confirmed and value in ("confirmed", "confirmed+random"):
+        value = "random"
+    if not has_proposed and value == "proposed":
+        value = "random"
+    if has_confirmed:
+        note = (f"Selected files: {bg['confirmed']} confirmed background "
+                f"stretch{'es' if bg['confirmed'] != 1 else ''} "
+                f"({_fmt_minutes(bg['confirmed_sec'])}).")
+    else:
+        note = ("No confirmed background in the selected files, so the "
+                "confirmed options are off. Review background stretches in "
+                "Training > Background, then scan again.")
+    return options, value, note
+
+
+@callback(
+    Output("ml-bg-source", "options"),
+    Output("ml-bg-source", "value"),
+    Output("ml-bg-source-note", "children"),
+    Input("ml-scan-data", "data"),
+    State("ml-bg-source", "value"),
+    prevent_initial_call=True,
+)
+def update_bg_source_from_scan(rows, current):
+    """After a scan (all files selected), enable the confirmed options if any."""
+    if rows is None:
+        return no_update, no_update, no_update
+    return _bg_source_state(rows, current)
+
+
+@callback(
+    Output("ml-bg-source", "options", allow_duplicate=True),
+    Output("ml-bg-source", "value", allow_duplicate=True),
+    Output("ml-bg-source-note", "children", allow_duplicate=True),
+    Input("ml-file-grid", "selectedRows"),
+    State("ml-bg-source", "value"),
+    prevent_initial_call=True,
+)
+def update_bg_source_from_selection(selected_rows, current):
+    """Follow the file selection: confirmed options need confirmed background."""
+    return _bg_source_state(selected_rows, current)
+
+
+@callback(
     Output("ml-train-progress", "children"),
     Output("ml-train-poll", "disabled"),
     Output("ml-train-running", "data"),
@@ -1081,13 +1299,15 @@ def toggle_arch_train_params(architecture):
     State("ml-pretrained-weights", "value"),
     State("ml-freeze-backbone", "value"),
     State("ml-exclude-animals", "value"),
+    State("ml-bg-source", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
                    ann_type, epochs, batch_size, lr, patience, pos_weight,
                    neg_ratio, architecture, encoder_lr, freeze_epochs,
-                   pretrained_weights, freeze_backbone, exclude_animals, sid):
+                   pretrained_weights, freeze_backbone, exclude_animals,
+                   bg_source, sid):
     """Start model training in a background thread."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -1130,6 +1350,12 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
             neg_pos_ratio=_to_float(neg_ratio, 2.0),
             exclude_animals=excl,
         )
+        # Background source: seizure U-Net only (the control is hidden for the
+        # convulsive classifier, which doesn't use it). UI values only.
+        if (architecture or "unet") == "unet":
+            allowed = {v for v, _, _ in _BG_SOURCE_CHOICES}
+            dataset_config.background_source = (
+                bg_source if bg_source in allowed else "random")
     _arch = architecture or "unet"
     # The radio uses the short value "convulsive"; the saved/loaded architecture
     # tag is "convulsive_classifier" (matches metadata + load_trained_model).
@@ -1174,6 +1400,8 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
         f"neg/pos={dataset_config.neg_pos_ratio:g} · "
         f"epochs={train_config.epochs} · patience={train_config.patience}"
     )
+    if ann_type != "spike" and train_config.architecture == "unet":
+        settings += f" · background={dataset_config.background_source}"
     if train_config.architecture == "bendr":
         settings += (
             f" · freeze_backbone={train_config.freeze_backbone} · "
@@ -1260,7 +1488,7 @@ def poll_training(n_intervals, is_running, sid):
         events = info.get("events")
         if done is not None and total_f:
             pct = int(100 * done / total_f) if total_f > 0 else 0
-            detail = (f"📦 Reading recordings & extracting features — "
+            detail = (f"Reading recordings & extracting features — "
                       f"file {done}/{total_f}"
                       + (f" · {events} events so far" if events else ""))
             bar = html.Div([
@@ -1283,7 +1511,7 @@ def poll_training(n_intervals, is_running, sid):
                     style={"height": "24px", "marginBottom": "8px"},
                 ),
                 html.Div(
-                    "📦 Building dataset (loading EDF files, extracting "
+                    "Building dataset (loading EDF files, extracting "
                     "features)...",
                     style={"fontSize": "0.85rem", "color": "var(--ned-text-muted)",
                            "textAlign": "center"},
@@ -1333,8 +1561,8 @@ def poll_training(n_intervals, is_running, sid):
         model_path = info.get("model_path", "")
         n_params = info.get("n_params", 0)
         was_stopped = info.get("stopped", False)
-        title = ("⏹ Training Stopped (best model kept)" if was_stopped
-                 else "✅ Training Complete")
+        title = ("Training stopped (best model kept)" if was_stopped
+                 else "Training complete")
 
         # Build results summary
         results = html.Div([
@@ -1417,3 +1645,13 @@ def poll_training(n_intervals, is_running, sid):
         return error_bar, True, False, False, no_update, no_update
 
     return no_update, no_update, no_update, no_update, no_update, no_update
+
+
+@callback(
+    Output("ml-bg-source-help", "children"),
+    Input("ml-bg-source", "value"),
+)
+def show_bg_source_help(value):
+    """Explain the selected background source."""
+    return _BG_SOURCE_OPTION_HELP.get(value or "random", _BG_SOURCE_OPTION_HELP["random"])
+

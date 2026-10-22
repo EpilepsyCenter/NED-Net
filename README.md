@@ -29,9 +29,9 @@ It runs locally as a Dash app, in its own desktop window or in a browser.
 | **Seizure detection** | Four rule-based methods plus the trained U-Net. The U-Net runs with an optional convulsive classifier and hysteresis boundaries. Result filters, an event inspector, CSV export, and "Add to project database". |
 | **Interictal spikes** | Rule-based or U-Net spike detection with morphology features, spike-rate metrics and filters. |
 | **Event inspector** | Pan through the recording, change the context (±10–120 s), and click an amplitude overview strip (±5 min, ±15 min or the whole recording) to jump. Step through events with Prev/Next or the keyboard. |
-| **Training (review)** | Confirm or reject candidates, edit boundaries, flag convulsive seizures, add or remove events by hand. Every candidate shows where it came from. Confirmed and rejected events become training data. |
-| **Dataset / Model** | Build datasets from reviewed recordings and train the U-Net or the convulsive classifier, with live progress. |
-| **Analysis** | Run a trained model on one file, a folder (batch) or a watched folder (live monitoring). Choosing a model fills in its recommended operating point. Output goes to a project database, the training review queue, or both. HVSW/HPD subtype classification. |
+| **Training (review)** | Confirm or reject candidates, edit boundaries, flag convulsive seizures, add or remove events by hand, jump to any event from the event list, autoscale with `A`. Every candidate shows where it came from. Confirmed and rejected events become training data. Seizure-free background stretches are reviewed the same way. |
+| **Dataset & Model** | Build datasets from reviewed recordings and train the U-Net or the convulsive classifier, with live progress. **Blind Review** checks a model's detections on held-out recordings without showing its scores. |
+| **Batch Analysis** | Run a trained model on one file, a folder (batch) or a watched folder (live monitoring). Choosing a model fills in its recommended operating point. Output goes to a project database, the training review queue, or both. HVSW/HPD subtype classification. |
 | **Results** | Per-project statistics: group comparison (raw or per animal-hour), per-animal summary with include/valid-until controls, longitudinal, distributions, daily burden and circadian plots, an interictal-spike panel, and CSV/XLSX export. |
 | **Tools** | WMV→MP4 video conversion, and ADICHT→EDF conversion (Windows). |
 
@@ -85,6 +85,10 @@ editable package.
 
 The desktop app serves on `127.0.0.1:8051`, or a free port if that one is taken.
 
+**Packaged app.** Self-contained apps (no Python needed) for macOS, Windows and Linux are on
+the **Releases** page: pushing a version tag builds them on GitHub. See
+[docs/PACKAGING.md](docs/PACKAGING.md).
+
 **Browser.**
 
 ```bash
@@ -95,31 +99,33 @@ python -m eeg_seizure_analyzer.dash_app.main      # then open http://127.0.0.1:8
 
 **Rule-based, one recording**
 1. **Load** a recording and set the animal IDs.
-2. **Detection → Seizure:** pick a method, tune it, detect.
+2. **Seizures** (Detection in the sidebar): pick a method, tune it, detect.
 3. Inspect events, filter them, export CSV, or add them to the project database.
 
 **Trained model, a whole study**
-1. **Analysis:** choose a project and a model (its recommended thresholds are filled in), then
-   run on a folder.
+1. **Batch Analysis:** choose a project and a model (its recommended thresholds are filled
+   in), then run on a folder.
 2. **Results:** group and per-animal statistics.
 3. On a new cohort or implant, send output to the **training review queue** as well. Review a
-   sample in **Training**, then retrain in **Dataset / Model**. Models transfer poorly to
+   sample in **Seizure Annotation**, then retrain in **Dataset & Model**. Models transfer poorly to
    animals they have not seen, so plan to retrain on each new cohort.
 
 ---
 
-## Tab structure
+## App layout
 
-| Tab | Subtabs | Purpose |
+A sidebar lists the pages; the toolbar shows the open recording and a status bar what is saved.
+The Viewer, detection and annotation pages keep their settings in a panel on the right that can
+be resized and hidden. The desktop app has native menus (File, Go, Tools, Help) and keyboard
+shortcuts (`⌘`/`Ctrl` + `1`–`9` for the pages).
+
+| Sidebar group | Pages | Purpose |
 |---|---|---|
-| **Load** | — | Start screen with recent files, file and folder loading, channel selection, IDs and tags |
-| **Viewer** | — | Multi-channel EEG browser, filters, overlays, SVG export, video |
-| **Detection** | Seizure, Interictal Spikes | Rule-based and U-Net detection, filters, inspector, export |
-| **Training** | Seizure, Interictal Spikes | Review: label candidates, edit boundaries, add or remove events |
-| **Dataset / Model** | Dataset | Build datasets, train the U-Net or the convulsive classifier |
-| **Analysis** | — | Model inference: single file, batch, live monitoring |
-| **Results** | — | Per-project statistics, charts and exports |
-| **Tools** | Video Converter, ADICHT → EDF | Conversion utilities |
+| Recording | **Load**, **Viewer** | Start screen, loading, channel selection, IDs and tags; multi-channel EEG browser, filters, overlays, SVG export, video |
+| Detection | **Seizures**, **Interictal Spikes** | Rule-based and U-Net detection, filters, inspector, export |
+| Training | **Seizure Annotation**, **Spike Annotation**, **Background** | Review: label candidates, edit boundaries, add or remove events; seizure-free background stretches |
+| Model | **Dataset & Model**, **Blind Review**, **Batch Analysis**, **Results** | Build datasets and train models; blind check of a model's detections; model inference (single file, batch, live); per-project statistics, charts and exports |
+| Tools | **Video Converter**, **ADICHT → EDF** | Conversion utilities |
 
 ---
 
@@ -147,7 +153,7 @@ which the result filters use.
    detected event and sets the convulsive flag. It **labels events and never removes them**.
    Without it, the U-Net's own convulsive output decides.
 
-**Operating points.** Choosing a model in Analysis, or in the Detection tab's U-Net panel,
+**Operating points.** Choosing a model in Batch Analysis, or in the Seizures page's U-Net settings,
 fills in its recommended operating point (`ml/operating_points.py`). In order of preference:
 - the model's own `operating_point` entry in its `metadata.json`, for a point you validated
   yourself (detection and boundary thresholds, convulsive classifier and its threshold);
@@ -198,10 +204,11 @@ it.
 
 | File | Contents | Written by |
 |---|---|---|
-| `<name>_ned_annotations.json` | **Seizure review state, and the only source of training data.** Every candidate with its label (pending / confirmed / rejected), edits, notes and origin. | Training; a Detection-tab run (as pending); Analysis with the review-queue output |
-| `<name>_ned_detections.json` | The last Detection-tab seizure run: events, parameters and filter settings, so the tab can restore itself. Training edits never change it. | Detection → Seizure |
-| `<name>_ned_spikes.json` | The last interictal-spike run | Detection → Interictal Spikes |
-| `<name>_ned_spike_annotations.json` | Spike review state | Training → Interictal Spikes |
+| `<name>_ned_annotations.json` | **Seizure review state, and the only source of training data.** Every candidate with its label (pending / confirmed / rejected), edits, notes and origin. | Training; a Seizures-page run (as pending); Analysis with the review-queue output |
+| `<name>_ned_detections.json` | The last seizure run on the Seizures page: events, parameters and filter settings, so the page can restore itself. Training edits never change it. | Seizures |
+| `<name>_ned_spikes.json` | The last interictal-spike run | Interictal Spikes |
+| `<name>_ned_spike_annotations.json` | Spike review state | Spike Annotation |
+| `<name>_ned_background_annotations.json` | Background stretches and their review state | Seizures (Propose background); Background |
 | `<name>_ned_channels.json` | Animal ID per channel | Load |
 | `<name>_ned_meta.json` | Cohort and group per channel | Load |
 
@@ -251,11 +258,13 @@ the same for interictal spikes. ADICHT files convert from the command line with
 ```
 eeg_seizure_analyzer/
 ├── dash_app/
-│   ├── main.py, desktop.py        # app and routing; native desktop window
-│   ├── pages/                     # one module per tab (upload, viewer, seizures, spikes,
-│   │                              #   training, training_spikes, ml_datasets, analysis,
-│   │                              #   results, tools, adicht_converter)
-│   ├── components.py              # shared UI pieces (parameter controls, filter panel, menus)
+│   ├── main.py, desktop.py        # app, sidebar navigation; native window, menus, splash
+│   ├── pages/                     # one module per page (upload, viewer, seizures, spikes,
+│   │                              #   training, training_spikes, training_background,
+│   │                              #   ml_datasets, blind_review, analysis, results, tools,
+│   │                              #   adicht_converter)
+│   ├── components.py              # shared UI pieces (two-pane pages, parameter controls,
+│   │                              #   filter panel, menus)
 │   ├── inspector_view.py          # pan / context / overview strip / grid navigation
 │   ├── file_dialogs.py            # native file and folder dialogs per platform
 │   ├── recent.py                  # recent files on the start screen
@@ -273,6 +282,7 @@ eeg_seizure_analyzer/
 ├── db.py                          # project databases
 └── config.py                      # default parameters
 scripts/slurm/                     # example SLURM job scripts (setup, training, batch detection)
+packaging/                         # PyInstaller recipe, app entry point, Windows installer (docs/PACKAGING.md)
 ```
 
 Earlier research code is kept in `ml/` but not used by the app: the BENDR foundation-model
@@ -284,7 +294,7 @@ experiments (`bendr_*`, `train_bendr.py`, CLI `eeg-bendr-pretrain`) and an event
 ## User manual
 
 The full manual is [`eeg_seizure_analyzer/dash_app/assets/USER_MANUAL.md`](eeg_seizure_analyzer/dash_app/assets/USER_MANUAL.md).
-The app shows the same file at **Help** in the sidebar, and it also works offline.
+The app shows the same file at **Help** in the sidebar (and **Help › NED-Net Manual** in the desktop app), and it also works offline.
 
 ---
 

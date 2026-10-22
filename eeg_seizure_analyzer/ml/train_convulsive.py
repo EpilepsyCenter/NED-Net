@@ -407,6 +407,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model-name", default="conv_v1")
     p.add_argument("--exclude-animals", nargs="*", default=[], metavar="ID",
                    help="animal IDs to drop entirely, e.g. --exclude-animals A12 A17")
+    p.add_argument("--val-pairs-file", default="", metavar="JSON",
+                   help="use exactly the (animal, recording) validation pairs in this "
+                        "file (as for train_unet --val-pairs-file) instead of computing "
+                        "a split; overrides --val-mode.")
     p.add_argument("--val-mode", choices=["animal", "recording", "temporal"],
                    default="animal",
                    help="how the train/val split is drawn; must MATCH the Stage-1 run or "
@@ -467,8 +471,11 @@ def main(argv: list[str] | None = None) -> int:
         conv_neg_pos_ratio=args.conv_neg_pos_ratio,
         max_positive_sec=args.max_positive_sec,
         val_mode=args.val_mode,
+        val_pairs_file=args.val_pairs_file,
     )
-    if args.val_mode != "animal":
+    if args.val_pairs_file:
+        print(f"Val pairs file: {args.val_pairs_file}")
+    elif args.val_mode != "animal":
         print(f"Split mode: {args.val_mode} — every animal in BOTH train and val. "
               f"Measures deployment, NOT generalisation to a new animal.")
     if args.conv_label_method:

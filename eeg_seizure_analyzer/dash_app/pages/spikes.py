@@ -14,6 +14,7 @@ import dash_ag_grid as dag
 
 from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app.components import (
+    loading,
     apply_fig_theme,
     metric_card,
     no_recording_placeholder,
@@ -26,6 +27,10 @@ from eeg_seizure_analyzer.dash_app.components import (
     filter_panel,
     filter_range,
     hidden_by_filters,
+    fit_header_widths,
+    grid_height,
+    page_header,
+    split_page,
 )
 from eeg_seizure_analyzer.config import SpikeDetectionParams
 from eeg_seizure_analyzer.dash_app import inspector_view as iv
@@ -156,160 +161,135 @@ def layout(sid: str | None) -> html.Div:
     ch_options = [{"label": rec.channel_names[i], "value": i}
                   for i in range(rec.n_channels)]
 
-    return html.Div(
-        style={"padding": "24px"},
-        children=[
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "20px"},
-                children=[
-                    html.H4("Interictal Spike Detection", style={"margin": "0"}),
-                ],
-            ),
+    # Results area hint until there are detections (replaced by the
+    # detection callback's output)
+    if not has_results:
+        existing_results = html.Div(
+            "No detections yet. Choose a method and its parameters in the "
+            "panel on the right, then press Detect Spikes.",
+            className="page-empty-hint",
+        )
 
-            # Detection method selector (Classical / U-Net) — above channels,
-            # matching the seizure tab.
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Label(
-                        "Detection method",
-                        style={"fontSize": "0.82rem", "fontWeight": "500",
-                               "marginBottom": "6px", "display": "block",
-                               "color": "var(--ned-text-muted)"}),
-                    dbc.RadioItems(
-                        id="sp-method-selector",
-                        options=_SP_METHOD_OPTIONS,
-                        value=persisted_method,
-                        inline=True,
-                        className="mb-2",
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ],
-            ),
+    actions = [
+        dbc.Button("Detect Spikes", id="sp-detect-btn",
+                   className="btn-ned-primary"),
+        # The main action when several files are open (shown only then,
+        # as on the Seizure page)
+        dbc.Button(
+            "Detect All Files",
+            id="sp-detect-all-btn",
+            className="btn-ned-primary",
+            style={"display": "inline-block"
+                   if state.extra.get("project_files")
+                   else "none"},
+        ),
+        dbc.Button(
+            "Clear Results",
+            id="sp-clear-btn",
+            className="btn-ned-danger",
+            style={"display": "inline-block" if has_results else "none"},
+        ),
+        dbc.Button(
+            "Add to project database",
+            id="sp-add-to-db-btn",
+            className="btn-ned-secondary",
+            style={"display": "inline-block" if has_results else "none"},
+        ),
+        params_menu("sp", has_results),
+    ]
 
-            # Channel selector
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Label(
-                        "Channels to analyze",
-                        style={"fontSize": "0.82rem", "fontWeight": "500",
-                               "marginBottom": "6px", "display": "block",
-                               "color": "var(--ned-text-muted)"},
-                    ),
-                    dcc.Dropdown(
-                        id="sp-channel-selector",
-                        options=ch_options,
-                        value=selected_channels,
-                        multi=True,
-                        placeholder="Select channels...",
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ],
-            ),
+    # ── Work area (left): actions, results, inspector, rate, export ──
+    main = [
+        page_header("Interictal Spike Detection", actions=actions),
 
-            # Classical params (shown/hidden by method). Isolation lives here and
-            # is reused by the ML methods, so the panel stays mounted.
-            html.Div(
-                id="sp-classical-params",
-                style={"display": "block" if persisted_method == "classical" else "none"},
-                children=[
-                    dbc.Row([
-                        dbc.Col([
-                            _spike_params(_val),
-                        ], width=4),
-                        dbc.Col([
-                            _morphology_params(_val),
-                        ], width=4),
-                        dbc.Col([
-                            _baseline_params(_val, persisted_bl_method),
-                        ], width=4),
-                    ], className="g-3 mb-3"),
-                ],
-            ),
+        html.Div(id="sp-settings-status", style={"marginBottom": "8px"}),
+        html.Div(id="sp-add-to-db-status", style={"marginBottom": "8px"}),
+        # Batch "Detect All Files" progress + polling
+        html.Div(id="sp-detect-all-status", style={"marginBottom": "8px"}),
+        dcc.Interval(id="sp-detect-all-poll", interval=800, disabled=True),
+        dcc.Store(id="sp-detect-all-running", data=False),
 
-            # U-Net (ML) params (shown/hidden by method)
-            html.Div(
-                id="sp-unet-params",
-                style={"display": "block" if persisted_method == "unet" else "none"},
-                children=[_sp_unet_params(state)],
-            ),
+        loading(
+            html.Div(id="sp-status"),
+            type="circle", color="#58a6ff",
+        ),
 
-            # Isolation — shared across methods, always visible
-            dbc.Row([
-                dbc.Col([_isolation_params(_val)], width=4),
-            ], className="g-3 mb-3"),
+        # Filters
+        _spike_filter_controls(has_results, rec, fv, filter_enabled),
 
-            # Action buttons + settings buttons
-            html.Div(
-                style={"display": "flex", "gap": "12px", "marginBottom": "20px",
-                       "alignItems": "center"},
-                children=[
-                    dbc.Button(
-                        "Detect Spikes",
-                        id="sp-detect-btn",
-                        className="btn-ned-primary",
-                    ),
-                    dbc.Button(
-                        "Clear Results",
-                        id="sp-clear-btn",
-                        className="btn-ned-danger",
-                        style={"display": "inline-block" if has_results else "none"},
-                    ),
-                    # The main action when several files are open (shown only then,
-                    # as on the Seizure page)
-                    dbc.Button(
-                        "\U0001F4C1 Detect All Files",
-                        id="sp-detect-all-btn",
-                        className="btn-ned-primary",
-                        style={"display": "inline-block"
-                               if state.extra.get("project_files")
-                               else "none"},
-                    ),
-                    dbc.Button(
-                        "Add to project database",
-                        id="sp-add-to-db-btn",
-                        className="btn-ned-secondary",
-                        style={"display": "inline-block" if has_results else "none"},
-                    ),
-                    html.Div(style={"flex": "1"}),
-                    params_menu("sp", has_results),
-                ],
-            ),
+        # Results area — pre-populated if results exist
+        html.Div(id="sp-results", children=existing_results),
 
-            html.Div(id="sp-settings-status", style={"marginBottom": "8px"}),
-            html.Div(id="sp-add-to-db-status", style={"marginBottom": "8px"}),
-            # Batch "Detect All Files" progress + polling
-            html.Div(id="sp-detect-all-status", style={"marginBottom": "8px"}),
-            dcc.Interval(id="sp-detect-all-poll", interval=800, disabled=True),
-            dcc.Store(id="sp-detect-all-running", data=False),
+        # Inspector controls — outside sp-results so they survive re-renders
+        _sp_inspector_controls(has_results),
 
-            dcc.Loading(
-                html.Div(id="sp-status"),
-                type="circle", color="#58a6ff",
-            ),
+        # Inspector output
+        html.Div(id="sp-event-inspector", style={"marginTop": "12px"}),
 
-            # Filters
-            _spike_filter_controls(has_results, rec, fv, filter_enabled),
+        # Rate graph — below inspector
+        html.Div(id="sp-rate-graph", children=existing_rate_graph),
 
-            # Results area — pre-populated if results exist
-            html.Div(id="sp-results", children=existing_results),
+        # Export controls
+        _sp_export_controls(has_results, state.spike_events, rec),
+        dcc.Download(id="sp-export-download"),
+    ]
 
-            # Inspector controls — outside sp-results so they survive re-renders
-            _sp_inspector_controls(has_results),
+    # ── Settings panel (right): method, channels, parameters ─────────
+    panel = [
+        # Detection method selector (Classical / U-Net)
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Detection method", className="panel-label"),
+                dbc.RadioItems(
+                    id="sp-method-selector",
+                    options=_SP_METHOD_OPTIONS,
+                    value=persisted_method,
+                    inline=False,
+                    className="panel-radio",
+                ),
+            ],
+        ),
 
-            # Inspector output
-            html.Div(id="sp-event-inspector", style={"marginTop": "12px"}),
+        # Channel selector
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Channels to analyze", className="panel-label"),
+                dcc.Dropdown(
+                    id="sp-channel-selector",
+                    options=ch_options,
+                    value=selected_channels,
+                    multi=True,
+                    placeholder="Select channels...",
+                ),
+            ],
+        ),
 
-            # Rate graph — below inspector
-            html.Div(id="sp-rate-graph", children=existing_rate_graph),
+        # Classical params (shown/hidden by method). Isolation lives below and
+        # is reused by the ML methods, so it stays mounted.
+        html.Div(
+            id="sp-classical-params",
+            style={"display": "block" if persisted_method == "classical" else "none"},
+            children=[
+                _spike_params(_val),
+                _morphology_params(_val),
+                _baseline_params(_val, persisted_bl_method),
+            ],
+        ),
 
-            # Export controls
-            _sp_export_controls(has_results, state.spike_events, rec),
-            dcc.Download(id="sp-export-download"),
-        ],
-    )
+        # U-Net (ML) params (shown/hidden by method)
+        html.Div(
+            id="sp-unet-params",
+            style={"display": "block" if persisted_method == "unet" else "none"},
+            children=[_sp_unet_params(state)],
+        ),
+
+        # Isolation — shared across methods, always visible
+        _isolation_params(_val),
+    ]
+
+    return split_page(main, panel, panel_title="Detection settings")
 
 
 def _sp_export_controls(visible: bool, spike_events, rec) -> html.Div:
@@ -556,7 +536,7 @@ def _sp_unet_params(state) -> html.Div:
             dbc.Col([
                 html.Div([
                     html.Div(
-                        "\U0001f9e0 U-Net is a learned model — no rule-based "
+                        "U-Net is a learned model — no rule-based "
                         "front-end to tune.",
                         style={"fontSize": "0.82rem", "fontWeight": "500",
                                "marginBottom": "8px"}),
@@ -1025,7 +1005,7 @@ def run_spike_detection(
         return (
             alert(
                 f"Animal IDs not assigned for channel(s): {missing_ids}. "
-                "Go to the Load tab and fill in the Animal ID column before detecting.",
+                "Go to the Load page and fill in the Animal ID column before detecting.",
                 "warning",
             ),
             no_update, no_update, no_update, no_update, no_update, no_update,
@@ -1676,13 +1656,15 @@ def _build_results(rec, all_spikes, spikes, total_count=None):
     table = dag.AgGrid(
         id="sp-results-grid",
         rowData=table_data,
-        columnDefs=col_defs,
+        columnDefs=fit_header_widths(col_defs),
         defaultColDef={"sortable": True, "resizable": True},
         className="ag-theme-alpine-dark",
-        style={"height": "300px", "width": "100%"},
+        style={"height": grid_height(len(table_data)), "width": "100%"},
         dashGridOptions={
             "animateRows": False,
             "rowSelection": iv.grid_row_selection(),
+            "headerHeight": 28,
+            "rowHeight": 26,
         },
         getRowId="params.data._idx",  # Prev/Next select rows by id
     )

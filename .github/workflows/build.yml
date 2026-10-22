@@ -1,0 +1,128 @@
+name: Build desktop apps
+
+# Push a version tag (git tag v1.0.2 && git push origin v1.0.2) to build the app
+# on macOS, Windows and Linux and attach it to a GitHub release. "Run workflow"
+# on the Actions page builds the same files without a release (artifacts only).
+# The tag should match __version__ in eeg_seizure_analyzer/__init__.py.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon
+            platform: mac-arm64
+          - os: windows-latest
+            platform: windows-x64
+          - os: ubuntu-22.04
+            platform: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Linux libraries for the Qt web engine
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libnss3 libxcomposite1 \
+            libxdamage1 libxrandr2 libxtst6 libasound2
+
+      - name: Install NED-Net and PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # The default Linux wheel bundles CUDA (several GB); ship the CPU build.
+            pip install torch --index-url https://download.pytorch.org/whl/cpu
+          fi
+          extras="desktop,ml"
+          # ADICHT (LabChart) reading is Windows-only
+          if [ "$RUNNER_OS" = "Windows" ]; then extras="$extras,windows"; fi
+          pip install -e ".[$extras]" pyinstaller
+
+      - name: Version
+        id: v
+        shell: bash
+        run: echo "version=$(python -c 'import eeg_seizure_analyzer as e; print(e.__version__)')" >> "$GITHUB_OUTPUT"
+
+      - name: Build the app
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen   # Linux: no display on the runner
+        run: pyinstaller packaging/nednet.spec --noconfirm
+
+      - name: Package (macOS disk image)
+        if: runner.os == 'macOS'
+        run: |
+          out="dist/NED-Net-${{ steps.v.outputs.version }}-mac-arm64.dmg"
+          for i in 1 2 3; do   # hdiutil is occasionally "busy" on CI
+            hdiutil create -volname "NED-Net" -srcfolder dist/NED-Net.app \
+              -ov -format UDZO "$out" && break
+            sleep 10
+          done
+          test -f "$out"
+
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.v.outputs.version }}" packaging\windows\nednet.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package (Linux archive)
+        if: runner.os == 'Linux'
+        run: tar -C dist -czf "dist/NED-Net-${{ steps.v.outputs.version }}-linux-x64.tar.gz" NED-Net
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: NED-Net-${{ matrix.platform }}
+          path: |
+            dist/*.dmg
+            dist/installer/*.exe
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            Desktop apps for macOS (Apple Silicon), Windows and Linux. No Python needed.
+
+            - **macOS:** open the `.dmg` and drag NED-Net to Applications. The app is not
+              notarized: the first time, right-click it and choose **Open** (or allow it in
+              System Settings › Privacy & Security).
+            - **Windows:** run `NED-Net-…-Setup.exe`. If SmartScreen warns, choose
+              **More info › Run anyway**. The first start can take a minute while the virus
+              scanner checks the app.
+            - **Linux:** unpack the `.tar.gz` and run `NED-Net/NED-Net` (CPU build).

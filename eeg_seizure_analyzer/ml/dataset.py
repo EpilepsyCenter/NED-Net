@@ -127,6 +127,17 @@ class DatasetConfig:
     #   use exactly those (animal, recording) pairs as validation instead of
     #   computing a split. For a run that must share another run's split even
     #   though its positives differ (the temporal split is drawn from positives).
+    background_source: str = "random"  # where "no seizure" windows come from,
+    #   besides rejected events (hard negatives):
+    #   "random"           random background windows (the original behaviour)
+    #   "none"             rejected events only
+    #   "confirmed"        + confirmed background stretches (_ned_background_annotations.json)
+    #   "confirmed+random" + confirmed background, topped up with random background
+    #   "proposed"         + confirmed AND unreviewed rule proposals (rule-only variant)
+    #   Random background is unreviewed time and can hide unannotated seizures; a
+    #   background window is labelled only where it is reviewed (the stretch itself,
+    #   confirmed seizures, rejected events) and "unknown" (-1, not scored) elsewhere.
+    #   Rejected background is never a negative; random background avoids it.
     bg_avoid_rejected: bool = False  # random background windows avoid regions
     #   annotated `rejected` as well as `confirmed`. A rejection that means "not a
     #   convulsive seizure" can contain real non-convulsive activity, so drawing
@@ -155,6 +166,20 @@ def _load_annotations(edf_path: str) -> list[dict]:
     with open(ann_path) as f:
         data = json.load(f)
     return data.get("annotations", [])
+
+
+_BACKGROUND_ANN_SUFFIX = "_ned_background_annotations.json"
+BACKGROUND_SOURCES = ("random", "none", "confirmed", "confirmed+random", "proposed")
+
+
+def _load_background(edf_path: str) -> list[dict]:
+    """Load background annotations (seizure-free stretches) for an EDF file."""
+    stem = Path(edf_path).stem
+    path = Path(edf_path).parent / (stem + _BACKGROUND_ANN_SUFFIX)
+    if not path.exists():
+        return []
+    with open(path) as f:
+        return json.load(f).get("annotations", [])
 
 
 def _get_channel_info(edf_path: str) -> tuple[list[int], list[int]]:
@@ -264,13 +289,15 @@ def _augment(eeg: np.ndarray, mask: np.ndarray, rng: np.random.Generator):
     if shift != 0:
         eeg = np.roll(eeg, shift, axis=1)
         mask = np.roll(mask, shift, axis=-1)
-        # Zero-fill the wrapped portion
+        # Zero-fill the wrapped portion; in windows with unknown samples (-1) the
+        # filled part is unknown too, since nobody reviewed it.
+        fill = -1.0 if (mask < 0).any() else 0.0
         if shift > 0:
             eeg[:, :shift] = 0
-            mask[..., :shift] = 0
+            mask[..., :shift] = fill
         else:
             eeg[:, shift:] = 0
-            mask[..., shift:] = 0
+            mask[..., shift:] = fill
 
     # 4. Channel dropout — zero out one channel with 15% probability
     if eeg.shape[0] > 1 and rng.random() < 0.15:
@@ -310,6 +337,10 @@ class WindowSpec:
     # which also fires when a *neighbouring* convulsive seizure clips into the
     # window — here we want the label of the centred event only.
     center_convulsive: bool = False
+    # Background windows only: (onset, offset) relative to window start of the parts
+    # whose label is known (reviewed). Elsewhere the target is -1 ("unknown", not
+    # scored). None = every sample is labelled (positive and hard-negative windows).
+    labelled_intervals: list[tuple[float, float]] | None = None
 
 
 def build_window_specs(
@@ -335,6 +366,11 @@ def build_window_specs(
     """
     rng = np.random.default_rng(config.seed)
     _CONV_TARGET_DROPPED.clear()
+    if config.background_source not in BACKGROUND_SOURCES:
+        raise ValueError(f"background_source must be one of {BACKGROUND_SOURCES}, "
+                         f"not {config.background_source!r}")
+    use_bg = config.background_source in ("confirmed", "confirmed+random", "proposed")
+    bg_specs: list[WindowSpec] = []  # windows on confirmed (or proposed) background
     exclude_set = set(config.exclude_animals or ())
     specs: list[WindowSpec] = []  # positive windows
     hard_neg_specs: list[WindowSpec] = []  # all rejected-event windows
@@ -348,7 +384,8 @@ def build_window_specs(
 
         # Load annotation data
         annotations = _load_annotations(edf_path)
-        if not annotations:
+        background = _load_background(edf_path)
+        if not annotations and not background:
             continue
 
         # Get channel info and pairings
@@ -397,7 +434,14 @@ def build_window_specs(
                 if (a.get("features") or {}).get("detection_method") not in _skip
             ] if _skip else ch_rejected
 
-            if not ch_confirmed and not ch_rejected:
+            ch_bg = [a for a in background if a.get("channel") == eeg_ch]
+            ch_bg_ok = [a for a in ch_bg if a.get("label") == "confirmed"
+                        or (config.background_source == "proposed"
+                            and a.get("label") == "pending")] if use_bg else []
+            ch_bg_rejected = [(a["onset_sec"], a["offset_sec"]) for a in ch_bg
+                              if a.get("label") == "rejected"]
+
+            if not ch_confirmed and not ch_rejected and not ch_bg_ok:
                 continue  # no annotations on this channel
 
             # Seizure intervals for this channel (for overlap checks)
@@ -512,6 +556,36 @@ def build_window_specs(
                     animal_id=animal_id,
                 ))
 
+            # --- Background windows (confirmed / proposed seizure-free stretches) ---
+            # One window centred on each stretch (tiled if longer than a window).
+            # Labelled only where reviewed: the stretch, rejected events (0) and
+            # confirmed seizures (1); "unknown" elsewhere.
+            if ch_bg_ok and rec_duration > config.window_sec:
+                known0 = ([(a["onset_sec"], a["offset_sec"]) for a in ch_bg_ok]
+                          + [(a["onset_sec"], a["offset_sec"]) for a in ch_rejected])
+                for a in ch_bg_ok:
+                    on, off = float(a["onset_sec"]), float(a["offset_sec"])
+                    n_tiles = max(1, int(np.ceil((off - on) / config.window_sec)))
+                    for t in range(n_tiles):
+                        t_on = on + t * (off - on) / n_tiles
+                        t_off = on + (t + 1) * (off - on) / n_tiles
+                        centre = (t_on + t_off) / 2
+                        ws = max(0.0, centre - config.window_sec / 2)
+                        we = min(rec_duration, ws + config.window_sec)
+                        ws = max(0.0, we - config.window_sec)
+                        rel = lambda iv: [(max(0.0, x0 - ws), min(config.window_sec, x1 - ws))
+                                          for x0, x1 in iv if x1 > ws and x0 < we]
+                        seiz = rel(ch_seizure_intervals)
+                        bg_specs.append(WindowSpec(
+                            edf_path=edf_path, start_sec=ws,
+                            duration_sec=config.window_sec, eeg_channel=eeg_ch,
+                            act_channel=act_ch, is_positive=False,
+                            seizure_intervals=seiz,
+                            convulsive_intervals=rel(ch_convulsive_intervals),
+                            animal_id=animal_id,
+                            labelled_intervals=rel(known0) + seiz,
+                        ))
+
             # Remember this channel so random background can be sampled later if
             # hard negatives alone don't meet the requested ratio.
             if rec_duration > config.window_sec:
@@ -523,6 +597,8 @@ def build_window_specs(
                 if config.bg_avoid_rejected:
                     ch_avoid += [(a["onset_sec"], a["offset_sec"])
                                  for a in ch_rejected]
+                # A rejected background stretch may hide a seizure: never sample it.
+                ch_avoid += ch_bg_rejected
                 neg_ctx.append({
                     "edf_path": edf_path,
                     "eeg_channel": eeg_ch,
@@ -539,8 +615,11 @@ def build_window_specs(
     # A ratio <= 0 means "use every hard negative" (no cap).
     n_pos = len(specs)
     specs.extend(
-        _balance_negatives(hard_neg_specs, neg_ctx, n_pos, config, rng)
+        _balance_negatives(hard_neg_specs, neg_ctx, n_pos, config, rng, bg_specs)
     )
+    if use_bg:
+        print(f"background_source={config.background_source}: {len(bg_specs)} "
+              f"background windows available, {len(hard_neg_specs)} rejected-event windows")
     if config.target == "convulsive":
         if config.nonconv_negatives:
             print(f"target=convulsive: {n_pos} convulsive positive windows; "
@@ -562,16 +641,22 @@ def _balance_negatives(
     n_pos: int,
     config: DatasetConfig,
     rng: np.random.Generator,
+    bg_specs: list[WindowSpec] | None = None,
 ) -> list[WindowSpec]:
     """Select negative windows to meet ``config.neg_pos_ratio`` globally.
+
+    Priority: rejected events (hard negatives), then confirmed / proposed
+    background windows (``bg_specs``), then random background if the
+    background source allows it.
 
     Prefers hard negatives (random-subsampled if they exceed the target),
     then tops up with random background windows if there's a shortfall.
     ``neg_pos_ratio <= 0`` keeps every hard negative.
     """
     ratio = config.neg_pos_ratio
+    bg_specs = list(bg_specs or [])
     if ratio <= 0 or n_pos == 0:
-        return list(hard_neg_specs)  # use all hard negatives
+        return list(hard_neg_specs) + bg_specs  # use all reviewed negatives
 
     target = int(round(n_pos * ratio))
     out: list[WindowSpec] = []
@@ -580,9 +665,18 @@ def _balance_negatives(
         idx = rng.choice(len(hard_neg_specs), size=target, replace=False)
         return [hard_neg_specs[i] for i in idx]
 
-    # Keep all hard negatives, then add random background to reach the target.
+    # Keep all hard negatives, then reviewed background, then random background
+    # to reach the target, unless the background source excludes random background.
     out.extend(hard_neg_specs)
-    n_random = target - len(hard_neg_specs)
+    room = target - len(out)
+    if bg_specs:
+        if len(bg_specs) > room:
+            idx = rng.choice(len(bg_specs), size=room, replace=False)
+            bg_specs = [bg_specs[i] for i in sorted(idx)]
+        out.extend(bg_specs)
+    if config.background_source not in ("random", "confirmed+random"):
+        return out
+    n_random = target - len(out)
     n_unplaceable = 0
     if n_random > 0 and neg_ctx:
         for _ in range(n_random):
@@ -776,6 +870,14 @@ class SeizureDataset(Dataset):
             start_idx = max(0, min(start_idx, self.target_samples))
             end_idx = max(0, min(end_idx, self.target_samples))
             mask[1, start_idx:end_idx] = 1.0
+        # Background windows: unreviewed samples are unknown (-1, not scored).
+        if spec.labelled_intervals is not None:
+            known = np.zeros(self.target_samples, dtype=bool)
+            for onset, offset in spec.labelled_intervals:
+                a = max(0, min(int(onset * self.config.target_fs), self.target_samples))
+                b = max(0, min(int(offset * self.config.target_fs), self.target_samples))
+                known[a:b] = True
+            mask[:, ~known] = -1.0
 
         # Augmentation — on a COPY so the cached signal is never mutated.
         if self.augment:
@@ -1001,7 +1103,7 @@ def split_by_animal(
             "so the data can be split into train and validation sets without "
             "data leakage. Found only 1 animal. Add recordings from more "
             "animals to the dataset, or assign distinct Animal IDs to "
-            "different channels on the Load tab."
+            "different channels on the Load page."
         )
 
     # Spike specs (SpikeWindowSpec) carry no convulsive concept, so the
@@ -1366,7 +1468,11 @@ def build_convulsive_datasets(
                          "Check that the dataset has confirmed seizure "
                          "annotations.")
 
-    if config.val_mode in ("recording", "temporal"):
+    if config.val_pairs_file:
+        # Same (animal, recording) pairs file as the detector path, so both stages
+        # can be validated on another run's held-out animals.
+        train_specs, val_specs = split_specs(specs, config)
+    elif config.val_mode in ("recording", "temporal"):
         # balance_on='center_convulsive': in this path every window is is_positive,
         # so the convulsive flag is what the val share must be measured against.
         train_specs, val_specs = split_by_recording(

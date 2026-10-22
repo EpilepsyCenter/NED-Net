@@ -6,12 +6,15 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timezone
-from dash import html, dcc, callback, Input, Output, State, no_update, ctx, clientside_callback
+from dash import (html, dcc, callback, Input, Output, State, no_update, ctx,
+                  clientside_callback, set_props, ALL)
 import dash_bootstrap_components as dbc
 
 from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app import inspector_view as iv
 from eeg_seizure_analyzer.dash_app.components import (
+    fit_y_range,
+    loading,
     apply_fig_theme,
     alert,
     empty_state,
@@ -19,8 +22,11 @@ from eeg_seizure_analyzer.dash_app.components import (
     filter_range,
     filter_summary,
     get_plotly_theme,
+    icon,
     metric_card,
     no_recording_placeholder,
+    page_header,
+    split_page,
 )
 from eeg_seizure_analyzer.io.annotation_store import (
     ORIGIN_LABELS,
@@ -58,6 +64,18 @@ def _get_annotations(state) -> list[AnnotatedEvent]:
             seen.add(key)
             out.append(ann)
     return out
+
+
+def _is_blind(state) -> bool:
+    """True while a blind review is open (Dataset / Model > Blind review) and the
+    loaded project is still its review folder.
+
+    The page then hides the confidence and method controls and applies no
+    filters, so every sampled event is shown and nothing hints at the model's score.
+    Loading other recordings (Load tab) ends the review mode by itself.
+    """
+    return (bool(state.extra.get("blind_review_id"))
+            and state.extra.get("project_folder") == state.extra.get("blind_folder"))
 
 
 def _set_annotations(state, annotations: list[AnnotatedEvent]):
@@ -379,7 +397,7 @@ def _build_annotation_counts(counts, counts_filtered, progress_pct,
             ),
             dbc.Progress(
                 value=progress_pct,
-                style={"height": "6px", "backgroundColor": "#2d333b"},
+                style={"height": "6px", "backgroundColor": "var(--ned-surface-hover)"},
                 color="success" if progress_pct >= 80 else (
                     "warning" if progress_pct >= 40 else "info"
                 ),
@@ -439,15 +457,18 @@ _METHOD_NAMES = {
 def _event_origin(event) -> str:
     """Where this event entered the annotation file, e.g. 'Analysis (live) · U-Net'."""
     if event.source == "manual":
-        return "Added by hand in the Training tab"
+        return "Added by hand in Seizure Annotation"
     feat = event.features or {}
     where = ORIGIN_LABELS.get(feat.get("origin", ""), "Detector (origin not recorded)")
     method = feat.get("detection_method")
     return where + (f" · {_METHOD_NAMES.get(method, method)}" if method else "")
 
 
-def _build_event_properties(rec, event) -> html.Div:
-    """Build the seizure property info boxes for the current event."""
+def _build_event_properties(rec, event, blind: bool = False) -> html.Div:
+    """Build the seizure property info boxes for the current event.
+
+    ``blind``: leave out the confidence and where the event came from.
+    """
     if event is None:
         return dbc.Row(className="g-2 mb-2")
     ch = event.channel
@@ -455,7 +476,7 @@ def _build_event_properties(rec, event) -> html.Div:
     feat = event.features or {}
     qm = event.quality_metrics or {}
     n_spikes = feat.get("n_spikes")
-    return html.Div([dbc.Row([
+    cards = [
         dbc.Col(metric_card("Channel", ch_name), width=2),
         dbc.Col(metric_card("Duration",
                             f"{event.offset_sec - event.onset_sec:.2f}s"), width=2),
@@ -467,7 +488,11 @@ def _build_event_properties(rec, event) -> html.Div:
                             f"{qm.get('local_baseline_ratio', 0):.1f}"), width=2),
         dbc.Col(metric_card("Top Amp",
                             f"{qm.get('top_spike_amplitude_x', 0):.1f}"), width=2),
-    ], className="g-2 mb-1"), html.Div(
+    ]
+    if blind:
+        del cards[3]  # Confidence
+        return html.Div([dbc.Row(cards, className="g-2 mb-2")])
+    return html.Div([dbc.Row(cards, className="g-2 mb-1"), html.Div(
         f"From: {_event_origin(event)}",
         style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
                "textAlign": "right", "marginBottom": "8px"})])
@@ -594,6 +619,9 @@ def _review_list(state, annotations, ch_filter, method=None):
     filters on they could edit a different event than the one shown.
     """
     out = _filter_by_channel(annotations, ch_filter)
+    if _is_blind(state):
+        # Blind review: no method or range filters, so no sampled event is hidden
+        return out, len(out)
     method = method if method is not None else state.extra.get("tr_method_filter")
     if method:
         out = [a for a in out if a.features.get("detection_method") == method]
@@ -601,6 +629,46 @@ def _review_list(state, annotations, ch_filter, method=None):
     if state.extra.get("tr_filter_on", True):
         out = _apply_annotation_filters(out, **_range_filter_values(state))
     return out, n_pre
+
+
+_EVENT_LIST_MAX = 500  # rows shown in the panel's event list
+
+
+def _event_list_items(rec, filtered, current_idx: int) -> list:
+    """Rows of the panel's event list: status, ID, onset, duration, channel.
+    Clicking a row jumps to that event (jump_from_event_list).
+
+    Row IDs carry a fresh token on every rebuild: with stable IDs, Dash kept
+    the old props (e.g. the highlight) of the row that had just been clicked.
+    """
+    import time as _time
+    token = str(_time.time_ns())
+    if not filtered:
+        return [html.Div("No events in this queue.", className="ev-empty")]
+    multi_ch = len({a.channel for a in filtered}) > 1
+    rows = []
+    for i, a in enumerate(filtered[:_EVENT_LIST_MAX]):
+        ch = (rec.channel_names[a.channel] if a.channel < len(rec.channel_names)
+              else f"Ch{a.channel}")
+        label = a.label if a.label in ("confirmed", "rejected") else "pending"
+        tip = label.capitalize() + (" \u00b7 added by hand" if a.source == "manual" else "")
+        rows.append(html.Button(
+            [
+                html.Span(className=f"ev-status {label}"),
+                html.Span(f"#{a.event_id}" if a.event_id else str(i + 1), className="ev-id"),
+                html.Span(f"{a.onset_sec:.1f} s", className="ev-time"),
+                html.Span(f"{a.offset_sec - a.onset_sec:.1f} s", className="ev-dur"),
+                html.Span(ch if multi_ch else "", className="ev-ch"),
+            ],
+            id={"type": "tr-ev-item", "index": i, "v": token},
+            n_clicks=0,
+            className="ev-item current" if i == current_idx else "ev-item",
+            title=tip,
+        ))
+    if len(filtered) > _EVENT_LIST_MAX:
+        rows.append(html.Div(f"{len(filtered) - _EVENT_LIST_MAX} more; use Go to #.",
+                             className="ev-empty"))
+    return rows
 
 
 def _empty_review(n_pre: int, filt_on: bool) -> tuple[go.Figure, str]:
@@ -1114,6 +1182,8 @@ def layout(sid: str | None) -> html.Div:
                 except Exception:
                     pass
 
+    blind = _is_blind(state)
+
     # Restore state
     current_idx = state.extra.get("tr_current_idx", 0)
     mode = state.extra.get("tr_mode", "review")
@@ -1124,7 +1194,7 @@ def layout(sid: str | None) -> html.Div:
     browse_start = state.extra.get("tr_browse_start", 0)
 
     # Restore filter settings from seizure tab (or training-specific overrides)
-    tr_filter_on = state.extra.get("tr_filter_on", True)
+    tr_filter_on = state.extra.get("tr_filter_on", True) and not blind
     sz_fv = state.extra.get("sz_filter_values", {})
     tr_min_conf = state.extra.get("tr_min_conf", sz_fv.get("min_conf", 0))
     tr_min_dur = state.extra.get("tr_min_dur", sz_fv.get("min_dur", 0))
@@ -1201,6 +1271,13 @@ def layout(sid: str | None) -> html.Div:
     ]
     method_filter = state.extra.get("tr_method_filter", None)
 
+    # Blind review: a recording just opened starts at its first pending event
+    if blind and "tr_current_idx" not in state.extra:
+        first = next((i for i, a in enumerate(filtered) if a.label == "pending"), None)
+        if first is not None:
+            current_idx = first
+            state.extra["tr_current_idx"] = first
+
     # Clamp index
     if current_idx >= len(filtered):
         current_idx = max(0, len(filtered) - 1)
@@ -1233,88 +1310,500 @@ def layout(sid: str | None) -> html.Div:
     else:
         event_nav_text = _empty_review(n_prefilter, tr_filter_on)[1]
 
-    return html.Div(
-        style={"padding": "24px"},
-        children=[
-            # Keyboard shortcut stores
-            dcc.Store(id="tr-keyboard-store", data={"key": "", "ts": 0}),
-            dcc.Store(id="tr-video-seek", data=0),
-            html.Div(id="tr-keyboard-listener", style={"display": "none"}),
+    # Review / Browse switch (segmented control in the page header)
+    mode_toggle = dbc.RadioItems(
+        id="tr-mode-toggle",
+        options=[
+            {"label": "Review", "value": "review"},
+            {"label": "Browse", "value": "browse"},
+        ],
+        value=mode,
+        inline=True,
+        className="btn-group segmented",
+        inputClassName="btn-check",
+        labelClassName="btn btn-outline-secondary",
+        labelCheckedClassName="btn-ned-primary",
+    )
 
-            # Header + Mode toggle (prominent)
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "16px"},
-                children=[
-                    html.H4("Seizure Annotation", style={"margin": "0"}),
-                    html.Span(
-                        "Training data",
-                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                               "border": "1px solid var(--ned-border)", "borderRadius": "12px",
-                               "padding": "2px 10px"},
+    # ── Work area (left): the event under review, or the browse view ──
+    main = [
+        # Keyboard shortcut stores
+        dcc.Store(id="tr-keyboard-store", data={"key": "", "ts": 0}),
+        dcc.Store(id="tr-autoscale-key", data=0),
+        dcc.Store(id="tr-video-seek", data=0),
+        html.Div(id="tr-keyboard-listener", style={"display": "none"}),
+
+        page_header(
+            "Seizure Annotation",
+            badge=html.Span("Training data", className="page-badge"),
+            actions=[mode_toggle],
+        ),
+        *([html.Div(
+            "Blind review: confirm or reject each event; boundaries and the "
+            "convulsive box don't matter.",
+            style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
+                   "marginTop": "-8px", "marginBottom": "12px"},
+        )] if blind else []),
+
+        # ── Review Mode ──────────────────────────────────────────
+        html.Div(
+            id="tr-review-mode",
+            style={"display": "block" if mode == "review" else "none"},
+            children=[
+                # Event navigation
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "8px",
+                           "marginBottom": "8px"},
+                    children=[
+                        dbc.Button(
+                            "◀ Prev (← ,)", id="tr-prev-btn", size="sm",
+                            className="btn-ned-secondary",
+                        ),
+                        html.Div(
+                            id="tr-event-nav-text",
+                            style={"flex": "1", "textAlign": "center",
+                                   "fontWeight": "600", "fontSize": "0.9rem"},
+                            children=event_nav_text,
+                        ),
+                        html.Label("Go to #",
+                                   style={"fontSize": "0.72rem", "margin": "0",
+                                          "color": "var(--ned-text-muted)"}),
+                        dcc.Input(
+                            id="tr-jump-to", type="number",
+                            min=1, step=1, debounce=True,
+                            placeholder="#",
+                            className="form-control",
+                            style={"width": "60px", "fontSize": "0.78rem",
+                                   "textAlign": "center"},
+                        ),
+                        dbc.Button(
+                            "Next (. →) ▶", id="tr-next-btn", size="sm",
+                            className="btn-ned-secondary",
+                        ),
+                        *(_blind_nav(state, annotations) if blind else []),
+                    ],
+                ),
+
+                # Decision bar: boundaries on the left, the label on the right
+                html.Div(
+                    className="decision-bar",
+                    children=[
+                        html.Div(
+                            className="decision-bounds",
+                            children=[
+                                html.Label("Onset (s)", className="decision-label"),
+                                # Identity of the event the inputs below belong to; see
+                                # the stale-press check in update_review.
+                                dcc.Store(id="tr-shown-key",
+                                          data=_view_key(current_event) if current_event else None),
+                                dcc.Input(
+                                    id="tr-onset-input", type="number",
+                                    value=round(current_event.onset_sec, 3) if current_event else 0,
+                                    step=0.01, debounce=True,
+                                    className="form-control",
+                                    style={"width": "100px"},
+                                ),
+                                html.Label("Offset (s)", className="decision-label"),
+                                dcc.Input(
+                                    id="tr-offset-input", type="number",
+                                    value=round(current_event.offset_sec, 3) if current_event else 0,
+                                    step=0.01, debounce=True,
+                                    className="form-control",
+                                    style={"width": "100px"},
+                                ),
+                                html.Span(
+                                    id="tr-duration-display",
+                                    children=f"({current_event.offset_sec - current_event.onset_sec:.2f}s)"
+                                    if current_event else "",
+                                    className="decision-label",
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="decision-actions",
+                            children=[
+                                html.Div(id="tr-event-status", children=event_label_badge),
+                                dbc.Checkbox(
+                                    id="tr-convulsive-toggle",
+                                    label="Convulsive (V)",
+                                    value=bool((current_event.features or {}).get("convulsive", False))
+                                    if current_event else False,
+                                    className="decision-check",
+                                ),
+                                dbc.Button(
+                                    "Skip (S)",
+                                    id="tr-skip-btn",
+                                    className="btn-ned-secondary",
+                                ),
+                                dbc.Button(
+                                    [html.Span("✗ "), "Reject (R)"],
+                                    id="tr-reject-btn",
+                                    className="btn-ned-danger",
+                                ),
+                                dbc.Button(
+                                    [html.Span("✓ "), "Confirm (C)"],
+                                    id="tr-confirm-btn",
+                                    className="btn-ned-primary",
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+
+                # Plot toolbar: view (pan / context / overview span) on the left,
+                # display (y ranges, overlays) on the right
+                html.Div(
+                    style={"display": "flex", "alignItems": "center",
+                           "justifyContent": "space-between", "flexWrap": "wrap",
+                           "gap": "8px 16px", "marginBottom": "4px",
+                           "padding": "6px 0", "borderTop": "1px solid var(--ned-border)"},
+                    children=[
+                        iv.view_controls("tr", iv.context_sec(state, "tr"),
+                                         iv.ovspan_sec(state, "tr")),
+                        html.Div(
+                            style={"display": "flex", "gap": "8px",
+                                   "alignItems": "center", "flexWrap": "nowrap"},
+                            children=[
+                                html.Label("Y range",
+                                           style={"fontSize": "0.72rem",
+                                                  "color": "var(--ned-text-muted)"}),
+                                dcc.Input(
+                                    id="tr-yrange", type="number",
+                                    min=0, step=0.01,
+                                    value=tr_yrange, debounce=True,
+                                    className="form-control",
+                                    style={"width": "64px", "fontSize": "0.78rem"},
+                                ),
+                                dbc.Button("Autoscale (A)", id="tr-autoscale-btn", size="sm",
+                                           className="btn-ned-secondary",
+                                           title="Fit the Y range to this event's signal"),
+                            ] + ([
+                                html.Label("Act Y",
+                                           style={"fontSize": "0.72rem",
+                                                  "color": "var(--ned-text-muted)",
+                                                  "marginLeft": "8px"}),
+                                dcc.Input(
+                                    id="tr-act-ymin", type="number",
+                                    value=tr_act_ymin, step=0.1,
+                                    debounce=True, className="form-control",
+                                    style={"width": "50px", "fontSize": "0.78rem"},
+                                ),
+                                html.Span("–",
+                                          style={"fontSize": "0.72rem",
+                                                 "color": "var(--ned-text-muted)"}),
+                                dcc.Input(
+                                    id="tr-act-ymax", type="number",
+                                    value=tr_act_ymax, step=0.1,
+                                    debounce=True, className="form-control",
+                                    style={"width": "50px", "fontSize": "0.78rem"},
+                                ),
+                            ] if has_activity else [
+                                # Hidden placeholders when no activity
+                                dcc.Input(id="tr-act-ymin", type="number",
+                                          value=0, style={"display": "none"}),
+                                dcc.Input(id="tr-act-ymax", type="number",
+                                          value=4, style={"display": "none"}),
+                            ]) + [
+                                dbc.Switch(
+                                    id="tr-show-baseline",
+                                    label="Baseline",
+                                    value=state.extra.get("tr_show_baseline", False),
+                                    style={"fontSize": "0.72rem",
+                                           "marginLeft": "6px"},
+                                ),
+                                dbc.Switch(
+                                    id="tr-show-threshold",
+                                    label="Threshold",
+                                    value=state.extra.get("tr_show_threshold", False),
+                                    style={"fontSize": "0.72rem"},
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                iv.overview_graph(
+                    "tr-overview",
+                    _build_overview(rec, current_event, state, annotations)
+                    if current_event else None),
+
+                # Review EEG plot — pre-render first event
+                loading(
+                    dcc.Graph(
+                        id="tr-review-graph",
+                        figure=_build_review_figure(
+                            rec, current_event, state,
+                            y_range=tr_yrange,
+                            act_ymin=tr_act_ymin, act_ymax=tr_act_ymax,
+                            show_baseline=state.extra.get("tr_show_baseline", False),
+                            show_threshold=state.extra.get("tr_show_threshold", False),
+                        ) if current_event else _empty_review(n_prefilter, tr_filter_on)[0],
+                        config={
+                            "editable": False,
+                            "edits": {"shapePosition": True},
+                            "scrollZoom": True,
+                            "displayModeBar": True,
+                        },
+                        style={"borderRadius": "8px"},
                     ),
-                    html.Div(style={"flex": "1"}),
-                    dbc.RadioItems(
-                        id="tr-mode-toggle",
-                        options=[
-                            {"label": "\U0001F50D Review Mode", "value": "review"},
-                            {"label": "\U0001F4C4 Browse Mode", "value": "browse"},
+                    type="circle", color="#58a6ff",
+                ),
+
+                # Video player (if available)
+                _training_video_player(state, sid,
+                                      current_event.onset_sec if current_event else 0),
+
+                # Spectral plots (spectrogram + power over time)
+                dbc.Row(
+                    id="tr-spectral-row",
+                    children=_initial_spectral_row(rec, current_event, state),
+                ),
+
+                # Notes textarea
+                html.Div(
+                    style={"marginBottom": "16px"},
+                    children=[
+                        html.Label("Notes",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Textarea(
+                            id="tr-notes",
+                            value=current_event.notes if current_event else "",
+                            placeholder="Optional notes for this event...",
+                            style={"width": "100%", "height": "60px",
+                                   "resize": "vertical"},
+                        ),
+                    ],
+                ),
+
+                # Status message
+                html.Div(id="tr-review-status"),
+            ],
+        ),
+
+        # ── Browse Mode ──────────────────────────────────────────
+        html.Div(
+            id="tr-browse-mode",
+            style={"display": "block" if mode == "browse" else "none"},
+            children=[
+                # Navigation controls
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Window (s)",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Input(
+                            id="tr-browse-window", type="number",
+                            min=1, max=600, step=1, value=browse_window,
+                            debounce=True, className="form-control",
+                            style={"width": "100%"},
+                        ),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Start (s)",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Input(
+                            id="tr-browse-start", type="number",
+                            min=0, max=rec.duration_sec, step=1,
+                            value=browse_start, debounce=True,
+                            className="form-control",
+                            style={"width": "100%"},
+                        ),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Channel (for manual add)",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Dropdown(
+                            id="tr-browse-annotate-channel-vis",
+                            options=ch_options,
+                            value=0 if ch_options else None,
+                            clearable=False,
+                        ),
+                    ], width=3),
+                    dbc.Col([
+                        html.Label("​",
+                                   style={"fontSize": "0.78rem", "display": "block"}),
+                        html.Div(
+                            style={"display": "flex", "gap": "6px"},
+                            children=[
+                                dbc.Button(
+                                    "Add Seizure",
+                                    id="tr-add-seizure-btn",
+                                    className="btn-ned-secondary",
+                                    size="sm",
+                                    active=False,
+                                ),
+                                dbc.Button(
+                                    "Remove Seizure",
+                                    id="tr-remove-seizure-btn",
+                                    className="btn-ned-secondary",
+                                    size="sm",
+                                    active=False,
+                                ),
+                                # Written on every added seizure: a manual
+                                # seizure without the flag would train as
+                                # non-convulsive.
+                                dbc.Checkbox(
+                                    id="tr-browse-convulsive",
+                                    label="Convulsive",
+                                    value=bool(state.extra.get("tr_browse_convulsive", False)),
+                                    style={"marginLeft": "6px", "alignSelf": "center"},
+                                ),
+                            ],
+                        ),
+                    ], width=5),
+                ], className="g-2 mb-3"),
+                # Channel selection for browse view
+                html.Div(
+                    style={"marginBottom": "8px", "display": "flex",
+                           "alignItems": "center", "gap": "8px",
+                           "flexWrap": "wrap"},
+                    children=[
+                        html.Label("Channels:",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                                          "margin": "0", "fontWeight": "500"}),
+                        dbc.Checklist(
+                            id="tr-browse-channel-checks",
+                            options=[
+                                {"label": rec.channel_names[i], "value": i}
+                                for i in range(rec.n_channels)
+                            ],
+                            value=list(range(rec.n_channels)),
+                            inline=True,
+                        ),
+                        html.A("All", id="tr-browse-ch-all", href="#",
+                               style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
+                                      "marginLeft": "4px"}),
+                        html.A("None", id="tr-browse-ch-none", href="#",
+                               style={"fontSize": "0.75rem", "color": "var(--ned-accent)"}),
+                    ],
+                ),
+
+                # Hidden store to trigger browse graph refresh after add/remove
+                dcc.Store(id="tr-annotations-version", data=0),
+
+                # Browse navigation bar
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "8px",
+                           "marginBottom": "4px"},
+                    children=[
+                        dbc.Button(icon("skip-start"), id="tr-nav-start", size="sm",
+                                   className="btn-ned-secondary btn-icon-only",
+                                   title="Go to start"),
+                        dbc.Button(icon("rewind"), id="tr-nav-back-big", size="sm",
+                                   className="btn-ned-secondary btn-icon-only",
+                                   title="Back one window"),
+                        dbc.Button(icon("step-back"), id="tr-nav-back", size="sm",
+                                   className="btn-ned-secondary btn-icon-only",
+                                   title="Back half a window"),
+                        html.Div(
+                            id="tr-nav-time-display",
+                            style={"flex": "1", "textAlign": "center",
+                                   "fontWeight": "600", "fontSize": "0.9rem"},
+                        ),
+                        dbc.Button(icon("step-forward"), id="tr-nav-fwd", size="sm",
+                                   className="btn-ned-secondary btn-icon-only",
+                                   title="Forward half a window"),
+                        dbc.Button(icon("fast-forward"), id="tr-nav-fwd-big", size="sm",
+                                   className="btn-ned-secondary btn-icon-only",
+                                   title="Forward one window"),
+                    ],
+                ),
+
+                # Color legend
+                html.Div(
+                    style={"display": "flex", "gap": "16px", "marginBottom": "6px",
+                           "flexWrap": "wrap", "alignItems": "center"},
+                    children=[
+                        html.Span("Legend:",
+                                  style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                                         "fontWeight": "600"}),
+                        *[
+                            html.Span(
+                                style={"display": "flex", "alignItems": "center",
+                                       "gap": "4px"},
+                                children=[
+                                    html.Span(
+                                        style={
+                                            "width": "12px", "height": "12px",
+                                            "borderRadius": "2px",
+                                            "background": colors["fill"],
+                                            "border": f"1px solid {colors['line']}",
+                                            "display": "inline-block",
+                                        }
+                                    ),
+                                    html.Span(
+                                        lbl.capitalize(),
+                                        style={"fontSize": "0.72rem",
+                                               "color": colors["text"]},
+                                    ),
+                                ],
+                            )
+                            for lbl, colors in _LABEL_COLORS.items()
                         ],
-                        value=mode,
-                        inline=True,
-                        className="btn-group",
-                        inputClassName="btn-check",
-                        labelClassName="btn btn-outline-secondary",
-                        labelCheckedClassName="btn-ned-primary",
-                        labelStyle={"fontSize": "0.92rem", "fontWeight": "600",
-                                    "padding": "6px 18px"},
-                    ),
-                ],
-            ),
+                    ],
+                ),
 
-            # Metadata row + filters
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Annotator",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Input(
-                        id="tr-annotator", type="text",
-                        value=annotator, debounce=True,
-                        placeholder="Your name",
-                        className="form-control",
-                        style={"width": "100%"},
+                # Browse EEG plot — pre-render if in browse mode
+                loading(
+                    dcc.Graph(
+                        id="tr-browse-graph",
+                        figure=_build_browse_figure(
+                            rec, _filter_by_channel(annotations, channel_filter),
+                            state,
+                            start_sec=float(browse_start),
+                            window_sec=float(browse_window),
+                        ) if mode == "browse" else go.Figure(),
+                        config={"scrollZoom": True, "displayModeBar": True},
+                        style={"borderRadius": "8px"},
                     ),
-                ], width=2),
-                dbc.Col([
-                    dcc.Input(
-                        id="tr-animal-id", type="hidden",
-                        value=animal_id,
-                    ),
-                ], style={"display": "none"}),
-                dbc.Col([
-                    html.Label("Channel",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="tr-channel-filter",
-                        options=ch_options,
-                        value=channel_filter,
-                        placeholder="All channels",
-                        clearable=True,
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Method",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="tr-method-filter",
-                        options=method_options,
-                        value=method_filter,
-                        placeholder="All methods",
-                        clearable=True,
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ], width=2),
+                    type="circle", color="#58a6ff",
+                ),
+
+                # Status message
+                html.Div(id="tr-browse-status"),
+            ],
+        ),
+    ]
+
+    # ── Panel (right): which events, this event's details, progress ──
+    panel = [
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Annotator", className="panel-label"),
+                dcc.Input(
+                    id="tr-annotator", type="text",
+                    value=annotator, debounce=True,
+                    placeholder="Your name",
+                    className="form-control",
+                    style={"width": "100%"},
+                ),
+                html.Div(dcc.Input(id="tr-animal-id", type="hidden", value=animal_id),
+                         style={"display": "none"}),
+            ],
+        ),
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Channel", className="panel-label"),
+                dcc.Dropdown(
+                    id="tr-channel-filter",
+                    options=ch_options,
+                    value=channel_filter,
+                    placeholder="All channels",
+                    clearable=True,
+                ),
+                html.Div(
+                    style={"display": "none"} if blind else {"marginTop": "10px"},
+                    children=[
+                        html.Label("Method", className="panel-label"),
+                        dcc.Dropdown(
+                            id="tr-method-filter",
+                            options=method_options,
+                            value=method_filter,
+                            placeholder="All methods",
+                            clearable=True,
+                        ),
+                    ],
+                ),
                 # Hidden: browse annotate channel (used by browse callback)
                 html.Div(
                     dcc.Dropdown(id="tr-browse-annotate-channel",
@@ -1323,12 +1812,31 @@ def layout(sid: str | None) -> html.Div:
                                  clearable=False),
                     style={"display": "none"},
                 ),
-            ], className="g-2 mb-2"),
+            ],
+        ),
 
-            # Result filters (inherited from the Detection tab's values). The
-            # summary keeps it visible how many events they hide.
-            filter_panel(
+        # The events in this queue; click one to go to it
+        html.Div(
+            id="tr-event-list-section",
+            className="panel-field",
+            style={"display": "block" if mode == "review" else "none"},
+            children=[
+                html.Label("Events", className="panel-label"),
+                html.Div(
+                    id="tr-event-list",
+                    className="event-list",
+                    children=_event_list_items(rec, filtered, current_idx),
+                ),
+            ],
+        ),
+
+        # Result filters (inherited from the Detection tab's values). The
+        # summary keeps it visible how many events they hide.
+        html.Div(
+            className="panel-field panel-filters",
+            children=filter_panel(
                 "tr-filter-toggle", tr_filter_on, title="Filters",
+                visible=not blind,
                 summary_id="tr-filter-summary",
                 summary=filter_summary(len(filtered), n_prefilter, tr_filter_on),
                 ranges=[
@@ -1348,473 +1856,37 @@ def layout(sid: str | None) -> html.Div:
                                  0, 50, 0.5, tr_min_freq, tr_max_freq),
                 ],
             ),
+        ),
 
-            # ── Review Mode ──────────────────────────────────────────
-            html.Div(
-                id="tr-review-mode",
-                style={"display": "block" if mode == "review" else "none"},
-                children=[
-                    # Event navigation
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "8px",
-                               "marginBottom": "8px"},
-                        children=[
-                            dbc.Button(
-                                "\u25C0 Prev (\u2190 ,)", id="tr-prev-btn", size="sm",
-                                className="btn-ned-secondary",
-                            ),
-                            html.Div(
-                                id="tr-event-nav-text",
-                                style={"flex": "1", "textAlign": "center",
-                                       "fontWeight": "600", "fontSize": "0.9rem"},
-                                children=event_nav_text,
-                            ),
-                            html.Label("Go to #",
-                                       style={"fontSize": "0.72rem", "margin": "0",
-                                              "color": "var(--ned-text-muted)"}),
-                            dcc.Input(
-                                id="tr-jump-to", type="number",
-                                min=1, step=1, debounce=True,
-                                placeholder="#",
-                                className="form-control",
-                                style={"width": "60px", "height": "30px",
-                                       "fontSize": "0.78rem", "textAlign": "center"},
-                            ),
-                            dbc.Button(
-                                "Next (. \u2192) \u25B6", id="tr-next-btn", size="sm",
-                                className="btn-ned-secondary",
-                            ),
-                        ],
-                    ),
-
-                    # Seizure property info boxes (updated by callback)
-                    html.Div(
-                        id="tr-event-properties",
-                        children=_build_event_properties(rec, current_event),
-                    ),
-
-                    # Labelling: status badge, Confirm / Reject / Skip, Convulsive
-                    html.Div(
-                        style={"display": "flex", "gap": "12px",
-                               "alignItems": "center",
-                               "justifyContent": "center",
-                               "marginBottom": "12px"},
-                        children=[
-                            html.Div(id="tr-event-status", children=event_label_badge,
-                                     style={"minWidth": "90px", "textAlign": "right"}),
-                            dbc.Button(
-                                [html.Span("\u2713 "), "Confirm (C)"],
-                                id="tr-confirm-btn",
-                                className="btn-ned-primary",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2717 "), "Reject (R)"],
-                                id="tr-reject-btn",
-                                className="btn-ned-danger",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2192 "), "Skip (S)"],
-                                id="tr-skip-btn",
-                                className="btn-ned-secondary",
-                                style={"minWidth": "120px"},
-                            ),
-                            html.Div(
-                                style={"borderLeft": "1px solid #2d333b",
-                                       "paddingLeft": "12px", "marginLeft": "4px"},
-                                children=[
-                                    dbc.Checkbox(
-                                        id="tr-convulsive-toggle",
-                                        label="Convulsive (V)",
-                                        value=bool((current_event.features or {}).get("convulsive", False))
-                                        if current_event else False,
-                                        style={"fontSize": "0.8rem"},
-                                        label_style={"fontWeight": "600",
-                                                     "fontSize": "0.8rem"},
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-
-                    # Plot toolbar: view (pan / context / overview span) on the left,
-                    # display (y ranges, overlays) on the right
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center",
-                               "justifyContent": "space-between", "flexWrap": "wrap",
-                               "gap": "8px 16px", "marginBottom": "4px",
-                               "padding": "6px 0", "borderTop": "1px solid var(--ned-border)"},
-                        children=[
-                            iv.view_controls("tr", iv.context_sec(state, "tr"),
-                                             iv.ovspan_sec(state, "tr")),
-                            html.Div(
-                                style={"display": "flex", "gap": "8px",
-                                       "alignItems": "center", "flexWrap": "nowrap"},
-                                children=[
-                                    html.Label("Y range",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)"}),
-                                    dcc.Input(
-                                        id="tr-yrange", type="number",
-                                        min=0, step=0.01,
-                                        value=tr_yrange, debounce=True,
-                                        className="form-control",
-                                        style={"width": "64px", "height": "26px",
-                                               "fontSize": "0.78rem"},
-                                    ),
-                                ] + ([
-                                    html.Label("Act Y",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)",
-                                                      "marginLeft": "8px"}),
-                                    dcc.Input(
-                                        id="tr-act-ymin", type="number",
-                                        value=tr_act_ymin, step=0.1,
-                                        debounce=True, className="form-control",
-                                        style={"width": "50px", "height": "26px",
-                                               "fontSize": "0.78rem"},
-                                    ),
-                                    html.Span("\u2013",
-                                              style={"fontSize": "0.72rem",
-                                                     "color": "var(--ned-text-muted)"}),
-                                    dcc.Input(
-                                        id="tr-act-ymax", type="number",
-                                        value=tr_act_ymax, step=0.1,
-                                        debounce=True, className="form-control",
-                                        style={"width": "50px", "height": "26px",
-                                               "fontSize": "0.78rem"},
-                                    ),
-                                ] if has_activity else [
-                                    # Hidden placeholders when no activity
-                                    dcc.Input(id="tr-act-ymin", type="number",
-                                              value=0, style={"display": "none"}),
-                                    dcc.Input(id="tr-act-ymax", type="number",
-                                              value=4, style={"display": "none"}),
-                                ]) + [
-                                    dbc.Switch(
-                                        id="tr-show-baseline",
-                                        label="Baseline",
-                                        value=state.extra.get("tr_show_baseline", False),
-                                        style={"fontSize": "0.72rem",
-                                               "marginLeft": "6px"},
-                                    ),
-                                    dbc.Switch(
-                                        id="tr-show-threshold",
-                                        label="Threshold",
-                                        value=state.extra.get("tr_show_threshold", False),
-                                        style={"fontSize": "0.72rem"},
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                    iv.overview_graph(
-                        "tr-overview",
-                        _build_overview(rec, current_event, state, annotations)
-                        if current_event else None),
-
-                    # Review EEG plot — pre-render first event
-                    dcc.Loading(
-                        dcc.Graph(
-                            id="tr-review-graph",
-                            figure=_build_review_figure(
-                                rec, current_event, state,
-                                y_range=tr_yrange,
-                                act_ymin=tr_act_ymin, act_ymax=tr_act_ymax,
-                                show_baseline=state.extra.get("tr_show_baseline", False),
-                                show_threshold=state.extra.get("tr_show_threshold", False),
-                            ) if current_event else _empty_review(n_prefilter, tr_filter_on)[0],
-                            config={
-                                "editable": False,
-                                "edits": {"shapePosition": True},
-                                "scrollZoom": True,
-                                "displayModeBar": True,
-                            },
-                            style={"borderRadius": "8px"},
-                        ),
-                        type="circle", color="#58a6ff",
-                    ),
-
-                    # Boundary adjustment (under EEG)
-                    html.Div(
-                        style={"display": "flex", "gap": "12px",
-                               "alignItems": "center", "justifyContent": "center",
-                               "marginTop": "8px", "marginBottom": "4px"},
-                        children=[
-                            html.Label("Onset (s)",
-                                       style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"}),
-                            # Identity of the event the inputs below belong to; see
-                            # the stale-press check in update_review.
-                            dcc.Store(id="tr-shown-key",
-                                      data=_view_key(current_event) if current_event else None),
-                            dcc.Input(
-                                id="tr-onset-input", type="number",
-                                value=round(current_event.onset_sec, 3) if current_event else 0,
-                                step=0.01, debounce=True,
-                                className="form-control",
-                                style={"width": "100px", "height": "26px",
-                                       "fontSize": "0.78rem"},
-                            ),
-                            html.Label("Offset (s)",
-                                       style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                                              "marginLeft": "8px"}),
-                            dcc.Input(
-                                id="tr-offset-input", type="number",
-                                value=round(current_event.offset_sec, 3) if current_event else 0,
-                                step=0.01, debounce=True,
-                                className="form-control",
-                                style={"width": "100px", "height": "26px",
-                                       "fontSize": "0.78rem"},
-                            ),
-                            html.Span(
-                                id="tr-duration-display",
-                                children=f"({current_event.offset_sec - current_event.onset_sec:.2f}s)"
-                                if current_event else "",
-                                style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"},
-                            ),
-                        ],
-                    ),
-
-                    # Video player (if available)
-                    _training_video_player(state, sid,
-                                          current_event.onset_sec if current_event else 0),
-
-                    # Spectral plots (spectrogram + power over time)
-                    dbc.Row(
-                        id="tr-spectral-row",
-                        children=_initial_spectral_row(rec, current_event, state),
-                    ),
-
-                    # Notes textarea
-                    html.Div(
-                        style={"marginBottom": "16px"},
-                        children=[
-                            html.Label("Notes",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Textarea(
-                                id="tr-notes",
-                                value=current_event.notes if current_event else "",
-                                placeholder="Optional notes for this event...",
-                                style={
-                                    "width": "100%", "height": "60px",
-                                    "backgroundColor": "var(--ned-surface)",
-                                    "border": "1px solid var(--ned-border)",
-                                    "borderRadius": "6px",
-                                    "color": "var(--ned-text)",
-                                    "fontSize": "0.85rem",
-                                    "padding": "8px",
-                                    "resize": "vertical",
-                                },
-                            ),
-                        ],
-                    ),
-
-                    # Status message
-                    html.Div(id="tr-review-status"),
-                ],
-            ),
-
-            # ── Browse Mode ──────────────────────────────────────────
-            html.Div(
-                id="tr-browse-mode",
-                style={"display": "block" if mode == "browse" else "none"},
-                children=[
-                    # Navigation controls
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Window (s)",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Input(
-                                id="tr-browse-window", type="number",
-                                min=1, max=600, step=1, value=browse_window,
-                                debounce=True, className="form-control",
-                                style={"width": "100%"},
-                            ),
-                        ], width=2),
-                        dbc.Col([
-                            html.Label("Start (s)",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Input(
-                                id="tr-browse-start", type="number",
-                                min=0, max=rec.duration_sec, step=1,
-                                value=browse_start, debounce=True,
-                                className="form-control",
-                                style={"width": "100%"},
-                            ),
-                        ], width=2),
-                        dbc.Col([
-                            html.Label("Channel (for manual add)",
-                                       style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Dropdown(
-                                id="tr-browse-annotate-channel-vis",
-                                options=ch_options,
-                                value=0 if ch_options else None,
-                                clearable=False,
-                                style={"fontSize": "0.82rem"},
-                            ),
-                        ], width=2),
-                        dbc.Col([
-                            html.Label("\u200B",
-                                       style={"fontSize": "0.78rem", "display": "block"}),
-                            html.Div(
-                                style={"display": "flex", "gap": "6px"},
-                                children=[
-                                    dbc.Button(
-                                        "Add Seizure",
-                                        id="tr-add-seizure-btn",
-                                        className="btn-ned-secondary",
-                                        size="sm",
-                                        active=False,
-                                    ),
-                                    dbc.Button(
-                                        "Remove Seizure",
-                                        id="tr-remove-seizure-btn",
-                                        className="btn-ned-secondary",
-                                        size="sm",
-                                        active=False,
-                                    ),
-                                    # Written on every added seizure: a manual
-                                    # seizure without the flag would train as
-                                    # non-convulsive.
-                                    dbc.Checkbox(
-                                        id="tr-browse-convulsive",
-                                        label="Convulsive",
-                                        value=bool(state.extra.get("tr_browse_convulsive", False)),
-                                        style={"fontSize": "0.8rem", "marginLeft": "6px",
-                                               "alignSelf": "center"},
-                                        label_style={"fontWeight": "600",
-                                                     "fontSize": "0.8rem"},
-                                    ),
-                                ],
-                            ),
-                        ], width=4),
-                    ], className="g-2 mb-3"),
-                    # Channel selection for browse view
-                    html.Div(
-                        style={"marginBottom": "8px", "display": "flex",
-                               "alignItems": "center", "gap": "8px",
-                               "flexWrap": "wrap"},
-                        children=[
-                            html.Label("Channels:",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                                              "margin": "0", "fontWeight": "500"}),
-                            dbc.Checklist(
-                                id="tr-browse-channel-checks",
-                                options=[
-                                    {"label": rec.channel_names[i], "value": i}
-                                    for i in range(rec.n_channels)
-                                ],
-                                value=list(range(rec.n_channels)),
-                                inline=True,
-                                style={"fontSize": "0.8rem"},
-                            ),
-                            html.A("All", id="tr-browse-ch-all", href="#",
-                                   style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
-                                          "cursor": "pointer", "marginLeft": "4px"}),
-                            html.A("None", id="tr-browse-ch-none", href="#",
-                                   style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
-                                          "cursor": "pointer"}),
-                        ],
-                    ),
-
-                    # Hidden store to trigger browse graph refresh after add/remove
-                    dcc.Store(id="tr-annotations-version", data=0),
-
-                    # Browse navigation bar
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "8px",
-                               "marginBottom": "4px"},
-                        children=[
-                            dbc.Button("\u23EE", id="tr-nav-start", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            dbc.Button("\u23EA", id="tr-nav-back-big", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            dbc.Button("\u25C0", id="tr-nav-back", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            html.Div(
-                                id="tr-nav-time-display",
-                                style={"flex": "1", "textAlign": "center",
-                                       "fontWeight": "600", "fontSize": "0.9rem"},
-                            ),
-                            dbc.Button("\u25B6", id="tr-nav-fwd", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            dbc.Button("\u23E9", id="tr-nav-fwd-big", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                        ],
-                    ),
-
-                    # Color legend
-                    html.Div(
-                        style={"display": "flex", "gap": "16px", "marginBottom": "6px",
-                               "flexWrap": "wrap", "alignItems": "center"},
-                        children=[
-                            html.Span("Legend:",
-                                      style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                                             "fontWeight": "600"}),
-                            *[
-                                html.Span(
-                                    style={"display": "flex", "alignItems": "center",
-                                           "gap": "4px"},
-                                    children=[
-                                        html.Span(
-                                            style={
-                                                "width": "12px", "height": "12px",
-                                                "borderRadius": "2px",
-                                                "background": colors["fill"],
-                                                "border": f"1px solid {colors['line']}",
-                                                "display": "inline-block",
-                                            }
-                                        ),
-                                        html.Span(
-                                            lbl.capitalize(),
-                                            style={"fontSize": "0.72rem",
-                                                   "color": colors["text"]},
-                                        ),
-                                    ],
-                                )
-                                for lbl, colors in _LABEL_COLORS.items()
-                            ],
-                        ],
-                    ),
-
-                    # Browse EEG plot — pre-render if in browse mode
-                    dcc.Loading(
-                        dcc.Graph(
-                            id="tr-browse-graph",
-                            figure=_build_browse_figure(
-                                rec, _filter_by_channel(annotations, channel_filter),
-                                state,
-                                start_sec=float(browse_start),
-                                window_sec=float(browse_window),
-                            ) if mode == "browse" else go.Figure(),
-                            config={"scrollZoom": True, "displayModeBar": True},
-                            style={"borderRadius": "8px"},
-                        ),
-                        type="circle", color="#58a6ff",
-                    ),
-
-                    # Status message
-                    html.Div(id="tr-browse-status"),
-                ],
-            ),
-
-            # ── Annotation Counts (at end of page) ─────────────────────
-            html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0 12px 0"}),
-            html.Div(
-                id="tr-annotation-counts",
-                children=_build_annotation_counts(
-                    counts, counts_filtered, progress_pct,
-                    ch_counts, tr_filter_on,
+        # Current event's properties (updated by callback)
+        html.Div(
+            className="panel-field panel-properties",
+            children=[
+                html.Label("Event", className="panel-label"),
+                html.Div(
+                    id="tr-event-properties",
+                    children=_build_event_properties(rec, current_event, blind),
                 ),
-            ),
-        ],
-    )
+            ],
+        ),
+
+        # Review progress over all annotations of this file
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Progress", className="panel-label"),
+                html.Div(
+                    id="tr-annotation-counts",
+                    children=_build_annotation_counts(
+                        counts, counts_filtered, progress_pct,
+                        ch_counts, tr_filter_on,
+                    ),
+                ),
+            ],
+        ),
+    ]
+
+    return split_page(main, panel, panel_title="Annotation")
 
 
 # ── Keyboard shortcut clientside callback ─────────────────────────────
@@ -1825,8 +1897,18 @@ clientside_callback(
         if (!window._trKeyListenerActive) {
             window._trKeyListenerActive = true;
             document.addEventListener('keydown', function(e) {
+                // Only while this page is shown (the listener stays after leaving it)
+                if (!document.getElementById('tr-keyboard-listener')) return;
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
                 var key = e.key.toLowerCase();
+                if (key === 'a' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    // Autoscale the Y range (own store: no full review update)
+                    e.preventDefault();
+                    if (window.dash_clientside && window.dash_clientside.set_props) {
+                        window.dash_clientside.set_props('tr-autoscale-key', {data: Date.now()});
+                    }
+                    return;
+                }
                 if (['c', 'r', 's', 'v', 'arrowleft', 'arrowright', ',', '.', '[', ']', '\\\\'].includes(key)) {
                     e.preventDefault();
                     if (window.dash_clientside && window.dash_clientside.set_props) {
@@ -1843,22 +1925,118 @@ clientside_callback(
 )
 
 
+# ── Event list in the panel ───────────────────────────────────────────
+
+
+@callback(
+    Output("tr-event-list", "children"),
+    Input("tr-shown-key", "data"),            # another event shown
+    Input("tr-annotation-counts", "children"),  # a label changed
+    Input("tr-filter-summary", "children"),     # the filters changed
+    State("tr-channel-filter", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def refresh_event_list(_key, _counts, _summary, ch_filter, sid):
+    """Rebuild the event list whenever the review view changes."""
+    state = server_state.get_session(sid)
+    rec = state.recording
+    if rec is None:
+        return []
+    filtered, _ = _review_list(state, _get_annotations(state), ch_filter)
+    idx = max(0, min(state.extra.get("tr_current_idx", 0), len(filtered) - 1))
+    return _event_list_items(rec, filtered, idx)
+
+
+@callback(
+    Output("tr-jump-to", "value", allow_duplicate=True),
+    Input({"type": "tr-ev-item", "index": ALL, "v": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def jump_from_event_list(_clicks):
+    """A click on a row goes to that event, through the Go to # field."""
+    trig = ctx.triggered_id
+    if not isinstance(trig, dict) or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update  # the list was re-rendered, not clicked
+    return int(trig["index"]) + 1
+
+
+# Keep the current row visible inside the list
+clientside_callback(
+    """
+    function(children) {
+        setTimeout(function () {
+            var list = document.getElementById('tr-event-list');
+            var el = list && list.querySelector('.ev-item.current');
+            if (!el) { return; }
+            var top = el.offsetTop;
+            if (top < list.scrollTop || top + el.offsetHeight > list.scrollTop + list.clientHeight) {
+                list.scrollTop = Math.max(0, top - list.clientHeight / 2);
+            }
+        }, 30);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("tr-event-list", "title"),
+    Input("tr-event-list", "children"),
+)
+
+
+# ── Autoscale (A) ─────────────────────────────────────────────────────
+
+
+@callback(
+    Output("tr-yrange", "value", allow_duplicate=True),
+    Input("tr-autoscale-btn", "n_clicks"),
+    Input("tr-autoscale-key", "data"),
+    State("tr-channel-filter", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def autoscale_review(_n, _key_ts, ch_filter, sid):
+    """Set the Y range so the shown window of the current event fits.
+
+    Same signal as the plot (1-50 Hz bandpass), robust to single outliers:
+    twice the 99.5th percentile of |signal|, plus 15 % headroom.
+    """
+    state = server_state.get_session(sid)
+    rec = state.recording
+    if rec is None:
+        return no_update
+    filtered, _ = _review_list(state, _get_annotations(state), ch_filter)
+    if not filtered:
+        return no_update
+    idx = max(0, min(state.extra.get("tr_current_idx", 0), len(filtered) - 1))
+    event = filtered[idx]
+    w0, w1 = _review_window(rec, event, state)
+    i0, i1 = int(w0 * rec.fs), min(int(w1 * rec.fs), rec.n_samples)
+    if i1 - i0 < 10:
+        return no_update
+    yr = fit_y_range(bandpass_filter(
+        rec.data[event.channel, i0:i1].astype(np.float64), rec.fs, 1.0, 50.0))
+    if yr is None:
+        return no_update
+    state.extra["tr_yrange"] = yr
+    return yr
+
+
 # ── Callbacks ─────────────────────────────────────────────────────────
 
 
 @callback(
     Output("tr-review-mode", "style"),
     Output("tr-browse-mode", "style"),
+    Output("tr-event-list-section", "style"),
     Input("tr-mode-toggle", "value"),
     State("session-id", "data"),
 )
 def toggle_mode(mode, sid):
-    """Show/hide review vs browse mode sections."""
+    """Show/hide review vs browse mode sections (and the panel's event list)."""
     state = server_state.get_session(sid)
     state.extra["tr_mode"] = mode
     if mode == "review":
-        return {"display": "block"}, {"display": "none"}
-    return {"display": "none"}, {"display": "block"}
+        return {"display": "block"}, {"display": "none"}, {"display": "block"}
+    return {"display": "none"}, {"display": "block"}, {"display": "none"}
 
 
 @callback(
@@ -2069,7 +2247,7 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
     rec = state.recording
     annotations = _get_annotations(state)
     filtered, n_pre = _review_list(state, annotations, ch_filter, method=method_filter or "")
-    filt_on = state.extra.get("tr_filter_on", True)
+    filt_on = state.extra.get("tr_filter_on", True) and not _is_blind(state)
 
     if not filtered:
         fig, nav = _empty_review(n_pre, filt_on)
@@ -2268,7 +2446,7 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
 
     video_seek = max(0, ev_onset - 10)
     is_convulsive = bool((event.features or {}).get("convulsive", False))
-    props = _build_event_properties(rec, event)
+    props = _build_event_properties(rec, event, _is_blind(state))
 
     # Progress over all annotations of the file; the filters only change what
     # review mode steps through (see the filter summary).
@@ -2321,6 +2499,111 @@ def _find_next_pending(filtered: list[AnnotatedEvent], current_idx: int):
         if filtered[idx].label == "pending":
             return idx
     return None
+
+
+# ── Blind review: next recording with pending events ──────────────────
+
+
+def _blind_pending_by_recording(state, annotations) -> tuple[int, list[int]]:
+    """(active index, pending count per project recording).
+
+    The open recording counts from memory, the others from their annotation
+    files. Without a project list the open recording is the only one.
+    """
+    files = state.extra.get("project_files") or []
+    here = sum(a.label == "pending" for a in annotations)
+    if not files:
+        return 0, [here]
+    active = int(state.extra.get("project_active_idx", 0) or 0)
+    counts = []
+    for i, pf in enumerate(files):
+        if i == active:
+            counts.append(here)
+            continue
+        try:
+            anns = load_annotations(pf["edf_path"]) or []
+        except Exception:
+            anns = []
+        counts.append(sum(a.label == "pending" for a in anns))
+    return active, counts
+
+
+def _blind_progress_text(state, annotations) -> str:
+    active, counts = _blind_pending_by_recording(state, annotations)
+    if not any(counts):
+        return "All events reviewed \u2014 use Score in the banner"
+    return (f"Recording {active + 1} of {len(counts)} \u00b7 "
+            f"{counts[active]} pending here")
+
+
+def _blind_nav(state, annotations) -> list:
+    """Nav-row controls of a blind review: the button and where the review stands."""
+    return [
+        dbc.Button("Next pending \u23ED", id="tr-next-rec-btn", size="sm",
+                   className="btn-ned-secondary",
+                   title="Next pending event here; when none are left, the next "
+                         "recording with pending events"),
+        html.Span(_blind_progress_text(state, annotations), id="tr-blind-progress",
+                  style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                         "whiteSpace": "nowrap"}),
+    ]
+
+
+# Only in a blind review is tr-blind-progress in the layout; otherwise Dash does
+# not run these callbacks.
+@callback(
+    Output("tr-blind-progress", "children"),
+    Input("tr-annotation-counts", "children"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def update_blind_progress(_counts, sid):
+    """Refresh "Recording i of n · k pending here" after every label change."""
+    state = server_state.get_session(sid)
+    if state.recording is None or not _is_blind(state):
+        return no_update
+    return _blind_progress_text(state, _get_annotations(state))
+
+
+@callback(
+    Output("tr-blind-progress", "children", allow_duplicate=True),
+    Input("tr-next-rec-btn", "n_clicks"),
+    State("tr-channel-filter", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def next_pending_or_recording(n_clicks, ch_filter, sid):
+    """Next pending event here, else switch to the next recording with pending events.
+
+    Both go through existing mechanisms: the event jump sets "Go to #"
+    (``update_review``'s jump), and the switch sets the file bar's dropdown,
+    which runs main.py's ``file_bar_switch`` (load the file, re-render the tab).
+    """
+    if not n_clicks:
+        return no_update
+    state = server_state.get_session(sid)
+    if state.recording is None or not _is_blind(state):
+        return no_update
+    annotations = _get_annotations(state)
+    filtered, _ = _review_list(state, annotations, ch_filter)
+    cur = state.extra.get("tr_current_idx", 0)
+    nxt = _find_next_pending(filtered, cur)
+    if nxt is None:  # wrap: a pending event earlier in this recording
+        nxt = next((i for i, a in enumerate(filtered[:cur + 1])
+                    if a.label == "pending"), None)
+    if nxt is not None:
+        set_props("tr-jump-to", {"value": nxt + 1})
+        return no_update
+    if any(a.label == "pending" for a in annotations):
+        return "Pending events left on other channels \u2014 clear the Channel filter"
+    active, counts = _blind_pending_by_recording(state, annotations)
+    n = len(counts)
+    for step in range(1, n):
+        j = (active + step) % n
+        if counts[j]:
+            set_props("file-bar-dropdown", {"value": j})
+            return f"Opening recording {j + 1} of {n}\u2026"
+    return "All events reviewed \u2014 use Score in the banner"
 
 
 # ── Boundary Adjustment ───────────────────────────────────────────────
@@ -2412,7 +2695,7 @@ def handle_boundary_adjustment(relayout_data, ch_filter, sid):
             _auto_save(state, annotations)
             dur = f"({ann.offset_sec - ann.onset_sec:.2f}s)"
             badge = _event_badge(ann)
-            props = _build_event_properties(rec, ann)
+            props = _build_event_properties(rec, ann, _is_blind(state))
             return (
                 alert("Boundaries updated", "success"),
                 round(ann.onset_sec, 3),
@@ -2453,17 +2736,8 @@ def save_notes(notes_val, ch_filter, sid):
                 break
         _auto_save(state, annotations)
 
-    # Return existing style unchanged
-    return {
-        "width": "100%", "height": "60px",
-        "backgroundColor": "var(--ned-surface)",
-        "border": "1px solid var(--ned-border)",
-        "borderRadius": "6px",
-        "color": "var(--ned-text)",
-        "fontSize": "0.85rem",
-        "padding": "8px",
-        "resize": "vertical",
-    }
+    # Return the layout's style unchanged (colours come from the stylesheet)
+    return {"width": "100%", "height": "60px", "resize": "vertical"}
 
 
 # ── Browse Mode Callbacks ─────────────────────────────────────────────

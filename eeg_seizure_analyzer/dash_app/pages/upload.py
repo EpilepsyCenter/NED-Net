@@ -15,10 +15,12 @@ import dash_ag_grid as dag
 from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.recent import add_recent, list_recent
 from eeg_seizure_analyzer.dash_app.components import (
+    loading,
     metric_card,
     alert,
     empty_state,
     section_header,
+    grid_height,
 )
 from eeg_seizure_analyzer.io.edf_reader import auto_pair_channels
 from eeg_seizure_analyzer.io.channel_ids import (
@@ -155,7 +157,7 @@ def _recent_list() -> html.Div:
     for i, it in enumerate(items):
         p = it["path"]
         name = os.path.basename(p.rstrip("/\\")) or p
-        icon = "\U0001F4C1" if it["kind"] == "folder" else "\U0001F4C4"
+        icon = "folder" if it["kind"] == "folder" else "file"
         rows.append(html.Button(
             id={"type": "recent-open", "index": i},
             n_clicks=0,
@@ -163,7 +165,7 @@ def _recent_list() -> html.Div:
             title=p if it["exists"] else f"{p} (no longer found)",
             className="recent-item",
             children=[
-                html.Span(icon, style={"width": "22px"}),
+                html.Span(className=f"btn-icon icon-{icon} recent-icon"),
                 html.Span(name, className="recent-name"),
                 html.Span(os.path.dirname(p.rstrip("/\\")) if it["exists"]
                           else "no longer found", className="recent-dir"),
@@ -481,7 +483,7 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
                 columnDefs=col_defs,
                 defaultColDef={"sortable": True, "resizable": True},
                 className="ag-theme-alpine-dark",
-                style={"height": "300px"},
+                style={"height": grid_height(len(channel_info), max_px=360)},
                 dashGridOptions={"animateRows": False},
             ),
 
@@ -547,7 +549,7 @@ def _channel_selection_layout(state: server_state.SessionState) -> html.Div:
             ),
 
             # Loading spinner wrapping the load status
-            dcc.Loading(
+            loading(
                 id="upload-load-spinner",
                 type="default",
                 children=html.Div(
@@ -615,7 +617,7 @@ def _loaded_layout(state: server_state.SessionState) -> html.Div:
                              "editable": True, "width": 120},
                         ],
                         className="ag-theme-alpine-dark",
-                        style={"height": f"{min(60 + rec.n_channels * 42, 400)}px"},
+                        style={"height": grid_height(rec.n_channels, max_px=400)},
                         dashGridOptions={"animateRows": False},
                     ),
                     html.Div(id="upload-channel-ids-status",
@@ -725,7 +727,7 @@ def _batch_browse_layout(state: server_state.SessionState) -> html.Div:
             ], className="mb-3"),
 
             # Scan results area
-            dcc.Loading(
+            loading(
                 html.Div(id="batch-scan-results"),
                 type="circle", color="#58a6ff",
             ),
@@ -835,7 +837,7 @@ def _batch_loaded_layout(state: server_state.SessionState) -> html.Div:
                              "editable": True, "width": 120},
                         ],
                         className="ag-theme-alpine-dark",
-                        style={"height": f"{min(60 + rec.n_channels * 42, 400)}px"},
+                        style={"height": grid_height(rec.n_channels, max_px=400)},
                         dashGridOptions={"animateRows": False},
                     ),
                     html.Div(id="upload-channel-ids-status",
@@ -1788,7 +1790,7 @@ def batch_scan_folder(n_clicks, n_auto, folder, sid):
         columnDefs=col_defs,
         defaultColDef={"sortable": True, "resizable": True},
         className="ag-theme-alpine-dark",
-        style={"height": f"{min(60 + len(rows) * 42, 500)}px"},
+        style={"height": grid_height(len(rows), max_px=500)},
         dashGridOptions={"animateRows": False},
     )
 

@@ -11,14 +11,33 @@ import dash_bootstrap_components as dbc
 
 from eeg_seizure_analyzer.dash_app import server_state, file_dialogs
 from eeg_seizure_analyzer.dash_app.components import (
+    loading,
     apply_fig_theme,
+    icon,
     no_recording_placeholder,
+    panel_row,
+    split_page,
 )
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter, notch_filter
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
+
+
+def _background_stretches(rec) -> list[tuple[int, float, float, str]]:
+    """Background stretches of the loaded recording: (channel, onset, offset, label).
+
+    Read from its _ned_background_annotations.json (Training > Background)."""
+    from eeg_seizure_analyzer.io.annotation_store import load_background_annotations
+    path = getattr(rec, "source_path", None)
+    if not path:
+        return []
+    try:
+        anns = load_background_annotations(str(path)) or []
+    except Exception:
+        return []
+    return [(int(a.channel), float(a.onset_sec), float(a.offset_sec), a.label) for a in anns]
 
 def _minmax_downsample(
     time_arr: np.ndarray, data: np.ndarray, target_points: int = 2400,
@@ -57,28 +76,20 @@ def _activity_controls(state, act_ymin=0.0, act_ymax=4.0) -> html.Div:
 
     return html.Div(
         id="viewer-act-controls",
+        className="panel-field",
         style={"display": "block" if has_act else "none"},
         children=[
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Activity Y min",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Input(
-                        id="viewer-act-ymin", type="number",
-                        value=act_ymin, step=0.1, debounce=True,
-                        className="form-control", style={"width": "100%"},
-                    ),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Activity Y max",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Input(
-                        id="viewer-act-ymax", type="number",
-                        value=act_ymax, step=0.1, debounce=True,
-                        className="form-control", style={"width": "100%"},
-                    ),
-                ], width=2),
-            ], className="g-2 mb-3"),
+            html.Label("Activity channel", className="panel-label"),
+            panel_row("Y min", dcc.Input(
+                id="viewer-act-ymin", type="number",
+                value=act_ymin, step=0.1, debounce=True,
+                className="form-control", style={"width": "96px"},
+            )),
+            panel_row("Y max", dcc.Input(
+                id="viewer-act-ymax", type="number",
+                value=act_ymax, step=0.1, debounce=True,
+                className="form-control", style={"width": "96px"},
+            )),
         ],
     )
 
@@ -170,6 +181,7 @@ def _export_view_svg(state, path: str) -> None:
     bp_high = float(s.get("bp_high", 50.0) or 50.0)
     notch_freq = float(s.get("notch_freq", 50) or 50)
     show_events = bool(s.get("show_events", True))
+    show_background = bool(s.get("show_background", True))
     show_is = bool(s.get("show_is", False))
     show_spikes = bool(s.get("show_spikes", False))
     show_baseline = bool(s.get("show_baseline", True))
@@ -245,6 +257,20 @@ def _export_view_svg(state, path: str) -> None:
                 (x0, ch_offset - half), x1 - x0, spacing,
                 facecolor=color, edgecolor=color, alpha=0.18,
                 linewidth=1.0, zorder=0,
+            ))
+
+    # Background stretches: own colours by review label, dashed edge
+    if show_background:
+        from eeg_seizure_analyzer.dash_app.background_style import bg_colors
+        for ch, on, off, label in _background_stretches(rec):
+            if off < start_sec or on > end_sec or ch not in channel_offsets:
+                continue
+            c = bg_colors(label)
+            x0, x1 = max(on, start_sec), min(off, end_sec)
+            ax.add_patch(Rectangle(
+                (x0, channel_offsets[ch] - spacing / 2.0), x1 - x0, spacing,
+                facecolor=c["line"], edgecolor=c["line"], alpha=0.15,
+                linewidth=1.0, linestyle="--", zorder=0,
             ))
 
     # Interictal spike dots
@@ -401,12 +427,14 @@ def layout(sid: str | None) -> html.Div:
     v_start = saved.get("start", 0)
     v_yrange = saved.get("yrange", default_yrange)
     v_height = saved.get("height", 600)
+    v_height_mode = saved.get("height_mode", "auto")  # "auto" fills the window
     v_bp_on = saved.get("bp_on", True)
     v_notch_on = saved.get("notch_on", False)
     v_bp_low = saved.get("bp_low", 1.0)
     v_bp_high = saved.get("bp_high", 50.0)
     v_notch_freq = saved.get("notch_freq", 50)
     v_show_events = saved.get("show_events", True)
+    v_show_background = saved.get("show_background", True)
     v_show_is = saved.get("show_is", False)
     v_show_spikes = saved.get("show_spikes", False)
     v_show_baseline = saved.get("show_baseline", True)
@@ -418,186 +446,201 @@ def layout(sid: str | None) -> html.Div:
     # Store default so callback can use it as fallback (not 100)
     state.extra["_viewer_default_yrange"] = default_yrange
 
-    return html.Div(
-        style={"padding": "24px"},
-        children=[
-            # Channel selection (first — most important)
-            html.Div(
-                style={"marginBottom": "8px", "display": "flex",
-                       "alignItems": "center", "gap": "8px", "flexWrap": "wrap"},
-                children=[
-                    html.Label("Channels:",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                                      "margin": "0", "fontWeight": "500"}),
-                    dbc.Checklist(
-                        id="viewer-channel-checks",
-                        options=[
-                            {"label": rec.channel_names[i], "value": i}
-                            for i in range(rec.n_channels)
-                        ],
-                        value=v_channels,
-                        inline=True,
-                        style={"fontSize": "0.8rem"},
-                    ),
-                    html.A("All", id="viewer-ch-all", href="#",
-                           style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
-                                  "cursor": "pointer", "marginLeft": "4px"}),
-                    html.A("None", id="viewer-ch-none", href="#",
-                           style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
-                                  "cursor": "pointer"}),
-                ],
-            ),
+    def _num(id_, value, **kw):
+        return dcc.Input(id=id_, type="number", value=value, debounce=True,
+                         className="form-control", style={"width": "96px"}, **kw)
 
-            # Controls row
-            dbc.Row(
-                [
-                    dbc.Col([
-                        html.Label("Window (s)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Input(
-                            id="viewer-window-input", type="number",
-                            min=1, max=600, step=1, value=v_window,
-                            debounce=True, className="form-control",
-                            style={"width": "100%"},
-                        ),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label("Start (s)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Input(
-                            id="viewer-start-input", type="number",
-                            min=0, max=rec.duration_sec, step=1, value=v_start,
-                            debounce=True, className="form-control",
-                            style={"width": "100%"},
-                        ),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label(f"Y range ({unit_label})" if unit_label else "Y range",
-                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Input(
-                            id="viewer-yrange-input", type="number",
-                            min=0, step=0.01,
-                            value=v_yrange,
-                            debounce=True, className="form-control",
-                            style={"width": "100%"},
-                        ),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label("Height (px)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Input(
-                            id="viewer-height-input", type="number",
-                            min=300, max=3000, step=50, value=v_height,
-                            debounce=True, className="form-control",
-                            style={"width": "100%"},
-                        ),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label("Filters", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        html.Div([
-                            dbc.Checkbox(id="viewer-bp-check", label="Bandpass", value=v_bp_on,
-                                         style={"fontSize": "0.8rem"}),
-                            dbc.Checkbox(id="viewer-notch-check", label="Notch", value=v_notch_on,
-                                         style={"fontSize": "0.8rem"}),
-                        ]),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label("Overlays", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        html.Div([
-                            dbc.Checkbox(id="viewer-show-events", label="Seizures", value=v_show_events,
-                                         style={"fontSize": "0.8rem"}),
-                            dbc.Checkbox(id="viewer-show-is", label="IS events", value=v_show_is,
-                                         style={"fontSize": "0.8rem"}),
-                            dbc.Checkbox(id="viewer-show-spikes", label="Spike dots", value=v_show_spikes,
-                                         style={"fontSize": "0.8rem"}),
-                            dbc.Checkbox(id="viewer-show-baseline", label="Baseline", value=v_show_baseline,
-                                         style={"fontSize": "0.8rem"}),
-                            dbc.Checkbox(id="viewer-show-threshold", label="Threshold", value=v_show_threshold,
-                                         style={"fontSize": "0.8rem"}),
-                        ]),
-                    ], width=2),
-                ],
-                className="g-2 mb-3",
-            ),
-
-            # Activity Y range (shown when activity channels exist)
-            _activity_controls(state, v_act_ymin, v_act_ymax),
-
-            # Filter params (shown when bandpass is on)
-            dbc.Collapse(
-                dbc.Row([
-                    dbc.Col([
-                        html.Label("BP Low (Hz)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Input(id="viewer-bp-low", type="number", min=0.5, max=500,
-                                  step=0.5, value=v_bp_low, debounce=True, className="form-control"),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label("BP High (Hz)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Input(id="viewer-bp-high", type="number", min=1, max=1000,
-                                  step=1, value=v_bp_high, debounce=True, className="form-control"),
-                    ], width=2),
-                    dbc.Col([
-                        html.Label("Notch (Hz)", style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        dcc.Dropdown(
-                            id="viewer-notch-freq",
-                            options=[{"label": "50 Hz", "value": 50},
-                                     {"label": "60 Hz", "value": 60}],
-                            value=v_notch_freq, clearable=False,
-                            style={"fontSize": "0.82rem"},
-                        ),
-                    ], width=2),
-                ], className="g-2 mb-3"),
-                id="viewer-filter-collapse",
-                is_open=v_bp_on or v_notch_on,
-            ),
-
-            # Navigation bar — just above the graph
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "8px",
-                       "marginBottom": "4px"},
-                children=[
-                    dbc.Button("\u23EE", id="nav-start", size="sm",
-                               className="btn-ned-secondary",
-                               title="Go to start",
-                               style={"fontSize": "1rem"}),
-                    dbc.Button("\u23EA", id="nav-back-big", size="sm",
-                               className="btn-ned-secondary", style={"fontSize": "1rem"}),
-                    dbc.Button("\u25C0", id="nav-back", size="sm",
-                               className="btn-ned-secondary", style={"fontSize": "1rem"}),
-                    html.Div(
-                        id="nav-time-display",
-                        # Filled from the start (was blank until the first click)
-                        children=f"{float(v_start):.1f}s \u2013 "
-                                 f"{float(v_start) + float(v_window):.1f}s",
-                        style={"flex": "1", "textAlign": "center", "fontWeight": "600",
-                               "fontSize": "0.9rem"},
-                    ),
-                    dbc.Button("\u25B6", id="nav-fwd", size="sm",
-                               className="btn-ned-secondary", style={"fontSize": "1rem"}),
-                    dbc.Button("\u23E9", id="nav-fwd-big", size="sm",
-                               className="btn-ned-secondary", style={"fontSize": "1rem"}),
-                    dbc.Button("Export SVG", id="viewer-export-svg", size="sm",
-                               className="btn-ned-secondary",
-                               title="Export the current view as a vector SVG",
-                               style={"marginLeft": "12px"}),
-                    html.Span(id="viewer-export-status",
-                              style={"fontSize": "0.75rem",
-                                     "color": "var(--ned-text-muted)"}),
-                ],
-            ),
-
-            # Main graph
-            dcc.Loading(
-                dcc.Graph(
-                    id="viewer-graph",
-                    config={"scrollZoom": True, "displayModeBar": True},
-                    style={"borderRadius": "8px"},
+    # ── Work area (left): time navigation, the trace, video ──────────
+    main = [
+        # Navigation bar — just above the graph
+        html.Div(
+            className="viewer-navbar",
+            children=[
+                dbc.Button(icon("skip-start"), id="nav-start", size="sm",
+                           className="btn-ned-secondary btn-icon-only",
+                           title="Go to start"),
+                dbc.Button(icon("rewind"), id="nav-back-big", size="sm",
+                           className="btn-ned-secondary btn-icon-only",
+                           title="Back one window"),
+                dbc.Button(icon("step-back"), id="nav-back", size="sm",
+                           className="btn-ned-secondary btn-icon-only",
+                           title="Back half a window"),
+                html.Div(
+                    id="nav-time-display",
+                    # Filled from the start (was blank until the first click)
+                    children=f"{float(v_start):.1f}s – "
+                             f"{float(v_start) + float(v_window):.1f}s",
+                    className="viewer-time",
                 ),
-                type="circle",
-                color="#58a6ff",
-            ),
+                dbc.Button(icon("step-forward"), id="nav-fwd", size="sm",
+                           className="btn-ned-secondary btn-icon-only",
+                           title="Forward half a window"),
+                dbc.Button(icon("fast-forward"), id="nav-fwd-big", size="sm",
+                           className="btn-ned-secondary btn-icon-only",
+                           title="Forward one window"),
+                dbc.Button("Export SVG…", id="viewer-export-svg", size="sm",
+                           className="btn-ned-secondary",
+                           title="Export the current view as a vector SVG",
+                           style={"marginLeft": "12px"}),
+                html.Span(id="viewer-export-status",
+                          style={"fontSize": "0.75rem",
+                                 "color": "var(--ned-text-muted)"}),
+            ],
+        ),
 
-            # Video player (shown if MP4 exists)
-            _video_player(state, sid, v_start),
-        ],
-    )
+        # Main graph
+        loading(
+            dcc.Graph(
+                id="viewer-graph",
+                config={"scrollZoom": True, "displayModeBar": True},
+                style=_graph_style(v_height_mode),
+            ),
+            type="circle",
+            color="#58a6ff",
+        ),
+
+        # Video player (shown if MP4 exists)
+        _video_player(state, sid, v_start),
+    ]
+
+    # ── Panel (right): what to show and how ──────────────────────────
+    panel = [
+        # Channels
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Div(
+                    className="panel-label-row",
+                    children=[
+                        html.Label("Channels", className="panel-label"),
+                        html.Div([
+                            html.A("All", id="viewer-ch-all", href="#",
+                                   className="panel-link"),
+                            html.A("None", id="viewer-ch-none", href="#",
+                                   className="panel-link"),
+                        ], style={"display": "flex", "gap": "10px"}),
+                    ],
+                ),
+                dbc.Checklist(
+                    id="viewer-channel-checks",
+                    options=[
+                        {"label": rec.channel_names[i], "value": i}
+                        for i in range(rec.n_channels)
+                    ],
+                    value=v_channels,
+                    className="panel-checks",
+                ),
+            ],
+        ),
+
+        # Window, start, scale
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Display", className="panel-label"),
+                panel_row("Window", _num("viewer-window-input", v_window,
+                                         min=1, max=600, step=1), "s"),
+                panel_row("Start", _num("viewer-start-input", v_start,
+                                        min=0, max=rec.duration_sec, step=1), "s"),
+                panel_row("Y range", _num("viewer-yrange-input", v_yrange,
+                                          min=0, step=0.01), unit_label or None),
+                panel_row("Height", dbc.RadioItems(
+                    id="viewer-height-mode",
+                    options=[{"label": "Auto", "value": "auto"},
+                             {"label": "Custom", "value": "custom"}],
+                    value=v_height_mode, inline=True,
+                    className="btn-group segmented",
+                    inputClassName="btn-check",
+                    labelClassName="btn btn-outline-secondary",
+                    labelCheckedClassName="btn-ned-primary",
+                )),
+                panel_row("Custom height", _num("viewer-height-input", v_height,
+                                                min=300, max=3000, step=50,
+                                                disabled=v_height_mode == "auto"), "px"),
+            ],
+        ),
+
+        # Filters
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Filters", className="panel-label"),
+                dbc.Checkbox(id="viewer-bp-check", label="Bandpass", value=v_bp_on),
+                dbc.Checkbox(id="viewer-notch-check", label="Notch", value=v_notch_on),
+                # Filter params (shown when a filter is on)
+                dbc.Collapse(
+                    html.Div(
+                        style={"marginTop": "8px"},
+                        children=[
+                            panel_row("Bandpass low", _num("viewer-bp-low", v_bp_low,
+                                                           min=0.5, max=500, step=0.5), "Hz"),
+                            panel_row("Bandpass high", _num("viewer-bp-high", v_bp_high,
+                                                            min=1, max=1000, step=1), "Hz"),
+                            panel_row("Notch", dcc.Dropdown(
+                                id="viewer-notch-freq",
+                                options=[{"label": "50 Hz", "value": 50},
+                                         {"label": "60 Hz", "value": 60}],
+                                value=v_notch_freq, clearable=False,
+                                style={"width": "96px"},
+                            )),
+                        ],
+                    ),
+                    id="viewer-filter-collapse",
+                    is_open=v_bp_on or v_notch_on,
+                ),
+            ],
+        ),
+
+        # Overlays
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Overlays", className="panel-label"),
+                html.Div(
+                    className="panel-check-grid",
+                    children=[
+                        dbc.Checkbox(id="viewer-show-events", label="Seizures",
+                                     value=v_show_events),
+                        dbc.Checkbox(id="viewer-show-background", label="Background",
+                                     value=v_show_background),
+                        dbc.Checkbox(id="viewer-show-is", label="IS events",
+                                     value=v_show_is),
+                        dbc.Checkbox(id="viewer-show-spikes", label="Spike dots",
+                                     value=v_show_spikes),
+                        dbc.Checkbox(id="viewer-show-baseline", label="Baseline",
+                                     value=v_show_baseline),
+                        dbc.Checkbox(id="viewer-show-threshold", label="Threshold",
+                                     value=v_show_threshold),
+                    ],
+                ),
+            ],
+        ),
+
+        # Activity Y range (shown when activity channels exist)
+        _activity_controls(state, v_act_ymin, v_act_ymax),
+    ]
+
+    return split_page(main, panel, panel_title="Display")
+
+
+def _graph_style(height_mode: str) -> dict:
+    """Viewer graph container: in Auto mode it fills the window height left
+    under the toolbar and the navigation bar (Plotly then sizes to it)."""
+    if (height_mode or "auto") == "auto":
+        return {"borderRadius": "8px", "minHeight": "360px",
+                "height": "calc(100vh - var(--ned-toolbar-h) - var(--ned-statusbar-h) - 100px)"}
+    return {"borderRadius": "8px"}
+
+
+@callback(
+    Output("viewer-graph", "style"),
+    Output("viewer-height-input", "disabled"),
+    Input("viewer-height-mode", "value"),
+    prevent_initial_call=True,
+)
+def toggle_viewer_height_mode(mode):
+    """Auto / Custom height: container size and whether the height field is used."""
+    return _graph_style(mode), (mode or "auto") == "auto"
 
 
 def _video_player(state, sid, start_sec):
@@ -733,13 +776,16 @@ def handle_navigation(ns, bb, b, f, fb, start_val, window, sid):
     Input("viewer-channel-checks", "value"),
     Input("viewer-act-ymin", "value"),
     Input("viewer-act-ymax", "value"),
+    Input("viewer-show-background", "value"),
+    Input("viewer-height-mode", "value"),
     State("session-id", "data"),
 )
 def update_viewer(
     start_sec, window_sec, y_range, plot_height,
     bp_on, notch_on, bp_low, bp_high, notch_freq,
     show_events, show_is, show_spikes, show_baseline, show_threshold,
-    selected_channels, act_ymin, act_ymax,
+    selected_channels, act_ymin, act_ymax, show_background,
+    height_mode,
     sid,
 ):
     """Build and return the EEG viewer figure."""
@@ -859,6 +905,22 @@ def update_viewer(
                 y0=ch_offset - half, y1=ch_offset + half,
                 fillcolor=_event_colors[ch_pos % len(_event_colors)],
                 line=dict(color=_event_borders[ch_pos % len(_event_borders)], width=1),
+                layer="below",
+            )
+
+    # Background stretches (Training > Background): own colours by review label,
+    # dashed edge so they can't be mistaken for seizures
+    if show_background:
+        from eeg_seizure_analyzer.dash_app.background_style import bg_colors
+        for ch, on, off, label in _background_stretches(rec):
+            if off < start_sec or on > end_sec or ch not in channel_offsets:
+                continue
+            c = bg_colors(label)
+            fig.add_shape(
+                type="rect", x0=max(on, start_sec), x1=min(off, end_sec),
+                y0=channel_offsets[ch] - spacing / 2.0,
+                y1=channel_offsets[ch] + spacing / 2.0,
+                fillcolor=c["fill"], line=dict(color=c["line"], width=1, dash="dash"),
                 layer="below",
             )
 
@@ -1046,8 +1108,12 @@ def update_viewer(
             ),
         )
 
+    # Auto: no fixed height, so the graph fills its container (sized to the
+    # window in CSS, see _graph_style); Custom: the height field.
+    auto_height = (height_mode or "auto") == "auto"
     fig.update_layout(
-        height=plot_height,
+        height=None if auto_height else plot_height,
+        autosize=True,
         uirevision="viewer_stable",
         showlegend=False,
         dragmode="zoom",
@@ -1084,12 +1150,14 @@ def update_viewer(
         "start": start_sec,
         "yrange": y_range,
         "height": plot_height,
+        "height_mode": height_mode or "auto",
         "bp_on": bp_on,
         "notch_on": notch_on,
         "bp_low": bp_low,
         "bp_high": bp_high,
         "notch_freq": notch_freq,
         "show_events": show_events,
+        "show_background": show_background,
         "show_is": show_is,
         "show_spikes": show_spikes,
         "show_baseline": show_baseline,

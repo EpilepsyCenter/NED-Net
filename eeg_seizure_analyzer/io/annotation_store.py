@@ -161,6 +161,17 @@ def spike_annotation_json_path(edf_path: str) -> Path:
     return p.with_suffix("").with_name(p.stem + "_ned_spike_annotations.json")
 
 
+def background_annotation_json_path(edf_path: str) -> Path:
+    """Derive the background annotations JSON path from an EDF file path.
+
+    ``_ned_background_annotations.json``: stretches proposed or marked as seizure-free
+    background, reviewed like events (pending / confirmed / rejected). Kept in their
+    own file so a rejected background never mixes with rejected seizure events.
+    """
+    p = Path(edf_path)
+    return p.with_suffix("").with_name(p.stem + "_ned_background_annotations.json")
+
+
 # ---------------------------------------------------------------------------
 # Save / Load
 # ---------------------------------------------------------------------------
@@ -273,8 +284,8 @@ def load_annotations_with_settings(edf_path: str) -> tuple[list[AnnotatedEvent] 
 # Where a pending candidate entered the annotation file (features["origin"]),
 # shown in the Training tab so the review queue is traceable.
 ORIGIN_LABELS = {
-    "detection_tab": "Detection tab",
-    "detect_all": "Detection tab (Detect all files)",
+    "detection_tab": "Seizures page",
+    "detect_all": "Seizures page (Detect All Files)",
     "analysis_single": "Analysis (single file)",
     "analysis_batch": "Analysis (batch)",
     "analysis_live": "Analysis (live monitoring)",
@@ -550,3 +561,101 @@ def load_spike_annotations(edf_path: str) -> list[AnnotatedEvent] | None:
         raw = json.load(fp)
 
     return [AnnotatedEvent.from_dict(d) for d in raw.get("annotations", [])]
+
+
+# ---------------------------------------------------------------------------
+# Background save / load  (separate file from seizure and spike annotations)
+# ---------------------------------------------------------------------------
+
+BACKGROUND_EVENT_TYPE = "background"
+BACKGROUND_RULE_METHOD = "background_rule"
+
+
+def save_background_annotations(
+    edf_path: str,
+    annotations: list[AnnotatedEvent],
+    annotator: str = "",
+    proposal_settings: dict | None = None,
+) -> Path:
+    """Serialise background annotations next to the EDF (atomic temp + rename)."""
+    out_path = background_annotation_json_path(edf_path)
+    if proposal_settings is None and out_path.is_file():
+        try:
+            proposal_settings = json.loads(out_path.read_text()).get("proposal_settings")
+        except (OSError, ValueError):
+            proposal_settings = None
+    payload = {
+        "version": _ANNOTATION_FORMAT_VERSION,
+        "edf_path": str(edf_path),
+        "annotator": annotator,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "n_annotations": len(annotations),
+        "annotations": [_sanitize(a.to_dict()) for a in annotations],
+    }
+    if proposal_settings:
+        payload["proposal_settings"] = _sanitize(proposal_settings)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".tmp", prefix=".ned_bg_ann_",
+                                    dir=str(out_path.parent))
+    try:
+        with os.fdopen(fd, "w") as fp:
+            json.dump(payload, fp, indent=2, cls=_NumpyEncoder)
+        os.replace(tmp_path, str(out_path))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return out_path
+
+
+def load_background_annotations(edf_path: str) -> list[AnnotatedEvent] | None:
+    """Load background annotations for an EDF file, or None if there are none."""
+    json_path = background_annotation_json_path(edf_path)
+    if not json_path.is_file():
+        return None
+    with open(json_path, "r") as fp:
+        raw = json.load(fp)
+    return [AnnotatedEvent.from_dict(d) for d in raw.get("annotations", [])]
+
+
+def write_background_proposals(
+    edf_path: str,
+    events: list[DetectedEvent],
+    channel_ids: dict[int, str] | None = None,
+    proposal_settings: dict | None = None,
+) -> dict:
+    """Merge proposed background stretches into the EDF's background file.
+
+    Reviewed stretches (confirmed / rejected) and manual ones are kept; pending
+    proposals from an earlier run are replaced, except where they overlap a reviewed
+    stretch (which already covers them). Returns counts n_new and n_total.
+    """
+    channel_ids = channel_ids or {}
+    existing = load_background_annotations(edf_path) or []
+    kept = [a for a in existing
+            if a.label != "pending" or a.source == "manual"]
+    new = []
+    for ev in events:
+        if any(k.channel == ev.channel and k.onset_sec < ev.offset_sec
+               and k.offset_sec > ev.onset_sec for k in kept):
+            continue
+        new.append(AnnotatedEvent(
+            file_path=str(edf_path),
+            animal_id=ev.animal_id or channel_ids.get(ev.channel, ""),
+            annotator="", onset_sec=float(ev.onset_sec), offset_sec=float(ev.offset_sec),
+            channel=int(ev.channel), label="pending", source="detector",
+            event_type=BACKGROUND_EVENT_TYPE,
+            detector_confidence=float(ev.confidence or 0.0),
+            features=dict(ev.features or {}),
+        ))
+    merged = sorted(kept + new, key=lambda a: (a.channel, a.onset_sec))
+    next_id = max((a.event_id for a in merged), default=0) + 1
+    for a in merged:
+        if a.event_id <= 0:
+            a.event_id = next_id
+            next_id += 1
+    save_background_annotations(str(edf_path), merged, proposal_settings=proposal_settings)
+    return {"n_new": len(new), "n_total": len(merged)}
+

@@ -248,6 +248,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base-filters", type=int, default=32)
     p.add_argument("--depth", type=int, default=4)
     p.add_argument("--dropout", type=float, default=0.2)
+    p.add_argument("--bottleneck", choices=["conv", "gru", "transformer"], default="conv",
+                   help="U-Net middle block. 'conv' = the original U-Net (each output "
+                        "sees ~4.7 s); 'gru' / 'transformer' add a whole-window context "
+                        "block, so each output sees the full window.")
+    p.add_argument("--max-filters", type=int, default=0,
+                   help="cap on filters per level (0 = none). With --depth 7 and 512 the "
+                        "conv-only U-Net sees ~38 s at 44.7M parameters.")
+    p.add_argument("--bottleneck-dim", type=int, default=256)
+    p.add_argument("--bottleneck-layers", type=int, default=2)
+    p.add_argument("--bottleneck-heads", type=int, default=4)
+    p.add_argument("--seed", type=int, default=None,
+                   help="seed for weight init and batch order (the split is unaffected)")
+    p.add_argument("--background-source", default="random",
+                   choices=["random", "none", "confirmed", "confirmed+random", "proposed"],
+                   help="negatives besides rejected events: random background (default), "
+                        "none, confirmed background stretches (_ned_background_annotations"
+                        ".json), confirmed topped up with random, or proposed (confirmed + "
+                        "unreviewed rule proposals)")
+    p.add_argument("--window-sec", type=int, default=60,
+                   help="training window length in s (saved with the model; detection uses it)")
     p.add_argument("--patience", type=int, default=10)
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--export-windows", metavar="DIR",
@@ -305,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         target=args.target,
         val_pairs_file=args.val_pairs_file,
         nonconv_negatives=not args.nonconv_left_out,
+        window_sec=args.window_sec,
+        background_source=args.background_source,
     )
     if args.target != "seizure" or args.val_pairs_file:
         print(f"Target: {args.target}   val pairs file: {args.val_pairs_file or 'none'}"
@@ -333,6 +355,12 @@ def main(argv: list[str] | None = None) -> int:
         base_filters=args.base_filters,
         depth=args.depth,
         dropout=args.dropout,
+        bottleneck=args.bottleneck,
+        max_filters=args.max_filters,
+        bottleneck_dim=args.bottleneck_dim,
+        bottleneck_layers=args.bottleneck_layers,
+        bottleneck_heads=args.bottleneck_heads,
+        seed=args.seed,
         patience=args.patience,
         num_workers=args.num_workers,
         mixed_precision=not args.fp32,

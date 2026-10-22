@@ -13,6 +13,37 @@ DATASETS_DIR = Path.home() / ".eeg_seizure_analyzer" / "datasets"
 # Annotation filename suffixes (must match annotation_store.py conventions)
 _SEIZURE_SUFFIX = "_ned_annotations.json"
 _SPIKE_SUFFIX = "_ned_spike_annotations.json"
+_BACKGROUND_SUFFIX = "_ned_background_annotations.json"
+
+
+def _background_counts(bg_path: str) -> dict:
+    """Count background stretches by label (and their total seconds).
+
+    Missing or unreadable file -> all zeros. Unlabelled stretches count as pending,
+    as for seizure events.
+    """
+    counts = {"n_bg_confirmed": 0, "n_bg_rejected": 0, "n_bg_pending": 0,
+              "n_bg_total": 0, "bg_confirmed_sec": 0.0, "bg_rejected_sec": 0.0,
+              "bg_pending_sec": 0.0}
+    if not os.path.isfile(bg_path):
+        return counts
+    try:
+        with open(bg_path, "r") as fp:
+            stretches = json.load(fp).get("annotations", [])
+    except Exception:
+        return counts
+    for a in stretches:
+        label = a.get("label", "pending")
+        if label not in ("confirmed", "rejected", "pending"):
+            continue
+        try:
+            dur = max(0.0, float(a.get("offset_sec", 0)) - float(a.get("onset_sec", 0)))
+        except (TypeError, ValueError):
+            dur = 0.0
+        counts[f"n_bg_{label}"] += 1
+        counts[f"bg_{label}_sec"] += dur
+    counts["n_bg_total"] = len(stretches)
+    return counts
 
 
 def scan_annotation_files(
@@ -40,6 +71,13 @@ def scan_annotation_files(
         ``n_rejected_conv``, ``n_rejected_nonconv``).  An event is counted
         as convulsive when ``features.convulsive`` is truthy; untagged
         seizures count as non-convulsive.
+
+        For seizure annotations each dict also carries the recording's
+        background stretches (``_ned_background_annotations.json``; zeros when
+        there is none): ``n_bg_confirmed``, ``n_bg_rejected``, ``n_bg_pending``,
+        ``n_bg_total`` and the summed durations ``bg_confirmed_sec``,
+        ``bg_rejected_sec``, ``bg_pending_sec``.  Only recordings with a
+        seizure annotation file are listed.
     """
     suffix = _SEIZURE_SUFFIX if annotation_type == "seizure" else _SPIKE_SUFFIX
     results: list[dict] = []
@@ -84,20 +122,22 @@ def scan_annotation_files(
                 if a.get("label") == "rejected" and _is_conv(a)
             )
 
-            results.append(
-                {
-                    "edf_path": edf_path,
-                    "annotation_path": ann_path,
-                    "n_confirmed": n_confirmed,
-                    "n_rejected": n_rejected,
-                    "n_pending": n_pending,
-                    "n_total": len(annotations),
-                    "n_confirmed_conv": n_confirmed_conv,
-                    "n_confirmed_nonconv": n_confirmed - n_confirmed_conv,
-                    "n_rejected_conv": n_rejected_conv,
-                    "n_rejected_nonconv": n_rejected - n_rejected_conv,
-                }
-            )
+            entry = {
+                "edf_path": edf_path,
+                "annotation_path": ann_path,
+                "n_confirmed": n_confirmed,
+                "n_rejected": n_rejected,
+                "n_pending": n_pending,
+                "n_total": len(annotations),
+                "n_confirmed_conv": n_confirmed_conv,
+                "n_confirmed_nonconv": n_confirmed - n_confirmed_conv,
+                "n_rejected_conv": n_rejected_conv,
+                "n_rejected_nonconv": n_rejected - n_rejected_conv,
+            }
+            if annotation_type == "seizure":
+                entry.update(_background_counts(
+                    os.path.join(dirpath, stem + _BACKGROUND_SUFFIX)))
+            results.append(entry)
 
     return results
 

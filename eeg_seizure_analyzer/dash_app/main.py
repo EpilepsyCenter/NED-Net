@@ -21,7 +21,8 @@ from eeg_seizure_analyzer.io.annotation_store import annotation_json_path
 
 # ── Import tab modules ────────────────────────────────────────────────
 
-from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, tools, adicht_converter, ml_datasets, analysis as analysis_page, results as results_page
+from eeg_seizure_analyzer.dash_app.pages import upload, viewer, seizures, spikes, training, training_spikes, training_background, tools, adicht_converter, ml_datasets, analysis as analysis_page, results as results_page
+from eeg_seizure_analyzer.dash_app.pages import blind_review
 
 # ── Initialise SQLite database ────────────────────────────────────────
 from eeg_seizure_analyzer import db as _db
@@ -35,7 +36,7 @@ app = Dash(
     suppress_callback_exceptions=True,
     assets_folder="assets",
     title="NED-Net",
-    update_title="NED-Net | Loading...",
+    update_title=None,
 )
 
 server = app.server
@@ -159,180 +160,163 @@ clientside_callback(
 )
 
 
+# ── Navigation ────────────────────────────────────────────────────────
+
+# Sidebar sections: (group label, [(tab id, label, icon name)]).
+# Icons are CSS masks defined in assets/style.css (.icon-<name>).
+NAV_GROUPS = [
+    ("Recording", [
+        ("upload", "Load", "folder"),
+        ("viewer", "Viewer", "wave"),
+    ]),
+    ("Detection", [
+        ("seizures", "Seizures", "bolt"),
+        ("spikes", "Interictal Spikes", "spike"),
+    ]),
+    ("Training", [
+        ("training", "Seizure Annotation", "tag"),
+        ("training_spikes", "Spike Annotation", "check"),
+        ("training_background", "Background", "stripes"),
+    ]),
+    ("Model", [
+        ("ml_datasets", "Dataset & Model", "database"),
+        ("blind_review", "Blind Review", "eye"),
+        ("analysis", "Batch Analysis", "layers"),
+        ("results", "Results", "chart"),
+    ]),
+    ("Tools", [
+        ("video_converter", "Video Converter", "film"),
+        ("adicht_converter", "ADICHT → EDF", "convert"),
+    ]),
+]
+
+# Every routable tab, in sidebar order
+NAV_IDS = [tid for _, items in NAV_GROUPS for tid, _, _ in items]
+ALL_TAB_IDS = list(NAV_IDS)
+
+
+def _nav_item(tid: str, label: str, icon: str, active: bool = False):
+    return html.Button(
+        [
+            html.Span(className=f"nav-icon icon-{icon}"),
+            html.Span(label, className="nav-label"),
+        ],
+        id=f"section-{tid}",
+        n_clicks=0,
+        className="nav-item active" if active else "nav-item",
+    )
+
+
 # ── Sidebar layout ────────────────────────────────────────────────────
 
 
 def _sidebar():
+    nav_children = []
+    for group, items in NAV_GROUPS:
+        nav_children.append(html.Div(group, className="nav-group-label"))
+        nav_children.extend(
+            _nav_item(tid, label, icon, active=(tid == "upload"))
+            for tid, label, icon in items
+        )
+
     return html.Div(
         id="sidebar",
         children=[
-            # Brand
+            # Brand (same height as the toolbar beside it)
             html.Div(
                 id="sidebar-brand",
-                children=[
-                    html.H4("NED-Net"),
-                    html.Div("Neural Event Detection", className="subtitle"),
-                ],
+                children=[html.Button("NED-Net", id="brand-home",
+                                      className="brand-name",
+                                      title="Start page")],
             ),
-            # Sidebar body
+            html.Nav(nav_children, id="sidebar-nav",
+                     **{"aria-label": "Sections"}),
+
+            # ── Blinding (hidden for now) ─────────────────
             html.Div(
-                id="sidebar-content",
+                style={"display": "none"},
                 children=[
-                    # ── Blinding (hidden for now) ─────────────────
-                    html.Div(
-                        style={"display": "none"},
-                        children=[
-                            section_header("BLINDING"),
-                            html.Div(id="blinding-badge-container",
-                                     children=[blinding_badge(False)]),
-                            dbc.Switch(
-                                id="blinding-toggle",
-                                label="Blinding OFF",
-                                value=False,
-                                className="mt-2",
-                                style={"fontSize": "0.82rem"},
-                            ),
-                        ],
+                    section_header("BLINDING"),
+                    html.Div(id="blinding-badge-container",
+                             children=[blinding_badge(False)]),
+                    dbc.Switch(
+                        id="blinding-toggle",
+                        label="Blinding OFF",
+                        value=False,
+                        className="mt-2",
                     ),
-
-                    # ── File info ─────────────────────────────────
-                    section_header("RECORDING"),
-                    html.Div(
-                        id="sidebar-file-info",
-                        children=[
-                            html.Div(
-                                "No file loaded",
-                                className="file-info",
-                                style={"opacity": "0.5"},
-                            ),
-                        ],
-                    ),
-
-                    sidebar_divider(),
-
-                    # ── Analysis status ────────────────────────────
-                    section_header("STATUS"),
-                    html.Div(id="sidebar-analysis-status"),
-
-                    # Hidden placeholder for channel selector (moved to Viewer/Browse)
-                    html.Div(id="sidebar-channel-selector", style={"display": "none"}),
                 ],
             ),
+            # Hidden placeholder for channel selector (moved to Viewer/Browse)
+            html.Div(id="sidebar-channel-selector", style={"display": "none"}),
+
             # Footer
             html.Div(
                 id="sidebar-footer",
                 children=[
+                    dbc.Switch(
+                        id="theme-toggle",
+                        label="Dark mode",
+                        value=False,
+                        className="theme-switch",
+                    ),
                     html.Div(
-                        className="theme-toggle-container",
+                        className="sidebar-version",
                         children=[
-                            dbc.Switch(
-                                id="theme-toggle",
-                                label="Dark mode",
-                                value=False,
-                                style={"fontSize": "0.75rem"},
-                            ),
+                            html.Span(f"NED-Net {__version__}"),
+                            html.A("Help", href="/assets/manual.html",
+                                   target="_blank", className="footer-link"),
                         ],
                     ),
-                    html.Div([
-                        html.Span(f"NED-Net v{__version__}"),
-                        html.Span(" \u00B7 ", style={"opacity": "0.4"}),
-                        html.Span("EEG Analysis Platform"),
-                        html.Span(" \u00B7 ", style={"opacity": "0.4"}),
-                        html.A("Help",
-                               href="/assets/manual.html",
-                               target="_blank",
-                               style={"color": "var(--ned-accent)",
-                                      "textDecoration": "none",
-                                      "fontSize": "0.75rem"}),
-                    ]),
                 ],
             ),
         ],
     )
 
 
-# ── Tab bar ───────────────────────────────────────────────────────────
-
-# Top-level tabs visible in the tab bar
-TOP_TAB_DEFS = [
-    ("upload", "Load"),
-    ("viewer", "Viewer"),
-    ("detection", "Detection"),              # parent — has subtabs
-    ("training_grp", "Training"),             # parent — has subtabs
-    ("ml_grp", "Dataset / Model"),            # parent — has subtabs
-    ("analysis", "Analysis"),                 # unified CNN detection (single/batch/live)
-    ("tools_grp", "Tools"),                   # parent — has subtabs
-    ("results", "Results"),
-    # ("settings", "Settings"),  # removed — placeholder not ready
-]
-
-# Subtabs for parent tab groups
-DETECTION_SUBTABS = [
-    ("seizures", "Seizure"),
-    ("spikes", "Interictal Spikes"),
-]
-TRAINING_SUBTABS = [
-    ("training", "Seizure"),
-    ("training_spikes", "Interictal Spikes"),
-]
-ML_SUBTABS = [
-    ("ml_datasets", "Dataset"),
-]
-TOOLS_SUBTABS = [
-    ("video_converter", "Video Converter"),
-    ("adicht_converter", "ADICHT → EDF"),
-]
-
-# All routable tab IDs (for render_tab and state)
-ALL_TAB_IDS = (
-    ["upload", "viewer", "analysis"]
-    + [tid for tid, _ in DETECTION_SUBTABS]
-    + [tid for tid, _ in TRAINING_SUBTABS]
-    + [tid for tid, _ in ML_SUBTABS]
-    + [tid for tid, _ in TOOLS_SUBTABS]
-    + ["results"]
-)
-
-# Legacy TAB_DEFS kept for any remaining references
-TAB_DEFS = [(tid, label) for tid, label in TOP_TAB_DEFS]
+# ── Toolbar and status bar ────────────────────────────────────────────
 
 
-def _tab_bar():
-    # Split tabs: main tabs on the left, Tools & Settings pushed right
-    _LEFT_TABS = [t for t in TOP_TAB_DEFS if t[0] not in ("tools_grp",)]
-    _RIGHT_TABS = [t for t in TOP_TAB_DEFS if t[0] in ("tools_grp",)]
-    nav_items = [
-        dbc.NavLink(label, id=f"tab-{tid}", active=tid == "upload", n_clicks=0)
-        for tid, label in _LEFT_TABS
+def _title_block(title: str, subtitle: str, tooltip: str | None = None):
+    """Toolbar title: recording name over a one-line summary."""
+    return [
+        html.Div(title, className="toolbar-title"),
+        html.Div(subtitle, className="toolbar-subtitle", title=tooltip),
     ]
-    nav_items.append(html.Div(style={"flex": "1"}))  # spacer
-    nav_items.extend(
-        dbc.NavLink(label, id=f"tab-{tid}", active=False, n_clicks=0)
-        for tid, label in _RIGHT_TABS
-    )
+
+
+def _toolbar():
     return html.Div(
-        id="tab-bar",
+        id="app-toolbar",
         children=[
-            # Main tab row
-            dbc.Nav(
-                nav_items,
-                pills=False,
-                className="nav-tabs",
-                style={"display": "flex", "flexWrap": "nowrap"},
-            ),
-            # Subtab row (shown when Detection or Training is active)
             html.Div(
-                id="subtab-bar",
+                id="sidebar-file-info",
+                className="toolbar-title-block",
+                children=_title_block("NED-Net", "No recording loaded"),
+            ),
+            html.Div(className="toolbar-spacer"),
+            # File selector (shown when several files are loaded)
+            html.Div(
+                id="file-selector-bar",
+                className="file-selector-bar",
                 style={"display": "none"},
-                children=[
-                    dbc.Nav(
-                        id="subtab-nav",
-                        pills=False,
-                        className="nav-tabs subtab-nav",
-                    ),
-                ],
+            ),
+            # Show / hide the settings panel of two-pane pages
+            # (handled in assets/app_shell.js; hidden on one-pane pages)
+            html.Button(
+                html.Span(className="btn-icon icon-panel-right"),
+                id="panel-toggle",
+                className="toolbar-icon-btn active",
+                title="Hide the settings panel",
             ),
         ],
+    )
+
+
+def _status_bar():
+    return html.Div(
+        id="status-bar",
+        children=[html.Div(id="sidebar-analysis-status", className="status-items")],
     )
 
 
@@ -382,8 +366,6 @@ app.layout = html.Div(
         dcc.Store(id="store-sz-extras", data={}),
         # Auto-save store for spike non-slider components
         dcc.Store(id="store-sp-extras", data={}),
-        # Subtab click relay
-        dcc.Store(id="subtab-click", data=""),
         # Theme store (persists across tab switches)
         dcc.Store(id="theme-store", data="light"),
 
@@ -394,16 +376,13 @@ app.layout = html.Div(
         html.Div(
             id="main-content",
             children=[
-                _tab_bar(),
-                # File selector bar (shown when multiple files loaded)
-                html.Div(
-                    id="file-selector-bar",
-                    className="file-selector-bar",
-                    style={"display": "none"},
-                ),
+                _toolbar(),
                 html.Div(id="tab-content"),
             ],
         ),
+
+        # Status bar along the bottom
+        _status_bar(),
     ],
 )
 
@@ -453,120 +432,23 @@ def on_theme_change(theme, refresh):
 # ── Tab switching ─────────────────────────────────────────────────────
 
 
-# Map parent tabs to their default subtab
-_PARENT_DEFAULT_SUBTAB = {
-    "detection": "seizures",
-    "training_grp": "training",
-    "ml_grp": "ml_datasets",
-    "tools_grp": "video_converter",
-}
-# Map subtab IDs back to their parent
-_SUBTAB_TO_PARENT = {}
-for _st_id, _ in DETECTION_SUBTABS:
-    _SUBTAB_TO_PARENT[_st_id] = "detection"
-for _st_id, _ in TRAINING_SUBTABS:
-    _SUBTAB_TO_PARENT[_st_id] = "training_grp"
-for _st_id, _ in ML_SUBTABS:
-    _SUBTAB_TO_PARENT[_st_id] = "ml_grp"
-for _st_id, _ in TOOLS_SUBTABS:
-    _SUBTAB_TO_PARENT[_st_id] = "tools_grp"
-
-
 @callback(
     Output("active-tab", "data"),
-    *[Output(f"tab-{tid}", "active") for tid, _ in TOP_TAB_DEFS],
-    Output("subtab-bar", "style"),
-    Output("subtab-nav", "children"),
-    *[Input(f"tab-{tid}", "n_clicks") for tid, _ in TOP_TAB_DEFS],
-    Input("subtab-click", "data"),
-    State("active-tab", "data"),
-    State("session-id", "data"),
+    *[Output(f"section-{tid}", "className") for tid in NAV_IDS],
+    *[Input(f"section-{tid}", "n_clicks") for tid in NAV_IDS],
     prevent_initial_call=True,
 )
-def switch_tab(*args):
-    """Handle tab click — update active tab store, nav link states, and subtabs."""
-    n_top = len(TOP_TAB_DEFS)
-    subtab_click = args[n_top]     # Input subtab-click
-    current = args[n_top + 1]      # State active-tab
-    sid = args[n_top + 2]          # State session-id
-
+def switch_tab(*_clicks):
+    """Sidebar click: make that section active and highlight it."""
     triggered = ctx.triggered_id
-    if triggered is None:
-        parent = _SUBTAB_TO_PARENT.get(current)
-        active_flags = tuple(
-            tid == (parent or current) for tid, _ in TOP_TAB_DEFS
-        )
-        subtab_style, subtab_children = _build_subtab_bar(current)
-        return (current,) + active_flags + (subtab_style, subtab_children)
+    if not isinstance(triggered, str) or not triggered.startswith("section-"):
+        return (no_update,) * (1 + len(NAV_IDS))
+    new_tab = triggered[len("section-"):]
+    classes = tuple(
+        "nav-item active" if tid == new_tab else "nav-item" for tid in NAV_IDS
+    )
+    return (new_tab,) + classes
 
-    # Subtab click
-    if triggered == "subtab-click" and subtab_click:
-        new_tab = subtab_click
-        parent = _SUBTAB_TO_PARENT.get(new_tab, new_tab)
-        # Remember last subtab for this parent
-        state = server_state.get_session(sid) if sid else None
-        if state:
-            state.extra[f"last_subtab_{parent}"] = new_tab
-        active_flags = tuple(tid == parent for tid, _ in TOP_TAB_DEFS)
-        subtab_style, subtab_children = _build_subtab_bar(new_tab)
-        return (new_tab,) + active_flags + (subtab_style, subtab_children)
-
-    # Top-level tab click
-    new_tab = triggered.replace("tab-", "")
-    # If it's a parent tab, route to last-used subtab or default
-    if new_tab in _PARENT_DEFAULT_SUBTAB:
-        state = server_state.get_session(sid) if sid else None
-        last = (state.extra.get(f"last_subtab_{new_tab}")
-                if state else None)
-        actual_tab = last or _PARENT_DEFAULT_SUBTAB[new_tab]
-        active_flags = tuple(tid == new_tab for tid, _ in TOP_TAB_DEFS)
-        subtab_style, subtab_children = _build_subtab_bar(actual_tab)
-        return (actual_tab,) + active_flags + (subtab_style, subtab_children)
-
-    # Simple (non-parent) tab
-    active_flags = tuple(tid == new_tab for tid, _ in TOP_TAB_DEFS)
-    return (new_tab,) + active_flags + ({"display": "none"}, [])
-
-
-def _build_subtab_bar(active_subtab: str):
-    """Return (style, children) for the subtab bar."""
-    parent = _SUBTAB_TO_PARENT.get(active_subtab)
-    if parent == "detection":
-        subtabs = DETECTION_SUBTABS
-    elif parent == "training_grp":
-        subtabs = TRAINING_SUBTABS
-    elif parent == "ml_grp":
-        subtabs = ML_SUBTABS
-    elif parent == "tools_grp":
-        subtabs = TOOLS_SUBTABS
-    else:
-        return {"display": "none"}, []
-
-    children = [
-        dbc.NavLink(
-            label,
-            id={"type": "subtab-link", "index": tid},
-            active=tid == active_subtab,
-            n_clicks=0,
-        )
-        for tid, label in subtabs
-    ]
-    return {"display": "block"}, children
-
-
-# Relay subtab NavLink clicks into the subtab-click store
-@callback(
-    Output("subtab-click", "data"),
-    Input({"type": "subtab-link", "index": ALL}, "n_clicks"),
-    State({"type": "subtab-link", "index": ALL}, "id"),
-    prevent_initial_call=True,
-)
-def relay_subtab_click(all_clicks, all_ids):
-    """When a subtab link is clicked, write its ID to the subtab-click store."""
-    triggered = ctx.triggered_id
-    if triggered and isinstance(triggered, dict):
-        return triggered["index"]
-    return no_update
 
 
 @callback(
@@ -589,12 +471,16 @@ def render_tab(active_tab, _refresh, sid):
         return training.layout(sid)
     elif active_tab == "training_spikes":
         return training_spikes.layout(sid)
+    elif active_tab == "training_background":
+        return training_background.layout(sid)
     elif active_tab == "video_converter":
         return tools.layout(sid)
     elif active_tab == "adicht_converter":
         return adicht_converter.layout(sid)
     elif active_tab == "ml_datasets":
         return ml_datasets.layout(sid)
+    elif active_tab == "blind_review":
+        return blind_review.layout(sid)
     elif active_tab == "analysis":
         return analysis_page.layout(sid)
     elif active_tab == "results":
@@ -677,6 +563,26 @@ def update_blinding_badge(is_on):
 # ── Sidebar file info & channel selector ─────────────────────────────
 
 
+def _status(text, kind: str = "none", tooltip: str | None = None):
+    """One status-bar item: coloured dot + short text.
+
+    kind: "ok" (saved / complete), "warn" (not saved), "info", "none" (absent).
+    """
+    return html.Span(
+        [html.Span(className=f"status-dot {kind}"), html.Span(text)],
+        className=f"status-item {kind}",
+        title=tooltip,
+    )
+
+
+def _fmt_duration(sec: float) -> str:
+    """5400 -> '5400 s (1 h 30 min)'."""
+    total_min = int(round(sec / 60))
+    h, m = divmod(total_min, 60)
+    human = f"{h} h {m} min" if h else f"{m} min"
+    return f"{sec:.0f} s ({human})"
+
+
 @callback(
     Output("sidebar-file-info", "children"),
     Output("sidebar-analysis-status", "children"),
@@ -688,95 +594,51 @@ def update_blinding_badge(is_on):
     State("selected-channels", "data"),
 )
 def update_sidebar_info(_refresh, _tab, sid, current_selected):
-    """Update sidebar recording info, analysis status, and channel toggles."""
+    """Update the toolbar title (recording) and the status bar."""
     state = server_state.get_session(sid)
     rec = state.recording
 
-    _muted = {"fontSize": "0.82rem", "color": "var(--ned-text-muted)"}
-    _dim = {"fontSize": "0.82rem", "color": "var(--ned-text-muted)", "opacity": "0.6"}
-
     if rec is None:
         return (
-            html.Div("No file loaded", className="file-info",
-                     style={"opacity": "0.5"}),
-            html.Div("—", style=_dim),
+            _title_block("NED-Net", "No recording loaded"),
+            [_status("Ready", "none")],
             html.Div(),
             None,
         )
 
-    # File info
+    # ── Toolbar title: file name + one-line summary ──────────────────
     import os
     fname = os.path.basename(rec.source_path) if rec.source_path else "Unknown"
-    dur_h = rec.duration_sec / 3600
 
-    # Build channel list with pairings
+    # Channel pairings go in the subtitle's tooltip
     pairings = getattr(state, "channel_pairings", None) or []
-    act_rec = state.activity_recordings.get("paired") if hasattr(state, "activity_recordings") else None
-    channel_items = []
-    paired_eeg_indices = set()
+    pair_lines = []
+    for p in pairings:
+        eeg_label = (rec.channel_names[p.eeg_index]
+                     if p.eeg_index < len(rec.channel_names) else f"Ch{p.eeg_index}")
+        if p.activity_index is not None:
+            act_label = p.activity_label or f"Act{p.activity_index}"
+            pair_lines.append(f"{eeg_label} ↔ {act_label}")
+        else:
+            pair_lines.append(eeg_label)
 
-    if pairings:
-        for p in pairings:
-            eeg_label = rec.channel_names[p.eeg_index] if p.eeg_index < len(rec.channel_names) else f"Ch{p.eeg_index}"
-            paired_eeg_indices.add(p.eeg_index)
-            if p.activity_index is not None:
-                act_label = p.activity_label or f"Act{p.activity_index}"
-                channel_items.append(html.Div(
-                    style={"display": "flex", "alignItems": "center", "gap": "4px",
-                           "padding": "1px 0"},
-                    children=[
-                        html.Span(eeg_label,
-                                  style={"fontSize": "0.78rem", "color": "var(--ned-accent)",
-                                         "fontWeight": "500"}),
-                        html.Span("\u2194",
-                                  style={"fontSize": "0.76rem", "color": "var(--ned-text-muted)"}),
-                        html.Span(act_label,
-                                  style={"fontSize": "0.78rem", "color": "#3fb950"}),
-                    ],
-                ))
-            else:
-                channel_items.append(html.Div(
-                    eeg_label,
-                    style={"fontSize": "0.78rem", "color": "var(--ned-accent)", "padding": "1px 0"},
-                ))
+    n_act = sum(1 for p in pairings if p.activity_index is not None)
+    summary = (f"{rec.n_channels} ch · {rec.fs:.0f} Hz · "
+               f"{_fmt_duration(rec.duration_sec)}")
+    if n_act:
+        summary += f" · {n_act} activity channel{'s' if n_act != 1 else ''}"
+    file_info = _title_block(fname, summary,
+                             tooltip="\n".join(pair_lines) or None)
 
-    # Add any EEG channels not in pairings
-    for i in range(rec.n_channels):
-        if i not in paired_eeg_indices:
-            ch_name = rec.channel_names[i] if i < len(rec.channel_names) else f"Ch{i}"
-            channel_items.append(html.Div(
-                ch_name,
-                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)", "padding": "1px 0"},
-            ))
-
-    file_info = html.Div([
-        html.Div(fname, className="file-info",
-                 style={"fontWeight": "600", "fontSize": "0.88rem",
-                        "wordBreak": "break-all"}),
-        html.Div(
-            f"{rec.n_channels} ch \u00B7 {rec.fs:.0f} Hz \u00B7 "
-            f"{rec.duration_sec:.0f}s ({dur_h:.1f}h)",
-            className="file-info",
-            style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)", "marginTop": "4px"},
-        ),
-        html.Div(
-            channel_items,
-            style={"marginTop": "6px", "display": "flex", "flexDirection": "column",
-                   "gap": "1px"},
-        ) if channel_items else html.Div(),
-    ])
-
-    # ── Analysis status ───────────────────────────────────────────────
+    # ── Status bar ────────────────────────────────────────────────────
     status_items = []
 
-    # Detection file
+    # Seizure detections
     has_det_file = False
     n_det = 0
     seizure_list = []
     if rec.source_path:
-        det_path = detection_json_path(rec.source_path)
-        has_det_file = det_path.is_file()
-    # Also count in-memory detections
+        has_det_file = detection_json_path(rec.source_path).is_file()
     if state.seizure_events:
         seizure_list = state.seizure_events
         n_det = len(seizure_list)
@@ -785,13 +647,6 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
         n_det = len(seizure_list)
 
     if has_det_file or n_det > 0:
-        det_icon = "\u2705" if has_det_file else "\u26A0\uFE0F"
-        det_label = f"{det_icon} Detections: {n_det} seizures"
-        if has_det_file:
-            det_label += " (saved)"
-        status_items.append(html.Div(det_label, style=_muted))
-        # Per-method breakdown
-        _method_counts: dict[str, int] = {}
         _mlabels = {
             "spike_train": "Spike-Train",
             "spectral_band": "Spectral Band",
@@ -800,60 +655,41 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
             "ml_unet": "ML U-Net",
             "line_length_energy": "LL / Energy",
         }
+        method_counts: dict[str, int] = {}
         for ev in seizure_list:
             feat = ev.features if hasattr(ev, "features") else {}
             m = (feat or {}).get("detection_method", "unknown")
-            _method_counts[m] = _method_counts.get(m, 0) + 1
-        if _method_counts and not (list(_method_counts.keys()) == ["unknown"]):
-            _parts = []
-            for m, c in sorted(_method_counts.items()):
-                _parts.append(html.Span([
-                    html.Span(f"{_mlabels.get(m, m)} ",
-                              style={"color": "var(--ned-text-muted)"}),
-                    html.Span(str(c), style={"fontWeight": "600"}),
-                ]))
-            # Join with separator
-            _breakdown_children = []
-            for i, part in enumerate(_parts):
-                if i > 0:
-                    _breakdown_children.append(html.Span(
-                        " \u00B7 ", style={"color": "var(--ned-text-muted)",
-                                           "opacity": "0.5"}))
-                _breakdown_children.append(part)
-            status_items.append(html.Div(
-                _breakdown_children,
-                style={"fontSize": "0.78rem", "marginLeft": "20px"},
-            ))
+            method_counts[m] = method_counts.get(m, 0) + 1
+        breakdown = ", ".join(
+            f"{_mlabels.get(m, m)} {c}" for m, c in sorted(method_counts.items())
+            if m != "unknown"
+        )
+        text = f"{n_det} seizure{'s' if n_det != 1 else ''}"
+        text += " saved" if has_det_file else " not saved"
+        status_items.append(_status(text, "ok" if has_det_file else "warn",
+                                    tooltip=breakdown or None))
     else:
-        status_items.append(html.Div("\u2B55 No detections yet", style=_dim))
+        status_items.append(_status("No seizure detections", "none"))
 
     # Interictal spikes
     has_sp_file = False
-    n_sp = 0
+    n_sp = len(state.spike_events) if state.spike_events else 0
     if rec.source_path:
-        sp_path = spike_detection_json_path(rec.source_path)
-        has_sp_file = sp_path.is_file()
-    if state.spike_events:
-        n_sp = len(state.spike_events)
-
+        has_sp_file = spike_detection_json_path(rec.source_path).is_file()
     if has_sp_file or n_sp > 0:
-        sp_icon = "\u2705" if has_sp_file else "\u26A0\uFE0F"
-        sp_label = f"{sp_icon} IS detections: {n_sp} spikes"
-        if has_sp_file:
-            sp_label += " (saved)"
-        status_items.append(html.Div(sp_label, style=_muted))
+        text = f"{n_sp} IS spike{'s' if n_sp != 1 else ''}"
+        text += " saved" if has_sp_file else " not saved"
+        status_items.append(_status(text, "ok" if has_sp_file else "warn"))
     else:
-        status_items.append(html.Div("\u2B55 No IS detections yet", style=_dim))
+        status_items.append(_status("No IS detections", "none"))
 
-    # Annotation file
+    # Annotations
     has_ann_file = False
-    ann_counts = {"confirmed": 0, "rejected": 0, "pending": 0, "manual": 0}
     if rec.source_path:
-        ann_path = annotation_json_path(rec.source_path)
-        has_ann_file = ann_path.is_file()
-    # Count from in-memory annotations
+        has_ann_file = annotation_json_path(rec.source_path).is_file()
     tr_anns = state.extra.get("tr_annotations", [])
     if tr_anns:
+        ann_counts = {"confirmed": 0, "rejected": 0, "pending": 0, "manual": 0}
         for a in tr_anns:
             lbl = a.get("label", "pending") if isinstance(a, dict) else getattr(a, "label", "pending")
             src = a.get("source", "") if isinstance(a, dict) else getattr(a, "source", "")
@@ -863,68 +699,53 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
                 ann_counts[lbl] += 1
         total_ann = sum(ann_counts.values())
         reviewed = ann_counts["confirmed"] + ann_counts["rejected"]
-        pct = int(100 * reviewed / total_ann) if total_ann else 0
-        ann_icon = "\u2705" if pct == 100 else "\U0001F4DD"
-        status_items.append(html.Div(
-            f"{ann_icon} Annotations: {reviewed}/{total_ann} reviewed ({pct}%)",
-            style=_muted,
+        detail = (f"{ann_counts['confirmed']} confirmed, {ann_counts['rejected']} rejected, "
+                  f"{ann_counts['pending']} pending, {ann_counts['manual']} manual")
+        status_items.append(_status(
+            f"Annotations {reviewed}/{total_ann} reviewed",
+            "ok" if total_ann and reviewed == total_ann else "info",
+            tooltip=detail,
         ))
-        # Breakdown
-        parts = []
-        if ann_counts["confirmed"]:
-            parts.append(f'{ann_counts["confirmed"]}✓')
-        if ann_counts["rejected"]:
-            parts.append(f'{ann_counts["rejected"]}✗')
-        if ann_counts["pending"]:
-            parts.append(f'{ann_counts["pending"]}?')
-        if ann_counts["manual"]:
-            parts.append(f'{ann_counts["manual"]}+')
-        if parts:
-            status_items.append(html.Div(
-                "  ".join(parts),
-                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                       "marginLeft": "20px", "opacity": "0.8"},
-            ))
     elif has_ann_file:
-        status_items.append(html.Div("\U0001F4DD Annotations: saved to disk", style=_muted))
+        status_items.append(_status("Annotations saved", "ok"))
     else:
-        status_items.append(html.Div("\u2B55 No annotations yet", style=_dim))
+        status_items.append(_status("No annotations", "none"))
+
+    # Background stretches (own file, Training -> Background)
+    try:
+        bg_counts = training_background.background_counts(state)
+    except Exception:
+        bg_counts = None
+    if bg_counts and bg_counts["total"]:
+        bg_reviewed = bg_counts["confirmed"] + bg_counts["rejected"]
+        status_items.append(_status(
+            f"Background {bg_reviewed}/{bg_counts['total']} reviewed",
+            "ok" if bg_reviewed == bg_counts["total"] else "info",
+            tooltip=(f"{bg_counts['confirmed']} confirmed, {bg_counts['rejected']} rejected, "
+                     f"{bg_counts['pending']} pending"),
+        ))
 
     # Video file
     video_path = state.extra.get("video_path")
     if video_path:
-        vname = os.path.basename(video_path)
-        status_items.append(html.Div(f"\u25B6 Video: {vname}", style=_muted))
+        status_items.append(_status(f"Video: {os.path.basename(video_path)}", "info"))
     else:
-        status_items.append(html.Div("\u2B55 No video file", style=_dim))
+        status_items.append(_status("No video", "none"))
 
     # Hidden placeholder — "Recall Detection Params" moved inline to detection pages
-    status_items.append(html.Div(
-        dbc.Button(
-            id="sidebar-recall-det-params",
-            style={"display": "none"},
-        ),
+    status_items.append(html.Span(
+        dbc.Button(id="sidebar-recall-det-params", style={"display": "none"}),
+        style={"display": "none"},
     ))
 
     # Flash message (set by recall_detection_params, consumed once)
     flash = state.extra.pop("sidebar_flash", None)
     if flash:
-        status_items.append(html.Div(
-            flash,
-            style={"fontSize": "0.82rem", "color": "#3fb950", "marginTop": "4px"},
-        ))
-
-    analysis_status = html.Div(
-        status_items,
-        style={"display": "flex", "flexDirection": "column", "gap": "4px"},
-    )
+        status_items.append(html.Span(flash, className="status-item flash"))
 
     # Channel selector is now in Viewer/Browse tabs — keep hidden placeholder
     all_indices = list(range(rec.n_channels))
-    if current_selected is None:
-        selected = all_indices
-    else:
-        selected = current_selected
+    selected = all_indices if current_selected is None else current_selected
 
     # Hidden checklist — still needed so the callback IDs exist
     channel_selector = html.Div([
@@ -939,7 +760,7 @@ def update_sidebar_info(_refresh, _tab, sid, current_selected):
         html.A(id="ch-select-none", style={"display": "none"}),
     ], style={"display": "none"})
 
-    return file_info, analysis_status, channel_selector, selected
+    return file_info, status_items, channel_selector, selected
 
 
 @callback(
@@ -986,16 +807,15 @@ def update_file_selector_bar(_refresh, sid):
 
         parts = []
         if has_det:
-            parts.append("\u2705")
+            parts.append("detections")
         if has_ann:
-            parts.append("\U0001F4DD")
-        status = " ".join(parts)
-        label = f"{fname}  {status}" if status else fname
+            parts.append("annotations")
+        label = f"{fname} \u2014 {', '.join(parts)}" if parts else fname
         options.append({"label": label, "value": i})
 
     bar_children = [
         html.Span(
-            f"\U0001F4C1 {n_files} files",
+            f"{n_files} files",
             className="file-selector-count",
         ),
         dcc.Dropdown(
@@ -1052,6 +872,9 @@ def file_bar_switch(file_idx, sid, refresh):
     state.sp_detection_info = {}
     state.extra.pop("tr_annotations", None)
     state.extra.pop("tr_current_idx", None)
+    for _k in ("trb_annotations", "trb_current_idx", "trb_view", "trb_browse_start",
+               "trb_cache", "trb_sz_cache", "trb_for"):
+        state.extra.pop(_k, None)
     state.extra.pop("sz_selected_event_key", None)
     state.extra.pop("video_path", None)
 
@@ -1108,7 +931,7 @@ def recall_detection_params(n_clicks, sid, refresh):
     rec = state.recording
     if rec is None or not rec.source_path:
         return html.Div(
-            "⚠️ No file loaded.",
+            "No file loaded.",
             style={"fontSize": "0.75rem", "color": "#d29922", "marginTop": "4px"},
         ), no_update
 
@@ -1187,11 +1010,11 @@ def recall_detection_params(n_clicks, sid, refresh):
 
     if not parts:
         return html.Div(
-            "⚠️ No saved detections found on disk.",
+            "No saved detections found on disk.",
             style={"fontSize": "0.75rem", "color": "#d29922", "marginTop": "4px"},
         ), no_update
 
-    state.extra["sidebar_flash"] = f"✅ Recalled: {'; '.join(parts)}."
+    state.extra["sidebar_flash"] = f"Recalled: {'; '.join(parts)}."
     return no_update, (refresh or 0) + 1
 
 

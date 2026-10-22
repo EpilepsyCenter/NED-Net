@@ -81,9 +81,10 @@ def layout(sid: str | None) -> html.Div:
                 ),
             ], className="mb-2"),
 
-            dbc.Button(
-                "Browse", id="ac-browse-btn",
-                className="btn-ned-secondary",
+            # Own row, so the next label starts on a new line
+            html.Div(
+                dbc.Button("Browse", id="ac-browse-btn",
+                           className="btn-ned-secondary"),
                 style={"marginBottom": "16px"},
             ),
 

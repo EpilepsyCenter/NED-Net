@@ -79,9 +79,9 @@ def _process_one(edf_path: str):
             convulsive_model_name=cfg["conv_model"],
             reranker_model=cfg["reranker_model"],
         )
-        return edf_path, int(r.get("n_events", 0)), None
+        return edf_path, int(r.get("n_events", 0)), None, r.get("event_peaks") or []
     except Exception as e:  # one bad file must not abort the sweep
-        return edf_path, 0, repr(e)
+        return edf_path, 0, repr(e), []
 
 
 # --------------------------------------------------------------------------
@@ -166,6 +166,9 @@ def main() -> int:
                     help="events shorter than this (s) are non-convulsive whatever "
                          "the classifier says; 0 = off")
     ap.add_argument("--min-duration", type=float, default=5.0)
+    ap.add_argument("--peaks-csv", default=None,
+                    help="also write each event's peak detector probability here "
+                         "(for threshold sweeps from one low-threshold run)")
     ap.add_argument("--merge-gap", type=float, default=2.0)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--no-recursive", action="store_true")
@@ -229,10 +232,12 @@ def main() -> int:
 
     t0 = time.time()
     n_events = n_err = n_done = 0
+    peaks = []
     with Pool(args.workers, initializer=_init_worker,
               initargs=(cfg, work_tmp)) as pool:
-        for path, ne, err in pool.imap_unordered(_process_one, todo, chunksize=1):
+        for path, ne, err, pk in pool.imap_unordered(_process_one, todo, chunksize=1):
             n_done += 1
+            peaks.extend((path, *p) for p in pk)
             if err:
                 n_err += 1
                 print(f"  [ERR] {os.path.basename(path)}: {err}", file=sys.stderr)
@@ -252,6 +257,14 @@ def main() -> int:
         os.rmdir(work_tmp)
     except OSError:
         pass
+
+    if args.peaks_csv:
+        import csv
+        with open(args.peaks_csv, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["path", "channel", "start_sec", "end_sec", "peak_probability"])
+            w.writerows(peaks)
+        print(f"Peak probabilities for {len(peaks)} events -> {args.peaks_csv}", flush=True)
 
     print(f"Done. {n_done} files, {n_events} events, {n_err} errors, "
           f"{time.time() - t0:.0f}s. DB: {db_final}", flush=True)

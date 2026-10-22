@@ -24,14 +24,21 @@ import time
 from pathlib import Path
 
 import webview
+from webview.menu import Menu, MenuAction, MenuSeparator
 from waitress import serve
 
-from eeg_seizure_analyzer.dash_app.main import app
+from eeg_seizure_analyzer import __version__
+# The Dash app (and with it numpy, torch, ...) is imported in _boot, after
+# the window shows its splash: a cold first start can take a while (e.g. while
+# Windows Defender scans torch).
 
 HOST = "127.0.0.1"
 PREFERRED_PORT = 8051  # native app; falls back to a free port if busy
 TITLE = "NED-Net"
 MIN_SIZE = (960, 640)
+# Window background while the page loads (matches --ned-bg in style.css),
+# so the window doesn't flash white on start-up.
+BACKGROUND = "#F3F2EE"
 # Default window: a comfortable fraction of the primary screen so it fills a
 # typical laptop display (e.g. ~1730x970 on 1920x1080) without going edge-to-edge.
 WIN_SCREEN_FRACTION = 0.90
@@ -41,6 +48,24 @@ SERVER_THREADS = 8  # waitress worker threads
 
 _ASSETS = Path(__file__).parent / "assets"
 _WIN_STATE_PATH = Path.home() / ".eeg_seizure_analyzer" / "window.json"
+_WEBVIEW_STORAGE = Path.home() / ".eeg_seizure_analyzer" / "webview"
+
+
+def _bring_to_front() -> None:
+    """Make NED-Net the active app with the window in front.
+
+    Started from a terminal (``python -m``), macOS leaves the new window
+    behind the terminal and not focused, so the first clicks only activated it.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApplication
+        from PyObjCTools import AppHelper
+        AppHelper.callAfter(
+            lambda: NSApplication.sharedApplication().activateIgnoringOtherApps_(True))
+    except Exception:
+        pass
 
 
 def _default_window_size() -> tuple[int, int]:
@@ -122,6 +147,107 @@ def _set_macos_app_identity(icon: str | None) -> None:
             pass
 
 
+# ── Native menu bar ───────────────────────────────────────────────────
+# macOS shows it in the global menu bar (next to the app menu with About /
+# Hide / Quit); Windows and Linux show it inside the window. Menu actions
+# drive the page through window.nednet (assets/app_shell.js).
+
+# Go menu: (sidebar section id, label)
+_GO_ITEMS = [
+    ("upload", "Load"),
+    ("viewer", "Viewer"),
+    (None, None),
+    ("seizures", "Seizure Detection"),
+    ("spikes", "Interictal Spike Detection"),
+    (None, None),
+    ("training", "Seizure Annotation"),
+    ("training_spikes", "Spike Annotation"),
+    ("training_background", "Background Annotation"),
+    (None, None),
+    ("ml_datasets", "Dataset & Model"),
+    ("blind_review", "Blind Review"),
+    ("analysis", "Batch Analysis"),
+    ("results", "Results"),
+]
+
+_ABOUT_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  body {{ margin: 0; padding: 28px 24px; text-align: center; background: #f3f2ee;
+         color: #15171b; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI",
+         system-ui, Cantarell, Ubuntu, sans-serif; user-select: none; cursor: default; }}
+  img {{ width: 180px; margin-bottom: 14px; }}
+  .v {{ color: #55585f; margin: 4px 0 14px; }}
+  p {{ margin: 0 auto; max-width: 300px; color: #55585f; line-height: 1.45; }}
+</style></head><body>
+  <img src="{base}/assets/nednet_logo.png" alt="NED-Net">
+  <div class="v">Version {version}</div>
+  <p>Detection and annotation of seizures and interictal spikes in long-term EEG recordings.</p>
+</body></html>"""
+
+
+def _run_js(window, code: str) -> None:
+    """Run JavaScript in the page; ignore failures (e.g. page still loading)."""
+    try:
+        window.evaluate_js(code)
+    except Exception:
+        pass
+
+
+def _build_menu(window, urls: dict) -> list:
+    """``urls['base']`` is the app's address, set once the server runs."""
+    def go(tab):
+        return lambda: _run_js(window, f"window.nednet && window.nednet.go({json.dumps(tab)})")
+
+    def open_recording(kind):
+        return lambda: _run_js(window, f"window.nednet && window.nednet.open({json.dumps(kind)})")
+
+    def show_manual():
+        if not urls.get("base"):
+            return  # still starting
+        webview.create_window("NED-Net Manual", f"{urls['base']}/assets/manual.html",
+                              width=980, height=800, background_color=BACKGROUND)
+
+    def show_about():
+        if not urls.get("base"):
+            return
+        webview.create_window(
+            "About NED-Net",
+            html=_ABOUT_HTML.format(base=urls["base"], version=__version__),
+            width=380, height=300, resizable=False, background_color=BACKGROUND,
+        )
+
+    file_items = [
+        MenuAction("Open Recording…", open_recording("file")),
+        MenuAction("Open Several Recordings…", open_recording("multiple")),
+    ]
+    if sys.platform != "darwin":  # macOS has Quit in the app menu
+        file_items += [MenuSeparator(), MenuAction("Exit", window.destroy)]
+
+    go_items = [MenuSeparator() if tab is None else MenuAction(label, go(tab))
+                for tab, label in _GO_ITEMS]
+    go_items += [
+        MenuSeparator(),
+        MenuAction("Show/Hide Settings Panel",
+                   lambda: _run_js(window, "window.nednet && window.nednet.togglePanel()")),
+        MenuAction("Toggle Dark Mode",
+                   lambda: _run_js(window, "window.nednet && window.nednet.toggleTheme()")),
+    ]
+
+    return [
+        Menu("File", file_items),
+        Menu("Go", go_items),
+        Menu("Tools", [
+            MenuAction("Video Converter", go("video_converter")),
+            MenuAction("ADICHT → EDF Converter", go("adicht_converter")),
+        ]),
+        Menu("Help", [
+            MenuAction("NED-Net Manual", show_manual),
+            MenuSeparator(),
+            MenuAction("About NED-Net", show_about),
+        ]),
+    ]
+
+
 def _pick_port(preferred: int) -> int:
     """Return ``preferred`` if free, otherwise an OS-assigned free port.
 
@@ -139,7 +265,7 @@ def _pick_port(preferred: int) -> int:
         return s.getsockname()[1]
 
 
-def _run_server(port: int) -> None:
+def _run_server(app, port: int) -> None:
     """Serve the Dash WSGI app via waitress (blocking) — runs in a daemon thread."""
     logging.getLogger("waitress").setLevel(logging.ERROR)  # quiet startup chatter
     serve(app.server, host=HOST, port=port, threads=SERVER_THREADS)
@@ -157,32 +283,109 @@ def _wait_until_up(host: str, port: int, timeout: float = 30.0) -> bool:
     return False
 
 
+# ── Splash screen while the app starts ───────────────────────────────
+
+_SPLASH_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  :root {{ --bg: #f3f2ee; --text: #15171b; --muted: #55585f; --accent: #13788c;
+           --track: rgba(20, 22, 28, 0.10); --danger: #b5332a; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --bg: #0e1114; --text: #e6e8ec; --muted: #9ba2ad; --accent: #6cc3d5;
+             --track: rgba(255, 255, 255, 0.12); --danger: #f0857c; }}
+  }}
+  html, body {{ height: 100%; margin: 0; }}
+  body {{ display: flex; flex-direction: column; align-items: center; justify-content: center;
+         background: var(--bg); color: var(--text); user-select: none; cursor: default;
+         font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Cantarell,
+               Ubuntu, sans-serif; }}
+  img {{ width: 240px; margin-bottom: 28px; padding: 16px 22px; border-radius: 18px; }}
+  @media (prefers-color-scheme: dark) {{ img {{ background: #f3f2ee; }} }}  /* navy logo text */
+  .bar {{ position: relative; width: 220px; height: 3px; border-radius: 2px;
+          background: var(--track); overflow: hidden; }}
+  .bar::after {{ content: ""; position: absolute; top: 0; bottom: 0; width: 40%;
+                 border-radius: 2px; background: var(--accent);
+                 animation: slide 1.1s ease-in-out infinite; }}
+  @keyframes slide {{ from {{ left: -40%; }} to {{ left: 100%; }} }}
+  #status {{ margin-top: 14px; color: var(--muted); }}
+  #hint {{ margin-top: 6px; font-size: 11px; color: var(--muted); opacity: 0.8; }}
+  .v {{ position: fixed; bottom: 16px; font-size: 11px; color: var(--muted); }}
+  body.error .bar {{ display: none; }}
+  body.error #status {{ color: var(--danger); max-width: 520px; text-align: center; }}
+</style></head><body>
+  <img src="{logo}" alt="NED-Net">
+  <div class="bar"></div>
+  <div id="status">Starting NED-Net…</div>
+  <div id="hint">The first start after installing or updating can take a minute.</div>
+  <div class="v">Version {version}</div>
+  <script>
+    window.setStatus = function (t) {{ document.getElementById('status').textContent = t; }};
+    window.showError = function (t) {{
+      document.body.classList.add('error');
+      document.getElementById('status').textContent = t;
+      document.getElementById('hint').textContent =
+        'Close this window and try again. Details are in the log.';
+    }};
+  </script>
+</body></html>"""
+
+
+def _splash_html() -> str:
+    """The splash page, with the logo embedded (it shows before the server runs)."""
+    import base64
+    logo = ""
+    try:
+        data = (_ASSETS / "nednet_logo.png").read_bytes()
+        logo = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+    except Exception:
+        pass
+    return _SPLASH_HTML.format(logo=logo, version=__version__)
+
+
+def _boot(window, urls: dict) -> None:
+    """Start the app behind the splash (runs in pywebview's start-up thread):
+    import the Dash app, start its server, then load it into the window."""
+    def status(text):
+        _run_js(window, f"window.setStatus && window.setStatus({json.dumps(text)})")
+
+    try:
+        status("Loading analysis libraries…")
+        from eeg_seizure_analyzer.dash_app.main import app
+
+        status("Starting…")
+        port = _pick_port(PREFERRED_PORT)
+        threading.Thread(target=_run_server, args=(app, port), daemon=True,
+                         name="ned-net-server").start()
+        if not _wait_until_up(HOST, port):
+            raise RuntimeError(f"the app's server did not start on {HOST}:{port} within 30 s")
+
+        urls["base"] = f"http://{HOST}:{port}"
+        window.load_url(urls["base"])
+    except Exception as exc:  # show it on the splash instead of a dead window
+        logging.exception("NED-Net failed to start")
+        _run_js(window, "window.showError && window.showError("
+                        + json.dumps(f"NED-Net could not start: {exc}") + ")")
+
+
 def main() -> None:
     icon = _icon_path()
     if sys.platform == "darwin":
         _set_macos_app_identity(icon)
 
-    port = _pick_port(PREFERRED_PORT)
-
-    server_thread = threading.Thread(
-        target=_run_server, args=(port,), daemon=True, name="ned-net-server"
-    )
-    server_thread.start()
-
-    if not _wait_until_up(HOST, port):
-        raise RuntimeError(
-            f"NED-Net server did not come up on {HOST}:{port} within 30s."
-        )
-
     width, height = _load_window_size()
     size = {"w": width, "h": height}
+    urls: dict = {"base": None}  # set by _boot once the server runs
+
+    # The window opens at once with the splash; _boot then loads the app.
     window = webview.create_window(
         TITLE,
-        f"http://{HOST}:{port}",
+        html=_splash_html(),
         width=width,
         height=height,
         min_size=MIN_SIZE,
+        background_color=BACKGROUND,
     )
+    # Started from a terminal, macOS would leave the window behind it
+    window.events.shown += lambda *_a: _bring_to_front()
 
     # File/folder pickers open on this window: fast, and with keyboard focus.
     from eeg_seizure_analyzer.dash_app import file_dialogs
@@ -200,7 +403,19 @@ def main() -> None:
 
     # Blocks on the native GUI event loop; returns when the window is closed.
     # The server thread is a daemon, so it dies with the process on return.
-    webview.start(icon=icon)
+    try:
+        _WEBVIEW_STORAGE.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    # private_mode=False with our own storage folder: the page's settings
+    # (e.g. the settings panel's width and visibility) survive a restart.
+    webview.start(
+        _boot, (window, urls),
+        icon=icon,
+        menu=_build_menu(window, urls),
+        private_mode=False,
+        storage_path=str(_WEBVIEW_STORAGE),
+    )
 
     # Window closed — remember its final size for the next launch.
     _save_window_size(size["w"], size["h"])

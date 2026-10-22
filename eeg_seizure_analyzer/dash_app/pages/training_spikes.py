@@ -10,12 +10,17 @@ import dash_bootstrap_components as dbc
 
 from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app.components import (
+    fit_y_range,
+    loading,
     apply_fig_theme,
     alert,
     empty_state,
     get_plotly_theme,
+    icon,
     metric_card,
     no_recording_placeholder,
+    page_header,
+    split_page,
 )
 from eeg_seizure_analyzer.io.annotation_store import (
     AnnotatedEvent,
@@ -662,86 +667,427 @@ def layout(sid: str | None) -> html.Div:
     else:
         event_nav_text = "No spikes"
 
-    return html.Div(
-        style={"padding": "24px"},
-        children=[
-            # Keyboard shortcut stores
-            dcc.Store(id="trs-keyboard-store", data={"key": "", "ts": 0}),
-            html.Div(id="trs-keyboard-listener", style={"display": "none"}),
+    # Review / Browse switch (segmented control in the page header)
+    mode_toggle = dbc.RadioItems(
+        id="trs-mode-toggle",
+        options=[
+            {"label": "Review", "value": "review"},
+            {"label": "Browse", "value": "browse"},
+        ],
+        value=mode,
+        inline=True,
+        className="btn-group segmented",
+        inputClassName="btn-check",
+        labelClassName="btn btn-outline-secondary",
+        labelCheckedClassName="btn-ned-primary",
+    )
 
-            # Header + Mode toggle (prominent)
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "16px"},
-                children=[
-                    html.H4("Interictal Spike Annotation", style={"margin": "0"}),
-                    html.Span(
-                        "Training data",
-                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                               "border": "1px solid var(--ned-border)", "borderRadius": "12px",
-                               "padding": "2px 10px"},
+    # ── Work area (left): the spike under review, or the browse view ──
+    main = [
+        # Keyboard shortcut stores
+        dcc.Store(id="trs-keyboard-store", data={"key": "", "ts": 0}),
+        dcc.Store(id="trs-autoscale-key", data=0),
+        html.Div(id="trs-keyboard-listener", style={"display": "none"}),
+
+        page_header(
+            "Interictal Spike Annotation",
+            badge=html.Span("Training data", className="page-badge"),
+            actions=[mode_toggle],
+        ),
+
+        # ── Review Mode ──────────────────────────────────────────
+        html.Div(
+            id="trs-review-mode",
+            style={"display": "block" if mode == "review" else "none"},
+            children=[
+                # Event navigation
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "8px",
+                           "marginBottom": "8px"},
+                    children=[
+                        dbc.Button(
+                            "\u25C0 Prev (\u2190 ,)", id="trs-prev-btn", size="sm",
+                            className="btn-ned-secondary",
+                        ),
+                        html.Div(
+                            id="trs-event-nav-text",
+                            style={"flex": "1", "textAlign": "center",
+                                   "fontWeight": "600", "fontSize": "0.9rem"},
+                            children=event_nav_text,
+                        ),
+                        dcc.Input(
+                            id="trs-jump-to", type="number",
+                            min=1, step=1, debounce=True,
+                            placeholder="#",
+                            className="form-control",
+                            style={"width": "60px", "height": "30px",
+                                   "fontSize": "0.78rem", "textAlign": "center"},
+                        ),
+                        dbc.Button(
+                            "Next (. \u2192) \u25B6", id="trs-next-btn", size="sm",
+                            className="btn-ned-secondary",
+                        ),
+                    ],
+                ),
+
+
+                # Decision bar: status and the label buttons
+                html.Div(
+                    className="decision-bar",
+                    children=[
+                        html.Div(id="trs-event-status", children=event_label_badge),
+                        html.Div(
+                            className="decision-actions",
+                            children=[
+                                dbc.Button(
+                                    "Skip (S)",
+                                    id="trs-skip-btn",
+                                    className="btn-ned-secondary",
+                                ),
+                                dbc.Button(
+                                    [html.Span("\u2717 "), "Reject (R)"],
+                                    id="trs-reject-btn",
+                                    className="btn-ned-danger",
+                                ),
+                                dbc.Button(
+                                    [html.Span("\u2713 "), "Confirm (C)"],
+                                    id="trs-confirm-btn",
+                                    className="btn-ned-primary",
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+
+                # Plot toolbar: time window, Y range, overlays
+                html.Div(
+                    className="plot-toolbar",
+                    children=[
+                        html.Label("X (s)", className="decision-label"),
+                        dcc.Input(
+                            id="trs-xwindow", type="number",
+                            min=0.1, max=10, step=0.1,
+                            value=state.extra.get("trs_xwindow", 5.0),
+                            debounce=True,
+                            className="form-control",
+                            style={"width": "64px"},
+                        ),
+                        html.Label("Y range", className="decision-label"),
+                        dcc.Input(
+                            id="trs-yrange", type="number",
+                            min=0, step=0.01,
+                            value=trs_yrange, debounce=True,
+                            className="form-control",
+                            style={"width": "80px"},
+                        ),
+                        dbc.Button("Autoscale (A)", id="trs-autoscale-btn", size="sm",
+                                   className="btn-ned-secondary",
+                                   title="Fit the Y range to this spike's window"),
+                        dbc.Switch(
+                            id="trs-show-rect",
+                            label="Extent",
+                            value=state.extra.get("trs_show_rect", True),
+                            className="filter-switch",
+                        ),
+                        dbc.Switch(
+                            id="trs-show-baseline",
+                            label="Baseline",
+                            value=state.extra.get("trs_show_baseline", False),
+                            className="filter-switch",
+                        ),
+                        dbc.Switch(
+                            id="trs-show-threshold",
+                            label="Threshold",
+                            value=state.extra.get("trs_show_threshold", False),
+                            className="filter-switch",
+                        ),
+                    ],
+                ),
+
+                # Review EEG plot
+                loading(
+                    dcc.Graph(
+                        id="trs-review-graph",
+                        figure=_build_review_figure(
+                            rec, current_event, state,
+                            bp_low=float(state.extra.get("sp_params", {}).get("sp-bp-low", 10.0)),
+                            bp_high=float(state.extra.get("sp_params", {}).get("sp-bp-high", 70.0)),
+                            y_range=trs_yrange,
+                            show_rect=state.extra.get("trs_show_rect", True),
+                            x_window=state.extra.get("trs_xwindow", 5.0),
+                            show_baseline=state.extra.get("trs_show_baseline", False),
+                            show_threshold=state.extra.get("trs_show_threshold", False),
+                        ) if current_event else go.Figure(),
+                        config={
+                            "editable": False,
+                            "edits": {"shapePosition": True},
+                            "scrollZoom": True,
+                            "displayModeBar": True,
+                        },
+                        style={"borderRadius": "8px"},
                     ),
-                    html.Div(style={"flex": "1"}),
-                    dbc.RadioItems(
-                        id="trs-mode-toggle",
-                        options=[
-                            {"label": "\U0001F50D Review Mode", "value": "review"},
-                            {"label": "\U0001F4C4 Browse Mode", "value": "browse"},
+                    type="circle", color="#58a6ff",
+                ),
+
+                # Boundary adjustment (under EEG)
+                html.Div(
+                    style={"display": "flex", "gap": "12px",
+                           "alignItems": "center", "justifyContent": "center",
+                           "marginTop": "8px", "marginBottom": "4px"},
+                    children=[
+                        html.Label("Onset (s)",
+                                   style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Input(
+                            id="trs-onset-input", type="number",
+                            value=round(current_event.onset_sec, 3) if current_event else 0,
+                            step=0.001, debounce=True,
+                            className="form-control",
+                            style={"width": "100px", "height": "26px",
+                                   "fontSize": "0.78rem"},
+                        ),
+                        html.Label("Offset (s)",
+                                   style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                                          "marginLeft": "8px"}),
+                        dcc.Input(
+                            id="trs-offset-input", type="number",
+                            value=round(current_event.offset_sec, 3) if current_event else 0,
+                            step=0.001, debounce=True,
+                            className="form-control",
+                            style={"width": "100px", "height": "26px",
+                                   "fontSize": "0.78rem"},
+                        ),
+                        html.Span(
+                            id="trs-duration-display",
+                            children=f"({(current_event.offset_sec - current_event.onset_sec) * 1000:.1f}ms)"
+                            if current_event else "",
+                            style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"},
+                        ),
+                    ],
+                ),
+
+                # Notes textarea
+                html.Div(
+                    style={"marginBottom": "16px"},
+                    children=[
+                        html.Label("Notes",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Textarea(
+                            id="trs-notes",
+                            value=current_event.notes if current_event else "",
+                            placeholder="Optional notes for this spike...",
+                            style={"width": "100%", "height": "60px", "resize": "vertical"},
+                        ),
+                    ],
+                ),
+
+                # Status message
+                html.Div(id="trs-review-status"),
+
+            ],
+        ),
+
+        # ── Browse Mode ──────────────────────────────────────────
+        html.Div(
+            id="trs-browse-mode",
+            style={"display": "block" if mode == "browse" else "none"},
+            children=[
+                # Navigation controls
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Window (s)",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Input(
+                            id="trs-browse-window", type="number",
+                            min=1, max=600, step=1, value=browse_window,
+                            debounce=True, className="form-control",
+                            style={"width": "100%"},
+                        ),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Start (s)",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Input(
+                            id="trs-browse-start", type="number",
+                            min=0, max=rec.duration_sec, step=1,
+                            value=browse_start, debounce=True,
+                            className="form-control",
+                            style={"width": "100%"},
+                        ),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Channel (for manual add)",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        dcc.Dropdown(
+                            id="trs-browse-annotate-channel-vis",
+                            options=ch_options,
+                            value=0 if ch_options else None,
+                            clearable=False,
+                            style={"fontSize": "0.82rem"},
+                        ),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("\u200B",
+                                   style={"fontSize": "0.78rem", "display": "block"}),
+                        html.Div(
+                            style={"display": "flex", "gap": "6px"},
+                            children=[
+                                dbc.Button(
+                                    "Add Spike",
+                                    id="trs-add-spike-btn",
+                                    className="btn-ned-secondary",
+                                    size="sm",
+                                    active=False,
+                                ),
+                                dbc.Button(
+                                    "Remove Spike",
+                                    id="trs-remove-spike-btn",
+                                    className="btn-ned-secondary",
+                                    size="sm",
+                                    active=False,
+                                ),
+                            ],
+                        ),
+                    ], width=3),
+                ], className="g-2 mb-3"),
+                # Channel selection for browse view
+                html.Div(
+                    style={"marginBottom": "8px", "display": "flex",
+                           "alignItems": "center", "gap": "8px",
+                           "flexWrap": "wrap"},
+                    children=[
+                        html.Label("Channels:",
+                                   style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+                                          "margin": "0", "fontWeight": "500"}),
+                        dbc.Checklist(
+                            id="trs-browse-channel-checks",
+                            options=[
+                                {"label": rec.channel_names[i], "value": i}
+                                for i in range(rec.n_channels)
+                            ],
+                            value=list(range(rec.n_channels)),
+                            inline=True,
+                            style={"fontSize": "0.8rem"},
+                        ),
+                        html.A("All", id="trs-browse-ch-all", href="#",
+                               style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
+                                      "cursor": "pointer", "marginLeft": "4px"}),
+                        html.A("None", id="trs-browse-ch-none", href="#",
+                               style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
+                                      "cursor": "pointer"}),
+                    ],
+                ),
+
+                # Hidden store to trigger browse graph refresh after add/remove
+                dcc.Store(id="trs-annotations-version", data=0),
+
+                # Browse navigation bar
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "8px",
+                           "marginBottom": "4px"},
+                    children=[
+                        dbc.Button(icon("skip-start"), id="trs-nav-start", size="sm",
+                                   className="btn-ned-secondary btn-icon-only"),
+                        dbc.Button(icon("rewind"), id="trs-nav-back-big", size="sm",
+                                   className="btn-ned-secondary btn-icon-only"),
+                        dbc.Button(icon("step-back"), id="trs-nav-back", size="sm",
+                                   className="btn-ned-secondary btn-icon-only"),
+                        html.Div(
+                            id="trs-nav-time-display",
+                            style={"flex": "1", "textAlign": "center",
+                                   "fontWeight": "600", "fontSize": "0.9rem"},
+                        ),
+                        dbc.Button(icon("step-forward"), id="trs-nav-fwd", size="sm",
+                                   className="btn-ned-secondary btn-icon-only"),
+                        dbc.Button(icon("fast-forward"), id="trs-nav-fwd-big", size="sm",
+                                   className="btn-ned-secondary btn-icon-only"),
+                    ],
+                ),
+
+                # Color legend
+                html.Div(
+                    style={"display": "flex", "gap": "16px", "marginBottom": "6px",
+                           "flexWrap": "wrap", "alignItems": "center"},
+                    children=[
+                        html.Span("Legend:",
+                                  style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                                         "fontWeight": "600"}),
+                        *[
+                            html.Span(
+                                style={"display": "flex", "alignItems": "center",
+                                       "gap": "4px"},
+                                children=[
+                                    html.Span(
+                                        style={
+                                            "width": "12px", "height": "12px",
+                                            "borderRadius": "2px",
+                                            "background": colors["fill"],
+                                            "border": f"1px solid {colors['line']}",
+                                            "display": "inline-block",
+                                        }
+                                    ),
+                                    html.Span(
+                                        lbl.capitalize(),
+                                        style={"fontSize": "0.72rem",
+                                               "color": colors["text"]},
+                                    ),
+                                ],
+                            )
+                            for lbl, colors in _LABEL_COLORS.items()
                         ],
-                        value=mode,
-                        inline=True,
-                        className="btn-group",
-                        inputClassName="btn-check",
-                        labelClassName="btn btn-outline-secondary",
-                        labelCheckedClassName="btn-ned-primary",
-                        labelStyle={"fontSize": "0.92rem", "fontWeight": "600",
-                                    "padding": "6px 18px"},
-                    ),
-                ],
-            ),
+                    ],
+                ),
 
-            # Metadata row
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Annotator",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Input(
-                        id="trs-annotator", type="text",
-                        value=annotator, debounce=True,
-                        placeholder="Your name",
-                        className="form-control",
-                        style={"width": "100%"},
+                # Browse EEG plot — pre-render if in browse mode
+                loading(
+                    dcc.Graph(
+                        id="trs-browse-graph",
+                        figure=_build_browse_figure(
+                            rec, _filter_by_channel(annotations, channel_filter),
+                            state,
+                            start_sec=float(browse_start),
+                            window_sec=float(browse_window),
+                        ) if mode == "browse" else go.Figure(),
+                        config={"scrollZoom": True, "displayModeBar": True},
+                        style={"borderRadius": "8px"},
                     ),
-                ], width=2),
-                dbc.Col([
-                    dcc.Input(
-                        id="trs-animal-id", type="hidden",
-                        value=animal_id,
-                    ),
-                ], style={"display": "none"}),
-                dbc.Col([
-                    html.Label("Channel",
-                               style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                    dcc.Dropdown(
-                        id="trs-channel-filter",
-                        options=ch_options,
-                        value=channel_filter,
-                        placeholder="All channels",
-                        clearable=True,
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ], width=2),
-                # Filter toggle
-                dbc.Col([
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "8px", "marginTop": "20px"},
-                             children=[
-                                 dbc.Switch(id="trs-filter-toggle", value=trs_filter_on,
-                                            style={"fontSize": "0.78rem"}),
-                                 html.Span("Filters",
-                                           style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                             ]),
-                ], width=1),
+                    type="circle", color="#58a6ff",
+                ),
+
+                # Status message
+                html.Div(id="trs-browse-status"),
+            ],
+        ),
+
+    ]
+
+    # ── Panel (right): which spikes, this spike's details, progress ──
+    panel = [
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Annotator", className="panel-label"),
+                dcc.Input(
+                    id="trs-annotator", type="text",
+                    value=annotator, debounce=True,
+                    placeholder="Your name",
+                    className="form-control",
+                    style={"width": "100%"},
+                ),
+                html.Div(dcc.Input(id="trs-animal-id", type="hidden", value=animal_id),
+                         style={"display": "none"}),
+            ],
+        ),
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Channel", className="panel-label"),
+                dcc.Dropdown(
+                    id="trs-channel-filter",
+                    options=ch_options,
+                    value=channel_filter,
+                    placeholder="All channels",
+                    clearable=True,
+                ),
                 # Hidden: browse annotate channel
                 html.Div(
                     dcc.Dropdown(id="trs-browse-annotate-channel",
@@ -750,576 +1096,244 @@ def layout(sid: str | None) -> html.Div:
                                  clearable=False),
                     style={"display": "none"},
                 ),
-            ], className="g-2 mb-2"),
+            ],
+        ),
+        # Filters — mirror the Detection tab's spike filters
+        html.Div(
+            className="panel-field panel-range-grid",
+            children=[
+                html.Div(
+                    className="filter-title",
+                    style={"marginBottom": "8px"},
+                    children=[
+                        html.Span("Filters", className="panel-label",
+                                  style={"margin": "0"}),
+                        dbc.Switch(id="trs-filter-toggle", value=trs_filter_on,
+                                   className="filter-switch"),
+                    ],
+                ),
+                # Filter row — mirrors Detection tab spike filters
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Amplitude",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        html.Div(style={"display": "flex", "alignItems": "center",
+                                        "gap": "3px"}, children=[
+                            dcc.Input(id="trs-min-amp", type="number", min=0, max=10000,
+                                      step=1, value=trs_min_amp, placeholder="min",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                            html.Span("\u2013", style={"color": "var(--ned-text-muted)",
+                                                  "fontSize": "0.8rem"}),
+                            dcc.Input(id="trs-max-amp", type="number", min=0, max=10000,
+                                      step=1, value=trs_max_amp, placeholder="max",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                        ]),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("x Baseline",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        html.Div(style={"display": "flex", "alignItems": "center",
+                                        "gap": "3px"}, children=[
+                            dcc.Input(id="trs-min-xbl", type="number", min=0, max=100,
+                                      step=0.1, value=trs_min_xbl, placeholder="min",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                            html.Span("\u2013", style={"color": "var(--ned-text-muted)",
+                                                  "fontSize": "0.8rem"}),
+                            dcc.Input(id="trs-max-xbl", type="number", min=0, max=100,
+                                      step=0.1, value=trs_max_xbl, placeholder="max",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                        ]),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Duration (ms)",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        html.Div(style={"display": "flex", "alignItems": "center",
+                                        "gap": "3px"}, children=[
+                            dcc.Input(id="trs-min-dur-ms", type="number", min=0, max=500,
+                                      step=1, value=trs_min_dur_ms, placeholder="min",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                            html.Span("\u2013", style={"color": "var(--ned-text-muted)",
+                                                  "fontSize": "0.8rem"}),
+                            dcc.Input(id="trs-max-dur-ms", type="number", min=0, max=500,
+                                      step=1, value=trs_max_dur_ms, placeholder="max",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                        ]),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Confidence",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        html.Div(style={"display": "flex", "alignItems": "center",
+                                        "gap": "3px"}, children=[
+                            dcc.Input(id="trs-min-conf", type="number", min=0, max=1,
+                                      step=0.05, value=trs_min_conf, placeholder="min",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                            html.Span("\u2013", style={"color": "var(--ned-text-muted)",
+                                                  "fontSize": "0.8rem"}),
+                            dcc.Input(id="trs-max-conf", type="number", min=0, max=1,
+                                      step=0.05, value=trs_max_conf, placeholder="max",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                        ]),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Local SNR",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        html.Div(style={"display": "flex", "alignItems": "center",
+                                        "gap": "3px"}, children=[
+                            dcc.Input(id="trs-min-snr", type="number", min=0, max=50,
+                                      step=0.1, value=trs_min_snr, placeholder="min",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                            html.Span("\u2013", style={"color": "var(--ned-text-muted)",
+                                                  "fontSize": "0.8rem"}),
+                            dcc.Input(id="trs-max-snr", type="number", min=0, max=50,
+                                      step=0.1, value=trs_max_snr, placeholder="max",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                        ]),
+                    ], width=2),
+                    dbc.Col([
+                        html.Label("Sharpness",
+                                   style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
+                        html.Div(style={"display": "flex", "alignItems": "center",
+                                        "gap": "3px"}, children=[
+                            dcc.Input(id="trs-min-sharp", type="number", min=0, max=20,
+                                      step=0.1, value=trs_min_sharp, placeholder="min",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                            html.Span("\u2013", style={"color": "var(--ned-text-muted)",
+                                                  "fontSize": "0.8rem"}),
+                            dcc.Input(id="trs-max-sharp", type="number", min=0, max=20,
+                                      step=0.1, value=trs_max_sharp, placeholder="max",
+                                      debounce=True, className="form-control",
+                                      style={"width": "50%", "height": "28px",
+                                             "fontSize": "0.78rem"}),
+                        ]),
+                    ], width=2),
+                ], className="g-2 mb-3"),
 
-            # Filter row — mirrors Detection tab spike filters
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Amplitude",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="trs-min-amp", type="number", min=0, max=10000,
-                                  step=1, value=trs_min_amp, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("\u2013", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="trs-max-amp", type="number", min=0, max=10000,
-                                  step=1, value=trs_max_amp, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("x Baseline",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="trs-min-xbl", type="number", min=0, max=100,
-                                  step=0.1, value=trs_min_xbl, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("\u2013", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="trs-max-xbl", type="number", min=0, max=100,
-                                  step=0.1, value=trs_max_xbl, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Duration (ms)",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="trs-min-dur-ms", type="number", min=0, max=500,
-                                  step=1, value=trs_min_dur_ms, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("\u2013", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="trs-max-dur-ms", type="number", min=0, max=500,
-                                  step=1, value=trs_max_dur_ms, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Confidence",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="trs-min-conf", type="number", min=0, max=1,
-                                  step=0.05, value=trs_min_conf, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("\u2013", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="trs-max-conf", type="number", min=0, max=1,
-                                  step=0.05, value=trs_max_conf, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Local SNR",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="trs-min-snr", type="number", min=0, max=50,
-                                  step=0.1, value=trs_min_snr, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("\u2013", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="trs-max-snr", type="number", min=0, max=50,
-                                  step=0.1, value=trs_max_snr, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-                dbc.Col([
-                    html.Label("Sharpness",
-                               style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                    html.Div(style={"display": "flex", "alignItems": "center",
-                                    "gap": "3px"}, children=[
-                        dcc.Input(id="trs-min-sharp", type="number", min=0, max=20,
-                                  step=0.1, value=trs_min_sharp, placeholder="min",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                        html.Span("\u2013", style={"color": "var(--ned-text-muted)",
-                                              "fontSize": "0.8rem"}),
-                        dcc.Input(id="trs-max-sharp", type="number", min=0, max=20,
-                                  step=0.1, value=trs_max_sharp, placeholder="max",
-                                  debounce=True, className="form-control",
-                                  style={"width": "50%", "height": "28px",
-                                         "fontSize": "0.78rem"}),
-                    ]),
-                ], width=2),
-            ], className="g-2 mb-3"),
-
-            # ── Review Mode ──────────────────────────────────────────
-            html.Div(
-                id="trs-review-mode",
-                style={"display": "block" if mode == "review" else "none"},
-                children=[
-                    # Event navigation
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "8px",
-                               "marginBottom": "8px"},
-                        children=[
-                            dbc.Button(
-                                "\u25C0 Prev (\u2190 ,)", id="trs-prev-btn", size="sm",
-                                className="btn-ned-secondary",
-                            ),
-                            html.Div(
-                                id="trs-event-nav-text",
-                                style={"flex": "1", "textAlign": "center",
-                                       "fontWeight": "600", "fontSize": "0.9rem"},
-                                children=event_nav_text,
-                            ),
-                            dcc.Input(
-                                id="trs-jump-to", type="number",
-                                min=1, step=1, debounce=True,
-                                placeholder="#",
-                                className="form-control",
-                                style={"width": "60px", "height": "30px",
-                                       "fontSize": "0.78rem", "textAlign": "center"},
-                            ),
-                            dbc.Button(
-                                "Next (. \u2192) \u25B6", id="trs-next-btn", size="sm",
-                                className="btn-ned-secondary",
-                            ),
-                        ],
-                    ),
-
-                    # Spike property info boxes (updated by callback)
-                    html.Div(
-                        id="trs-event-properties",
-                        children=_build_spike_properties(rec, current_event),
-                    ),
-
-                    # Action buttons
-                    html.Div(
-                        style={"display": "flex", "gap": "12px",
-                               "alignItems": "center",
-                               "justifyContent": "center",
-                               "marginBottom": "10px"},
-                        children=[
-                            dbc.Button(
-                                [html.Span("\u2713 "), "Confirm (C)"],
-                                id="trs-confirm-btn",
-                                className="btn-ned-primary",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2717 "), "Reject (R)"],
-                                id="trs-reject-btn",
-                                className="btn-ned-danger",
-                                style={"minWidth": "120px"},
-                            ),
-                            dbc.Button(
-                                [html.Span("\u2192 "), "Skip (S)"],
-                                id="trs-skip-btn",
-                                className="btn-ned-secondary",
-                                style={"minWidth": "120px"},
-                            ),
-                        ],
-                    ),
-
-                    # Status badge + Y-range controls
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center",
-                               "justifyContent": "space-between",
-                               "marginBottom": "8px"},
-                        children=[
-                            html.Div(
-                                id="trs-event-status",
-                                children=event_label_badge,
-                            ),
-                            html.Div(
-                                style={"display": "flex", "gap": "8px",
-                                       "alignItems": "center"},
-                                children=[
-                                    html.Label("X (s)",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)"}),
-                                    dcc.Input(
-                                        id="trs-xwindow", type="number",
-                                        min=0.1, max=10, step=0.1,
-                                        value=state.extra.get("trs_xwindow", 5.0),
-                                        debounce=True,
-                                        className="form-control",
-                                        style={"width": "60px", "height": "26px",
-                                               "fontSize": "0.78rem"},
-                                    ),
-                                    html.Label("Y range",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)"}),
-                                    dcc.Input(
-                                        id="trs-yrange", type="number",
-                                        min=0, step=0.01,
-                                        value=trs_yrange, debounce=True,
-                                        className="form-control",
-                                        style={"width": "80px", "height": "26px",
-                                               "fontSize": "0.78rem"},
-                                    ),
-                                    dbc.Switch(
-                                        id="trs-show-rect",
-                                        value=state.extra.get("trs_show_rect", True),
-                                        style={"fontSize": "0.72rem",
-                                               "marginLeft": "8px"},
-                                    ),
-                                    html.Label("Extent",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)"}),
-                                    dbc.Switch(
-                                        id="trs-show-baseline",
-                                        value=state.extra.get("trs_show_baseline", False),
-                                        style={"fontSize": "0.72rem",
-                                               "marginLeft": "8px"},
-                                    ),
-                                    html.Label("Baseline",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)"}),
-                                    dbc.Switch(
-                                        id="trs-show-threshold",
-                                        value=state.extra.get("trs_show_threshold", False),
-                                        style={"fontSize": "0.72rem",
-                                               "marginLeft": "8px"},
-                                    ),
-                                    html.Label("Threshold",
-                                               style={"fontSize": "0.72rem",
-                                                      "color": "var(--ned-text-muted)"}),
-                                ],
-                            ),
-                        ],
-                    ),
-
-                    # Review EEG plot
-                    dcc.Loading(
-                        dcc.Graph(
-                            id="trs-review-graph",
-                            figure=_build_review_figure(
-                                rec, current_event, state,
-                                bp_low=float(state.extra.get("sp_params", {}).get("sp-bp-low", 10.0)),
-                                bp_high=float(state.extra.get("sp_params", {}).get("sp-bp-high", 70.0)),
-                                y_range=trs_yrange,
-                                show_rect=state.extra.get("trs_show_rect", True),
-                                x_window=state.extra.get("trs_xwindow", 5.0),
-                                show_baseline=state.extra.get("trs_show_baseline", False),
-                                show_threshold=state.extra.get("trs_show_threshold", False),
-                            ) if current_event else go.Figure(),
-                            config={
-                                "editable": False,
-                                "edits": {"shapePosition": True},
-                                "scrollZoom": True,
-                                "displayModeBar": True,
-                            },
-                            style={"borderRadius": "8px"},
-                        ),
-                        type="circle", color="#58a6ff",
-                    ),
-
-                    # Boundary adjustment (under EEG)
-                    html.Div(
-                        style={"display": "flex", "gap": "12px",
-                               "alignItems": "center", "justifyContent": "center",
-                               "marginTop": "8px", "marginBottom": "4px"},
-                        children=[
-                            html.Label("Onset (s)",
-                                       style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Input(
-                                id="trs-onset-input", type="number",
-                                value=round(current_event.onset_sec, 3) if current_event else 0,
-                                step=0.001, debounce=True,
-                                className="form-control",
-                                style={"width": "100px", "height": "26px",
-                                       "fontSize": "0.78rem"},
-                            ),
-                            html.Label("Offset (s)",
-                                       style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                                              "marginLeft": "8px"}),
-                            dcc.Input(
-                                id="trs-offset-input", type="number",
-                                value=round(current_event.offset_sec, 3) if current_event else 0,
-                                step=0.001, debounce=True,
-                                className="form-control",
-                                style={"width": "100px", "height": "26px",
-                                       "fontSize": "0.78rem"},
-                            ),
-                            html.Span(
-                                id="trs-duration-display",
-                                children=f"({(current_event.offset_sec - current_event.onset_sec) * 1000:.1f}ms)"
-                                if current_event else "",
-                                style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)"},
-                            ),
-                        ],
-                    ),
-
-                    # Notes textarea
-                    html.Div(
-                        style={"marginBottom": "16px"},
-                        children=[
-                            html.Label("Notes",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Textarea(
-                                id="trs-notes",
-                                value=current_event.notes if current_event else "",
-                                placeholder="Optional notes for this spike...",
-                                style={
-                                    "width": "100%", "height": "60px",
-                                    "backgroundColor": "var(--ned-surface)",
-                                    "border": "1px solid var(--ned-border)",
-                                    "borderRadius": "6px",
-                                    "color": "var(--ned-text)",
-                                    "fontSize": "0.85rem",
-                                    "padding": "8px",
-                                    "resize": "vertical",
-                                },
-                            ),
-                        ],
-                    ),
-
-                    # Status message
-                    html.Div(id="trs-review-status"),
-                ],
-            ),
-
-            # ── Browse Mode ──────────────────────────────────────────
-            html.Div(
-                id="trs-browse-mode",
-                style={"display": "block" if mode == "browse" else "none"},
-                children=[
-                    # Navigation controls
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Window (s)",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Input(
-                                id="trs-browse-window", type="number",
-                                min=1, max=600, step=1, value=browse_window,
-                                debounce=True, className="form-control",
-                                style={"width": "100%"},
-                            ),
-                        ], width=2),
-                        dbc.Col([
-                            html.Label("Start (s)",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Input(
-                                id="trs-browse-start", type="number",
-                                min=0, max=rec.duration_sec, step=1,
-                                value=browse_start, debounce=True,
-                                className="form-control",
-                                style={"width": "100%"},
-                            ),
-                        ], width=2),
-                        dbc.Col([
-                            html.Label("Channel (for manual add)",
-                                       style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
-                            dcc.Dropdown(
-                                id="trs-browse-annotate-channel-vis",
-                                options=ch_options,
-                                value=0 if ch_options else None,
-                                clearable=False,
-                                style={"fontSize": "0.82rem"},
-                            ),
-                        ], width=2),
-                        dbc.Col([
-                            html.Label("\u200B",
-                                       style={"fontSize": "0.78rem", "display": "block"}),
-                            html.Div(
-                                style={"display": "flex", "gap": "6px"},
-                                children=[
-                                    dbc.Button(
-                                        "Add Spike",
-                                        id="trs-add-spike-btn",
-                                        className="btn-ned-secondary",
-                                        size="sm",
-                                        active=False,
-                                    ),
-                                    dbc.Button(
-                                        "Remove Spike",
-                                        id="trs-remove-spike-btn",
-                                        className="btn-ned-secondary",
-                                        size="sm",
-                                        active=False,
-                                    ),
-                                ],
-                            ),
-                        ], width=3),
-                    ], className="g-2 mb-3"),
-                    # Channel selection for browse view
-                    html.Div(
-                        style={"marginBottom": "8px", "display": "flex",
-                               "alignItems": "center", "gap": "8px",
-                               "flexWrap": "wrap"},
-                        children=[
-                            html.Label("Channels:",
-                                       style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                                              "margin": "0", "fontWeight": "500"}),
-                            dbc.Checklist(
-                                id="trs-browse-channel-checks",
-                                options=[
-                                    {"label": rec.channel_names[i], "value": i}
-                                    for i in range(rec.n_channels)
-                                ],
-                                value=list(range(rec.n_channels)),
-                                inline=True,
-                                style={"fontSize": "0.8rem"},
-                            ),
-                            html.A("All", id="trs-browse-ch-all", href="#",
-                                   style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
-                                          "cursor": "pointer", "marginLeft": "4px"}),
-                            html.A("None", id="trs-browse-ch-none", href="#",
-                                   style={"fontSize": "0.75rem", "color": "var(--ned-accent)",
-                                          "cursor": "pointer"}),
-                        ],
-                    ),
-
-                    # Hidden store to trigger browse graph refresh after add/remove
-                    dcc.Store(id="trs-annotations-version", data=0),
-
-                    # Browse navigation bar
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "8px",
-                               "marginBottom": "4px"},
-                        children=[
-                            dbc.Button("\u23EE", id="trs-nav-start", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            dbc.Button("\u23EA", id="trs-nav-back-big", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            dbc.Button("\u25C0", id="trs-nav-back", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            html.Div(
-                                id="trs-nav-time-display",
-                                style={"flex": "1", "textAlign": "center",
-                                       "fontWeight": "600", "fontSize": "0.9rem"},
-                            ),
-                            dbc.Button("\u25B6", id="trs-nav-fwd", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                            dbc.Button("\u23E9", id="trs-nav-fwd-big", size="sm",
-                                       className="btn-ned-secondary",
-                                       style={"fontSize": "1rem"}),
-                        ],
-                    ),
-
-                    # Color legend
-                    html.Div(
-                        style={"display": "flex", "gap": "16px", "marginBottom": "6px",
-                               "flexWrap": "wrap", "alignItems": "center"},
-                        children=[
-                            html.Span("Legend:",
-                                      style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                                             "fontWeight": "600"}),
-                            *[
+            ],
+        ),
+        # Current spike's properties (updated by callback)
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Spike", className="panel-label"),
+                html.Div(
+                    id="trs-event-properties",
+                    children=_build_spike_properties(rec, current_event),
+                ),
+            ],
+        ),
+        # Review progress
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Progress", className="panel-label"),
+                html.Div(
+                    style={"marginBottom": "16px"},
+                    children=[
+                        html.Div(
+                            style={"display": "flex", "justifyContent": "space-between",
+                                   "marginBottom": "4px"},
+                            children=[
                                 html.Span(
-                                    style={"display": "flex", "alignItems": "center",
-                                           "gap": "4px"},
-                                    children=[
-                                        html.Span(
-                                            style={
-                                                "width": "12px", "height": "12px",
-                                                "borderRadius": "2px",
-                                                "background": colors["fill"],
-                                                "border": f"1px solid {colors['line']}",
-                                                "display": "inline-block",
-                                            }
-                                        ),
-                                        html.Span(
-                                            lbl.capitalize(),
-                                            style={"fontSize": "0.72rem",
-                                                   "color": colors["text"]},
-                                        ),
-                                    ],
-                                )
-                                for lbl, colors in _LABEL_COLORS.items()
+                                    f"{counts_filtered['confirmed']} confirmed, "
+                                    f"{counts_filtered['rejected']} rejected, "
+                                    f"{counts_filtered['pending']} pending"
+                                    + (f" (of {counts['total']} total)"
+                                       if trs_filter_on else ""),
+                                    style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
+                                html.Span(f"{progress_pct}%",
+                                          style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
                             ],
-                        ],
-                    ),
-
-                    # Browse EEG plot — pre-render if in browse mode
-                    dcc.Loading(
-                        dcc.Graph(
-                            id="trs-browse-graph",
-                            figure=_build_browse_figure(
-                                rec, _filter_by_channel(annotations, channel_filter),
-                                state,
-                                start_sec=float(browse_start),
-                                window_sec=float(browse_window),
-                            ) if mode == "browse" else go.Figure(),
-                            config={"scrollZoom": True, "displayModeBar": True},
-                            style={"borderRadius": "8px"},
                         ),
-                        type="circle", color="#58a6ff",
-                    ),
-
-                    # Status message
-                    html.Div(id="trs-browse-status"),
-                ],
-            ),
-
-            # ── Annotation Counts (at end of page) ─────────────────────
-            html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0 12px 0"}),
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Div(
-                        style={"display": "flex", "justifyContent": "space-between",
-                               "marginBottom": "4px"},
-                        children=[
-                            html.Span(
-                                f"{counts_filtered['confirmed']} confirmed, "
-                                f"{counts_filtered['rejected']} rejected, "
-                                f"{counts_filtered['pending']} pending"
-                                + (f" (of {counts['total']} total)"
-                                   if trs_filter_on else ""),
-                                style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                            html.Span(f"{progress_pct}%",
-                                      style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"}),
-                        ],
-                    ),
-                    dbc.Progress(
-                        value=progress_pct,
-                        style={"height": "6px", "backgroundColor": "#2d333b"},
-                        color="success" if progress_pct >= 80 else (
-                            "warning" if progress_pct >= 40 else "info"
+                        dbc.Progress(
+                            value=progress_pct,
+                            style={"height": "6px", "backgroundColor": "var(--ned-surface-hover)"},
+                            color="success" if progress_pct >= 80 else (
+                                "warning" if progress_pct >= 40 else "info"
+                            ),
                         ),
-                    ),
-                    # Per-channel counts
-                    html.Div(
-                        style={"display": "flex", "gap": "16px", "marginTop": "6px",
-                               "flexWrap": "wrap"},
-                        children=[
-                            html.Span(
-                                f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
-                                style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
-                                       "border": "1px solid var(--ned-border)",
-                                       "borderRadius": "8px", "padding": "1px 8px"},
-                            )
-                            for ch_name, cc in ch_counts.items()
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
+                        # Per-channel counts
+                        html.Div(
+                            style={"display": "flex", "gap": "16px", "marginTop": "6px",
+                                   "flexWrap": "wrap"},
+                            children=[
+                                html.Span(
+                                    f"{ch_name}: {cc['confirmed']}\u2713 {cc['rejected']}\u2717 {cc['pending']}?",
+                                    style={"fontSize": "0.72rem", "color": "var(--ned-text-muted)",
+                                           "border": "1px solid var(--ned-border)",
+                                           "borderRadius": "8px", "padding": "1px 8px"},
+                                )
+                                for ch_name, cc in ch_counts.items()
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ]
+
+    return split_page(main, panel, panel_title="Annotation")
+
+
+# ── Autoscale (A) ─────────────────────────────────────────────────────
+
+
+@callback(
+    Output("trs-yrange", "value", allow_duplicate=True),
+    Input("trs-autoscale-btn", "n_clicks"),
+    Input("trs-autoscale-key", "data"),
+    State("trs-channel-filter", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def autoscale_spike_review(_n, _key_ts, ch_filter, sid):
+    """Fit the Y range to the visible window around the current spike
+    (same bandpass as the plot)."""
+    state = server_state.get_session(sid)
+    rec = state.recording
+    if rec is None:
+        return no_update
+    filtered = _filter_by_channel(_get_annotations(state), ch_filter)
+    if state.extra.get("trs_filter_on", True):
+        fv = state.extra.get("trs_filter_values",
+                             state.extra.get("sp_filter_values", {}))
+        filtered = _apply_annotation_filters(filtered, **fv)
+    if not filtered:
+        return no_update
+    event = filtered[max(0, min(state.extra.get("trs_current_idx", 0), len(filtered) - 1))]
+    half = float(state.extra.get("trs_xwindow", 5.0)) / 2.0
+    mid = (event.onset_sec + event.offset_sec) / 2.0
+    i0 = int(max(0.0, mid - half) * rec.fs)
+    i1 = min(int((mid + half) * rec.fs), rec.n_samples)
+    _sp = state.extra.get("sp_params", {})
+    yr = fit_y_range(bandpass_filter(
+        rec.data[event.channel, i0:i1].astype(np.float64), rec.fs,
+        float(_sp.get("sp-bp-low", 10.0)), float(_sp.get("sp-bp-high", 70.0))))
+    if yr is None:
+        return no_update
+    state.extra["trs_yrange"] = yr
+    return yr
 
 
 # ── Keyboard shortcut clientside callback ─────────────────────────────
@@ -1330,8 +1344,18 @@ clientside_callback(
         if (!window._trsKeyListenerActive) {
             window._trsKeyListenerActive = true;
             document.addEventListener('keydown', function(e) {
+                // Only while this page is shown (the listener stays after leaving it)
+                if (!document.getElementById('trs-keyboard-listener')) return;
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
                 var key = e.key.toLowerCase();
+                if (key === 'a' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    // Autoscale the Y range (own store: no full review update)
+                    e.preventDefault();
+                    if (window.dash_clientside && window.dash_clientside.set_props) {
+                        window.dash_clientside.set_props('trs-autoscale-key', {data: Date.now()});
+                    }
+                    return;
+                }
                 if (['c', 'r', 's', 'arrowleft', 'arrowright', ',', '.'].includes(key)) {
                     e.preventDefault();
                     if (window.dash_clientside && window.dash_clientside.set_props) {
@@ -1779,16 +1803,7 @@ def trs_save_notes(notes_val, ch_filter, sid):
                 break
         _auto_save(state, annotations)
 
-    return {
-        "width": "100%", "height": "60px",
-        "backgroundColor": "var(--ned-surface)",
-        "border": "1px solid var(--ned-border)",
-        "borderRadius": "6px",
-        "color": "var(--ned-text)",
-        "fontSize": "0.85rem",
-        "padding": "8px",
-        "resize": "vertical",
-    }
+    return {"width": "100%", "height": "60px", "resize": "vertical"}
 
 
 # ── Browse Mode Callbacks ─────────────────────────────────────────────

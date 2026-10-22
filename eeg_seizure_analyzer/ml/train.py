@@ -85,13 +85,24 @@ class DiceBCELoss(nn.Module):
         logits : (batch, n_classes, n_samples) — raw model output
         targets : (batch, n_classes, n_samples) — multi-channel mask
         """
-        # BCE
-        bce_loss = self.bce(logits, targets)
-
-        # Dice
-        probs = torch.sigmoid(logits)
-        intersection = (probs * targets).sum()
-        union = probs.sum() + targets.sum()
+        # Targets of -1 are "unknown" (unreviewed samples of background windows):
+        # they count neither as seizure nor as no seizure. Without any, this is
+        # exactly the original loss.
+        valid = targets >= 0
+        if bool(valid.all()):
+            bce_loss = self.bce(logits, targets)
+            probs = torch.sigmoid(logits)
+            intersection = (probs * targets).sum()
+            union = probs.sum() + targets.sum()
+        else:
+            t = targets.clamp(min=0)
+            w = valid.to(logits.dtype)
+            per = nn.functional.binary_cross_entropy_with_logits(
+                logits, t, pos_weight=self.bce.pos_weight, reduction="none")
+            bce_loss = (per * w).sum() / w.sum().clamp(min=1.0)
+            probs = torch.sigmoid(logits) * w
+            intersection = (probs * t).sum()
+            union = probs.sum() + t.sum()
         dice_loss = 1.0 - (2.0 * intersection + self.smooth) / (union + self.smooth)
 
         return self.dice_weight * dice_loss + self.bce_weight * bce_loss
@@ -126,6 +137,10 @@ def _compute_metrics(
     # Per-sample metrics
     preds_cat = np.concatenate(all_preds)
     targets_cat = np.concatenate(all_targets)
+    # Unknown samples (target -1, unreviewed) are left out of every count.
+    known = targets_cat >= 0
+    if not known.all():
+        preds_cat, targets_cat = preds_cat[known], targets_cat[known]
     pred_binary = (preds_cat > threshold).astype(int)
     target_binary = (targets_cat > 0.5).astype(int)
 
@@ -175,23 +190,52 @@ def _compute_metrics(
     total_pred_events = 0
     total_matched = 0
     matched_pred = 0
+    # Merges are invisible to event F1: one prediction spanning two seizures
+    # matches both. These count them, and split recall by whether the seizure
+    # shares its window with another one.
+    merged_pred = 0          # predictions matching >= 2 true events
+    n_clustered = matched_clustered = 0
+    n_isolated = matched_isolated = 0
 
     for pred_prob, target in zip(all_preds, all_targets):
         true_segs = _segments(target > 0.5)
         pred_segs = _segments(pred_prob > threshold)
+        # A prediction lying mostly in unreviewed time is neither a hit nor a
+        # false positive: it may be a seizure nobody annotated.
+        unknown = target < 0
+        if unknown.any():
+            pred_segs = [(ps, pe) for ps, pe in pred_segs
+                         if unknown[ps:pe].mean() <= 0.5]
 
         total_true_events += len(true_segs)
         total_pred_events += len(pred_segs)
 
         # Recall: a true event is "detected" if any predicted segment
         # overlaps it by at least 20%
+        clustered = len(true_segs) >= 2
         for ts, te in true_segs:
             t_len = te - ts
+            hit = False
             for ps, pe in pred_segs:
                 overlap = max(0, min(te, pe) - max(ts, ps))
                 if overlap > 0.2 * t_len:
-                    total_matched += 1
+                    hit = True
                     break
+            total_matched += hit
+            if clustered:
+                n_clustered += 1
+                matched_clustered += hit
+            else:
+                n_isolated += 1
+                matched_isolated += hit
+
+        # A prediction "covers" a true event by the recall rule above.
+        if clustered:
+            for ps, pe in pred_segs:
+                covered = sum(
+                    1 for ts, te in true_segs
+                    if max(0, min(te, pe) - max(ts, ps)) > 0.2 * (te - ts))
+                merged_pred += covered >= 2
 
         # Precision: a predicted event matches if it overlaps a true event by
         # at least 20% of its own length
@@ -220,6 +264,11 @@ def _compute_metrics(
         "true_events": total_true_events,
         "pred_events": total_pred_events,
         "matched_events": total_matched,
+        "merged_pred_events": merged_pred,
+        "true_events_clustered": n_clustered,
+        "recall_clustered": round(matched_clustered / max(n_clustered, 1), 4),
+        "true_events_isolated": n_isolated,
+        "recall_isolated": round(matched_isolated / max(n_isolated, 1), 4),
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
     }
 
@@ -265,6 +314,20 @@ class TrainConfig:
 
     # Architecture selection: "unet" or "bendr"
     architecture: str = "unet"
+
+    # U-Net middle block (see model.SeizureUNet). The defaults are the original
+    # U-Net, whose receptive field is ~4.7 s; "gru" / "transformer" let each
+    # output see the whole window, and depth 7 with max_filters 512 ~38 s.
+    bottleneck: str = "conv"
+    max_filters: int = 0  # 0 = no cap on filters per level
+    bottleneck_dim: int = 256
+    bottleneck_layers: int = 2
+    bottleneck_heads: int = 4
+
+    # Seed for weight init and batch order. None = unseeded (as every model
+    # trained before 2026-10-19). The data split and augmentation are seeded
+    # separately (DatasetConfig.seed), so runs that differ only here share them.
+    seed: int | None = None
 
     # BENDR-specific settings (ignored for U-Net)
     pretrained_path: str = ""  # path to pre-trained BENDR weights
@@ -316,6 +379,9 @@ def train_model(
         train_config = TrainConfig()
     if model_name is None:
         model_name = dataset_def.get("name", "unnamed")
+    if train_config.seed is not None:
+        torch.manual_seed(train_config.seed)
+        print(f"Seed (init + batch order): {train_config.seed}")
 
     # ── Build datasets ───────────────────────────────────────────
     # 250 Hz end-to-end: the BENDR encoder is pre-trained at 250 Hz
@@ -469,8 +535,15 @@ def train_model(
             depth=train_config.depth,
             dropout=train_config.dropout,
             n_classes=2,
+            bottleneck=train_config.bottleneck,
+            max_filters=train_config.max_filters,
+            context_dim=train_config.bottleneck_dim,
+            context_layers=train_config.bottleneck_layers,
+            context_heads=train_config.bottleneck_heads,
         )
-        print(f"Architecture: U-Net (base_filters={train_config.base_filters})")
+        print(f"Architecture: U-Net (base_filters={train_config.base_filters}, "
+              f"depth={train_config.depth}, max_filters={train_config.max_filters or 'none'}, "
+              f"bottleneck={train_config.bottleneck})")
 
     model = model.to(device)
 
@@ -548,6 +621,10 @@ def train_model(
             "dataset_config": asdict(dataset_config),
             "train_samples": len(train_ds),
             "val_samples": len(val_ds),
+            # Held-out (animal, recording) pairs, e.g. for a blind review that must
+            # only draw from recordings the model never trained on.
+            "val_pairs": sorted({(s.animal_id, s.edf_path)
+                                 for s in getattr(val_ds, "specs", [])}),
             "best_epoch": best_epoch,
             "best_val_loss": round(float(best_val_loss), 4),
             "best_metrics": best_metrics,
@@ -859,6 +936,11 @@ def load_trained_model(
             depth=tc.get("depth", 4),
             dropout=0.0,  # no dropout at inference
             n_classes=metadata.get("n_classes", 1),
+            bottleneck=tc.get("bottleneck", "conv"),
+            max_filters=tc.get("max_filters", 0),
+            context_dim=tc.get("bottleneck_dim", 256),
+            context_layers=tc.get("bottleneck_layers", 2),
+            context_heads=tc.get("bottleneck_heads", 4),
         )
 
     weights_path = model_dir / "best_model.pt"

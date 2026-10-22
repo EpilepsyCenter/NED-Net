@@ -43,8 +43,8 @@ of epilepsy. It offers two routes to detection.
   - a 1-D **U-Net** finds seizures;
   - an optional **convulsive classifier** labels each one convulsive or non-convulsive.
 
-Both routes feed the same review tool. Candidates are confirmed or rejected in the **Training**
-tab, and the reviewed events become training data for the next model.
+Both routes feed the same review tool. Candidates are confirmed or rejected under **Training**
+(Seizure Annotation), and the reviewed events become training data for the next model.
 
 > **Plan to retrain on new animals.** A model trained on one cohort transfers poorly to animals it
 > has not seen: implants and electrodes differ, and so does each animal's background EEG. The
@@ -134,34 +134,46 @@ After `git pull`, run `pip install -e ".[desktop,ml]"` again, so new dependencie
 | Linux | `start-nednet-native.sh` | `chmod +x start-nednet-native.sh` |
 
 Or run `nednet` in the terminal. The app opens in its own window, on port 8051, or another free
-port if that one is taken.
+port if that one is taken. A start-up screen with the NED-Net logo shows while the app loads; the
+first start after installing or updating can take a minute (on Windows, for example, while the
+virus scanner checks PyTorch).
 
 **In a browser.** Run `python -m eeg_seizure_analyzer.dash_app.main` and open
 http://127.0.0.1:8050.
 
 ### 3.2 The interface
 
-![Screenshot: the app window with sidebar, tab bar and content](screenshots/interface_overview.png)
+![Screenshot: the app window with sidebar, toolbar, settings panel and status bar](screenshots/interface_overview.png)
 
-- **Sidebar (left).**
-  - The loaded recording: name, channels, sampling rate, duration, and EEG↔activity pairs.
-  - Status lines for seizure detections, interictal-spike detections, annotation progress and
-    video. ✅ means saved to disk; ⚠️ means in memory only.
-  - At the bottom, the **Dark mode** switch and a **Help** link that opens this manual.
-- **Tab bar (top).** Detection and Training have subtabs (Seizure, Interictal Spikes) in a
-  second row.
-- **Content:** the active tab.
+- **Sidebar (left):** the pages, grouped by task. Click **NED-Net** at the top to go to the Load
+  page. At the bottom are the **Dark mode** switch and a **Help** link that opens this manual.
+- **Toolbar (top):** the loaded recording's name, with channels, sampling rate and duration
+  underneath (point at that line to see the EEG↔activity pairs). With several files open, the
+  file picker sits on the right.
+- **Settings panel (right):** on the Viewer, the detection pages and the annotation pages, the
+  settings live in a panel on the right, so the plots and results get the room.
+  - Drag its left edge to make it wider or narrower; double-click the edge to reset it.
+  - Hide or show it with the panel button at the right of the toolbar, **Go › Show/Hide
+    Settings Panel**, or `⌥⌘0` (`Ctrl+Alt+0` on Windows and Linux).
+  - Its width and whether it is shown apply to every page and are remembered.
+- **Status bar (bottom):** whether the recording's seizure detections, interictal-spike
+  detections, annotations and background stretches are saved, and whether a video is linked. A
+  green dot means saved to disk; amber means in memory only. Point at an item for details.
 
-| Tab | Subtabs | Purpose |
+| Sidebar group | Page | Purpose |
 |---|---|---|
-| **Load** | — | Start screen, loading files and folders, animal IDs and tags |
-| **Viewer** | — | Multi-channel EEG viewer |
-| **Detection** | Seizure, Interictal Spikes | Rule-based and U-Net detection on the loaded recording |
-| **Training** | Seizure, Interictal Spikes | Review: confirm or reject candidates, edit, add events |
-| **Dataset / Model** | Dataset | Build datasets and train models |
-| **Analysis** | — | Run a trained model on a file, a folder, or a watched folder |
-| **Results** | — | Statistics and exports for a project |
-| **Tools** | Video Converter, ADICHT → EDF | Conversions |
+| Recording | **Load** | Start screen, loading files and folders, animal IDs and tags |
+| | **Viewer** | Multi-channel EEG viewer |
+| Detection | **Seizures** | Rule-based and U-Net seizure detection on the loaded recording |
+| | **Interictal Spikes** | Spike detection on the loaded recording |
+| Training | **Seizure Annotation** | Review: confirm or reject candidates, edit, add events |
+| | **Spike Annotation** | The same for interictal spikes |
+| | **Background** | Review seizure-free stretches used as negative training data |
+| Model | **Dataset & Model** | Build datasets and train models |
+| | **Blind Review** | Check a model's detections without seeing its scores |
+| | **Batch Analysis** | Run a trained model on a file, a folder, or a watched folder |
+| | **Results** | Statistics and exports for a project |
+| Tools | **Video Converter**, **ADICHT → EDF** | Conversions |
 
 ### 3.3 The start screen
 
@@ -177,7 +189,22 @@ Entries that no longer exist are greyed out.
 
 ### 3.4 Light and dark theme
 
-The app starts in the light theme. Switch with **Dark mode** at the bottom of the sidebar.
+The app follows your system's appearance (light or dark) and changes with it. Switch by hand with
+**Dark mode** at the bottom of the sidebar, or **Go › Toggle Dark Mode**.
+
+### 3.5 Menus
+
+The desktop app has its own menus: in the menu bar at the top of the screen on macOS, and inside
+the window on Windows and Linux.
+
+| Menu | Items |
+|---|---|
+| **File** | **Open Recording…**, **Open Several Recordings…** (and **Exit** on Windows / Linux) |
+| **Go** | Every page; **Show/Hide Settings Panel**; **Toggle Dark Mode** |
+| **Tools** | **Video Converter**, **ADICHT → EDF Converter** |
+| **Help** | **NED-Net Manual** (this manual, in its own window), **About NED-Net** |
+
+Keyboard shortcuts for moving around are in section 19.
 
 ---
 
@@ -195,7 +222,7 @@ The app starts in the light theme. Switch with **Dark mode** at the bottom of th
      preselected. A notice appears if the sampling rates differ.
 4. Click **Load Selected Channels**. Any saved detections for this file load automatically.
 
-![Screenshot: Load tab, path and Browse](screenshots/load_single.png)
+![Screenshot: Load page, path and Browse](screenshots/load_single.png)
 
 ADICHT files skip channel selection and open for viewing only.
 
@@ -254,22 +281,24 @@ Once loaded:
 
 ## 5. EEG Viewer
 
-![Screenshot: Viewer with traces, overlays and navigation](screenshots/viewer.png)
+![Screenshot: Viewer with traces, overlays and the Display panel](screenshots/viewer.png)
+
+The trace fills the page; its settings are in the **Display** panel on the right.
 
 | Control | Default | What it does |
 |---|---|---|
 | **Channels** | all | Channels to show (**All** / **None**) |
-| **Window (s)** | 150 | Length of the visible stretch |
-| **Start (s)** | 0 | Start of the visible stretch |
+| **Window** (s) | 150 | Length of the visible stretch |
+| **Start** (s) | 0 | Start of the visible stretch |
 | **Y range** | automatic | Vertical scale and channel spacing; a scale bar shows it |
-| **Height (px)** | 600 | Plot height |
-| **Bandpass**, **BP Low / High (Hz)** | on, 1–50 | Display filter |
-| **Notch**, **Notch (Hz)** | off, 50 | Mains filter (50 or 60 Hz) |
-| **Activity Y min / max** | 0 / 4 | Scale of the activity channel, shown when one is paired |
+| **Height** | Auto | **Auto** fills the window and follows it when you resize; **Custom** uses **Custom height** (px) |
+| **Bandpass**, **Bandpass low / high** (Hz) | on, 1–50 | Display filter |
+| **Notch** (Hz) | off, 50 | Mains filter (50 or 60 Hz) |
+| **Activity channel Y min / max** | 0 / 4 | Scale of the activity channel, shown when one is paired |
 
-**Navigation:**
-- ⏮ jumps to the start;
-- ⏪ ◀ ▶ ⏩ move by five windows or one window;
+**Navigation** (buttons above the trace):
+- the first button jumps to the start;
+- the others move back or forward by one window or half a window;
 - dragging on the plot zooms in, and the scroll wheel zooms.
 
 **Overlays.**
@@ -277,7 +306,7 @@ Once loaded:
 | Overlay | Default | Shows |
 |---|---|---|
 | **Seizures** | on | Shaded detected seizures |
-| **IS events** | off | Interictal spikes (following that tab's filters) |
+| **IS events** | off | Interictal spikes (following the Interictal Spikes page's filters) |
 | **Spike dots** | off | Spikes found by the spike-train front-end |
 | **Baseline**, **Threshold** | on | The detector's baseline and threshold |
 
@@ -290,11 +319,13 @@ jumps it back to the current Start, and clicking on the trace moves it to that t
 
 ## 6. Seizure Detection: Rule-Based Methods
 
-The **Detection → Seizure** subtab runs detection on the loaded recording. Choose the method at
-the top: Spike-Train, Spectral Band, Autocorrelation, Ensemble, or U-Net (section 7). The **?**
-button explains each method.
+The **Seizures** page (Detection in the sidebar) runs detection on the loaded recording. The
+results, the event inspector and the export are on the left; the **Detection settings** panel on
+the right holds the method (Spike-Train, Spectral Band, Autocorrelation, Ensemble, or U-Net,
+section 7), the channels and the method's parameters, in sections you can fold. The **?** button
+explains each method.
 
-![Screenshot: method selector and parameter cards](screenshots/method_selector.png)
+![Screenshot: Seizures page with results on the left and the Detection settings panel](screenshots/method_selector.png)
 
 | Method | Best for | How it works |
 |---|---|---|
@@ -406,9 +437,9 @@ Each method uses its own parameters from its own panel.
 
 ### 6.5 Running detection
 
-1. Select channels in **Channels to analyze**.
+1. Select channels in **Channels to analyze** (settings panel).
 2. Choose the method and adjust parameters.
-3. Click **Detect Seizures**.
+3. Click **Detect Seizures**, next to the page title.
 
 The results are saved next to the recording (`_ned_detections.json`, section 18). Their events
 are also added to the review queue as *pending* (section 10).
@@ -417,7 +448,7 @@ The other action buttons:
 - **Clear Results** removes the detections.
 - **Add to project database** sends the events that pass the filters to the active project
   (section 15).
-- **📁 Detect All Files** appears when several files are open (section 15).
+- **Detect All Files** appears when several files are open (section 15).
 - **Parameters** saves and restores settings (section 16).
 
 ![Screenshot: detection results](screenshots/detection_results.png)
@@ -587,7 +618,7 @@ the filters and go into exports.
 
 ## 9. Exporting Detected Events
 
-The export panel sits at the bottom of each Detection subtab.
+The export panel sits at the bottom of both detection pages (Seizures, Interictal Spikes).
 
 ![Screenshot: export panel](screenshots/export_csv.png)
 
@@ -623,22 +654,30 @@ With several files open, the export covers the **active file**.
 
 ## 10. Training: Reviewing Seizures
 
-The **Training → Seizure** subtab is where candidates become labels. Reviewed events are the only
-source of training data.
+The **Seizure Annotation** page (Training in the sidebar) is where candidates become labels.
+Reviewed events are the only source of training data.
 
-![Screenshot: Training, review mode](screenshots/training_review.png)
+![Screenshot: Seizure Annotation in Review mode, with the Annotation panel and its event list](screenshots/training_review.png)
+
+The page has two modes, switched at the top right: **Review** steps through the candidates,
+**Browse** scrolls freely through the recording (section 10.6). In Review mode:
+- **left:** event navigation, the **decision bar** (boundaries, status, Convulsive, Skip / Reject
+  / Confirm), the plot toolbar, the overview strip and the plot, then video, spectral plots and
+  notes;
+- **right, the Annotation panel:** **Annotator**, **Channel** and **Method**, the **Events**
+  list, the **Filters**, the current event's details and the review progress.
 
 ### 10.1 Where candidates come from
 
 Every candidate starts as **pending**. Candidates enter the review queue from:
-- a seizure detection run on the **Detection** tab;
+- a seizure detection run on the **Seizures** page;
 - **Detect All Files**;
 - **Analysis** with the *Training review queue* output (section 13), in single, batch or live
   mode;
 - events you **add by hand** (Browse mode).
 
-Under the event cards, **From:** says where each one came from and which method found it, e.g.
-"From: Analysis (live monitoring) · U-Net".
+In the panel's event details, **From:** says where each one came from and which method found it,
+e.g. "From: Analysis (live monitoring) · U-Net".
 
 ### 10.2 Labelling
 
@@ -649,9 +688,14 @@ Under the event cards, **From:** says where each one came from and which method 
 | Skip for now | **→ Skip (S)** | `S` |
 | Mark convulsive or not | **Convulsive (V)** | `V` |
 | Previous / next event | **◀ Prev** / **Next ▶** | `←` `,` / `→` `.` |
-| Go to event number | **Go to #** box | — |
+| Go to an event | a row in the panel's **Events** list, or the **Go to #** box | — |
 
 Confirm and Reject move on to the next pending event. Each label is saved at once.
+
+The **Events** list in the panel shows every event in the current queue (after the channel,
+method and range filters): a status dot (green confirmed, red rejected, outlined pending), the
+event ID, onset, duration and, with several channels, the channel. The current event is
+highlighted; click any row to go to it.
 
 The status badge next to the buttons shows the current label: pending, confirmed or rejected.
 
@@ -660,38 +704,40 @@ The status badge next to the buttons shows the current label: pending, confirmed
 Above the plot, the **plot toolbar** holds two groups of controls.
 - **Left:** pan (**◀ [**, **Centre \\**, **] ▶**), **Context** and **Overview**, as in the
   inspector (section 8.3). Use them to see where a seizure really starts and ends.
-- **Right:** **Y range**, **Act Y** (activity range), and the **Baseline** and **Threshold**
-  overlays.
+- **Right:** **Y range** with **Autoscale (A)**, **Act Y** (activity range), and the
+  **Baseline** and **Threshold** overlays. **Autoscale** (or the `A` key) fits the Y range to the
+  signal shown, ignoring single extreme spikes.
 
 The overview strip above the plot marks the channel's annotations by label: amber pending, green
 confirmed, red rejected.
 
 Edit boundaries in either of two ways:
 - **drag the edges** of the shaded box on the plot (saved at once);
-- type new values in **Onset (s)** / **Offset (s)** below the plot (applied when you confirm or
-  reject).
+- type new values in **Onset (s)** / **Offset (s)** in the decision bar (applied when you confirm
+  or reject).
 
 The original boundaries are kept with the annotation. Edits here change only the annotation file,
-never the Detection tab's results.
+never the Seizures page's results.
 
 ### 10.4 Filters
 
-The Training filters start from the Detection tab's filter values. Next to the **Filters**
-switch, a summary always shows what they do, e.g. "Filters on: 12 of 40 events shown". If they
-hide everything, the plot says so. **Channel** and **Method** narrow the queue further.
+The filters in the Annotation panel start from the Seizures page's filter values. Next to the
+**Filters** switch, a summary always shows what they do, e.g. "Filters on: 12 of 40 events
+shown". If they hide everything, the plot says so. **Channel** and **Method** narrow the queue
+further.
 
 ### 10.5 Notes, video and progress
 
 - **Annotator** stores your name with each label.
 - **Notes** adds free text to the current event.
 - With a linked video, the video jumps to each event and follows the view when you pan.
-- At the bottom, the progress line counts all annotations of the file ("X of N reviewed …") and
-  per channel.
+- **Progress**, at the bottom of the panel, counts all annotations of the file ("X of N reviewed
+  …") and per channel.
 
 ### 10.6 Browse mode
 
-**📄 Browse Mode** scrolls freely through the recording (**Window (s)**, **Start (s)**,
-**Channels**) to find seizures the detector missed.
+**Browse** scrolls freely through the recording (**Window (s)**, **Start (s)**, **Channels**) to
+find seizures the detector missed.
 - **Add Seizure:** turn it on, choose **Channel (for manual add)**, then box-select the seizure
   on the plot. It is added as confirmed, convulsive or not as set by the **Convulsive** box
   next to the buttons (the box keeps its setting; check it before each selection). Convulsive
@@ -705,14 +751,32 @@ Model training uses **confirmed** events as positives and **rejected** events as
 **Pending events are never used** until someone reviews them. Convulsive flags on confirmed
 events train the convulsive outputs.
 
+### 10.8 Background stretches
+
+Training also needs "no seizure" examples, and random recording time can hide seizures nobody
+annotated. The **Background** page (Training in the sidebar) reviews seizure-free stretches
+instead of random time.
+- **Proposing stretches:** on the Seizures page, tick **Propose background** at the bottom of the
+  settings panel. Detection then also proposes quiet stretches (by RMS and line length) at least
+  10 s from any detection or annotation. They arrive as pending.
+- **Reviewing:** like seizures. **Confirm background (C)** when the stretch is truly free of
+  seizures, **Reject (R)** otherwise, **Skip (S)**; `A` autoscales. The recording's seizure
+  annotations are shown for context, and a stretch that overlaps one is flagged.
+- **Browse** mode adds stretches by hand (**Add Background**, then drag across the trace) and
+  removes hand-added ones (**Remove Background**).
+
+Background stretches have their own file, `<name>_ned_background_annotations.json`, so they never
+mix with seizure labels. They are blue on the plots and in the Seizures results table.
+
 ---
 
 ## 11. Interictal Spikes
 
 ### 11.1 Detection
 
-The **Detection → Interictal Spikes** subtab detects isolated spikes between seizures. Choose
-**Classical** or **U-Net** (a trained spike model) at the top.
+The **Interictal Spikes** page (Detection in the sidebar) detects isolated spikes between
+seizures. Choose **Classical** or **U-Net** (a trained spike model) in the **Detection settings**
+panel on the right, together with the channels and the parameters.
 
 ![Screenshot: interictal spike detection](screenshots/spike_detection.png)
 
@@ -747,13 +811,14 @@ Step through spikes with **◀ Prev / Next ▶**, `,` `.` or `←` `→`. The **
 the waveform and its features: amplitude, x baseline, duration, SNR, sharpness, phase ratio,
 after-slow-wave, neighbours.
 
-The buttons match the seizure subtab: **Detect Spikes**, **Clear Results**, **Add to project
-database**, **📁 Detect All Files** (several files open) and **Parameters**.
+The buttons match the Seizures page: **Detect Spikes**, **Clear Results**, **Add to project
+database**, **Detect All Files** (several files open) and **Parameters**.
 
 ### 11.2 Review
 
-**Training → Interictal Spikes** works like seizure review:
+**Spike Annotation** (Training in the sidebar) works like seizure review:
 - **Confirm / Reject / Skip** with `C` `R` `S`, and `←` `,` / `→` `.` to move;
+- **Autoscale (A)** fits the Y range to the window around the spike;
 - edit the extent by dragging or with the Onset/Offset boxes;
 - **Browse mode** with **Add Spike** (box-select) and **Remove Spike** (click).
 
@@ -763,7 +828,7 @@ Labels are saved to `_ned_spike_annotations.json`.
 
 ## 12. Datasets and Model Training
 
-![Screenshot: Dataset / Model tab](screenshots/ml_datasets.png)
+![Screenshot: Dataset & Model page](screenshots/ml_datasets.png)
 
 ### 12.1 Building a dataset
 
@@ -843,14 +908,39 @@ Some options exist only in the command-line trainers (section 20), e.g.:
 - using rejected events as negatives for the convulsive classifier;
 - fully deterministic fp32 training.
 
+### 12.5 Blind review: what are a model's detections really?
+
+**Blind Review** (Model in the sidebar) measures how many of a model's detections are seizures,
+on recordings it never trained on, without the reviewer seeing the model's scores.
+1. Choose the **Model**. Its held-out recordings are used when the model saved them; otherwise
+   choose a folder of recordings.
+2. **Score bands:** ranges of the model's peak score, and how many events to draw from each. The
+   upper band is what the app reports at the model's threshold; the lower band is what the
+   threshold leaves out.
+3. **Output folder:** an empty or new folder for the review (links to the recordings and blinded
+   annotation files). The key saying which band each event came from stays in the app's data
+   folder.
+4. **Build review.** The model runs once over the recordings and a random sample of its
+   never-reviewed detections is drawn per band.
+
+While a review is open, it replaces the loaded recordings and **Seizure Annotation** runs in
+blind mode: confirm or reject each event; confidence, band and origin are hidden, and boundaries
+and the Convulsive box don't matter. **Exit review** brings your recordings back.
+
+**Score** shows, per band, the share of reviewed events that are seizures, with a 95 % interval.
+**Merge into annotations…** copies the verdicts into the recordings' annotation files (each file
+is backed up first; events already confirmed or rejected are skipped). Once merged, those
+recordings are no longer held out, so later model comparisons should use other recordings.
+**Earlier reviews of this model** lists past reviews to open, score or merge.
+
 ---
 
 ## 13. Analysis
 
-The **Analysis** tab runs a trained model on one file, a folder, or a watched folder. Its output
+The **Batch Analysis** page runs a trained model on one file, a folder, or a watched folder. Its output
 goes to a project database, the review queue, or both.
 
-![Screenshot: Analysis tab](screenshots/analysis_tab.png)
+![Screenshot: Batch Analysis page](screenshots/analysis_tab.png)
 
 ### 13.1 Step 1: Project and output
 
@@ -927,7 +1017,7 @@ full picture.
 
 **Results** shows the statistics for one project.
 
-![Screenshot: Results tab](screenshots/results_summary.png)
+![Screenshot: Results page](screenshots/results_summary.png)
 
 ### 14.1 Choosing what to show
 
@@ -997,7 +1087,7 @@ This is what makes per-animal-hour rates possible, including for quiet animals w
 
 ### 15.2 Rule-based detection on many files
 
-With a folder loaded (**Load Multiple**), **📁 Detect All Files** on either Detection subtab runs
+With a folder loaded (**Load Multiple**), **Detect All Files** on either detection page runs
 the current method and parameters on every file, with a progress bar.
 - Results are saved next to each recording, and seizure candidates join each file's review queue.
 - Ensemble is not available for Detect All.
@@ -1012,7 +1102,7 @@ Use **Analysis → Batch** (or Live monitoring). For a cluster, use the headless
 
 ## 16. Parameters and Settings
 
-**Parameters menu** (both Detection subtabs):
+**Parameters menu** (both detection pages):
 
 | Item | What it does |
 |---|---|
@@ -1028,7 +1118,9 @@ Other settings are remembered automatically within a session:
 - Analysis choices;
 - filters;
 - inspector context and overview span;
-- the Viewer settings.
+- the Viewer settings, including Auto / Custom height.
+
+The settings panel's width and visibility, and the window size, are remembered between sessions.
 
 Results filters are remembered per project between sessions.
 
@@ -1066,19 +1158,20 @@ Converts LabChart files to EDF. Requires `pip install adi-reader`.
 | File | Contents | Written by |
 |---|---|---|
 | `<name>_ned_annotations.json` | **Seizure review state, and the only source of training data.** Every candidate with its label, edits, notes and origin | Training; a Detection run (as pending); Analysis with the review-queue output |
-| `<name>_ned_detections.json` | The last seizure detection run on the Detection tab: events, parameters and filter settings, so the tab can restore itself | Detection → Seizure |
-| `<name>_ned_spikes.json` | The last interictal-spike run | Detection → Interictal Spikes |
-| `<name>_ned_spike_annotations.json` | Spike review state | Training → Interictal Spikes |
+| `<name>_ned_detections.json` | The last seizure detection run on the Seizures page: events, parameters and filter settings, so the page can restore itself | Seizures |
+| `<name>_ned_spikes.json` | The last interictal-spike run | Interictal Spikes |
+| `<name>_ned_spike_annotations.json` | Spike review state | Spike Annotation |
+| `<name>_ned_background_annotations.json` | Background stretches (seizure-free examples) and their review state | Seizures (Propose background, as pending); Background |
 | `<name>_ned_channels.json` | Animal ID per channel | Load |
 | `<name>_ned_meta.json` | Cohort and group per channel | Load |
 
 **Annotations and detections are deliberately separate.**
 - Training reads only `_ned_annotations.json`, and Training edits never change
   `_ned_detections.json`.
-- After you edit a boundary in Training, the Detection tab still shows the detector's original
+- After you edit a boundary in Training, the Seizures page still shows the detector's original
   boundaries. The annotation keeps both.
-- Analysis never writes `_ned_detections.json`, so its events appear in Training but not in the
-  Detection tab.
+- Analysis never writes `_ned_detections.json`, so its events appear in Training but not on the
+  Seizures page.
 
 All files are plain JSON and can be read by your own scripts.
 
@@ -1143,19 +1236,29 @@ All files are plain JSON and can be read by your own scripts.
 
 ## 19. Keyboard Shortcuts
 
-Shortcuts do nothing while you are typing in a box.
+Shortcuts do nothing while you are typing in a box. On macOS use `⌘`; on Windows and Linux
+use `Ctrl` instead.
 
-**Training (review mode), seizures and spikes**
+**Everywhere**
+
+| Key | Action |
+|---|---|
+| `⌘1` … `⌘9` | Load, Viewer, Seizures, Interictal Spikes, Seizure Annotation, Spike Annotation, Dataset & Model, Batch Analysis, Results |
+| `⌘O` | Open a recording |
+| `⌥⌘0` (`Ctrl+Alt+0`) | Show / hide the settings panel |
+
+**Annotation pages (Review mode): seizures, spikes and background**
 
 | Key | Action |
 |---|---|
 | `C` / `R` / `S` | Confirm / Reject / Skip |
+| `A` | Autoscale the Y range |
 | `V` | Toggle convulsive (seizures) |
 | `←` or `,` / `→` or `.` | Previous / next event |
-| `[` / `]` | Pan the view back / forward (seizures) |
-| `\` | Centre the view on the event (seizures) |
+| `[` / `]` | Pan the view back / forward (seizures, background) |
+| `\` | Centre the view on the event (seizures, background) |
 
-**Detection tab (seizure and spike results)**
+**Detection pages (seizure and spike results)**
 
 | Key | Action |
 |---|---|

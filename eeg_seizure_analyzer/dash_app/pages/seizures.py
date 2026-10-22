@@ -11,7 +11,12 @@ import dash_ag_grid as dag
 
 from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app import inspector_view as iv
+from eeg_seizure_analyzer.dash_app.background_style import (
+    BACKGROUND_LABEL, BACKGROUND_METHOD, BG_COLORS, BG_ROW_STYLE, bg_colors,
+)
+from eeg_seizure_analyzer.detection.background import DEFAULTS as _BG_DEFAULTS
 from eeg_seizure_analyzer.dash_app.components import (
+    loading,
     apply_fig_theme,
     get_plotly_theme,
     metric_card,
@@ -25,6 +30,10 @@ from eeg_seizure_analyzer.dash_app.components import (
     filter_panel,
     filter_range,
     hidden_by_filters,
+    fit_header_widths,
+    grid_height,
+    page_header,
+    split_page,
 )
 from eeg_seizure_analyzer.config import (
     SpikeTrainSeizureParams,
@@ -273,7 +282,7 @@ detected overlapping activity.
 | **Merge strategy** | *Union*: merged event spans the widest boundaries. *Intersection*: spans only the overlap region. |
 | **Confidence merge** | How confidence scores are combined (mean or max). |
 
-Individual method parameters are inherited from the other method tabs. \
+Individual method parameters are inherited from each method's own settings. \
 Switch to each method to tune its parameters, then select Ensemble to combine.
 
 Best for maximum specificity - reduces false positives by requiring agreement.
@@ -291,7 +300,7 @@ non-convulsive. It only labels events; it never removes them.
 
 | Parameter | Description |
 |-----------|-------------|
-| **U-Net model** | A trained seizure model (Dataset / Model tab). |
+| **U-Net model** | A trained seizure model (Dataset & Model). |
 | **Convulsive classifier** | Optional Stage-2 model. When set, it decides convulsive vs non-convulsive; otherwise the U-Net's own convulsive channel does. |
 | **Threshold** | An event's core must exceed this probability. Lower = more sensitive. Defaults to the model's training optimum. |
 | **Boundary threshold (hysteresis)** | Each event grows outward until the probability falls below this lower value, so onsets and offsets are not clipped. Equal to the threshold (or higher) disables growing. |
@@ -300,7 +309,7 @@ non-convulsive. It only labels events; it never removes them.
 | **Merge gap** | Merge events closer than this (seconds). |
 
 No rule-based parameters: to improve detection, annotate more data and \
-re-train in the Dataset / Model tab.
+re-train in Dataset & Model.
 
 ---
 
@@ -425,9 +434,10 @@ def layout(sid: str | None) -> html.Div:
 
     # Rebuild results from existing detections if present
     has_results = bool(state.seizure_events)
+    bg_events = _bg_events(state, rec)  # background stretches (not seizures)
     existing_results = html.Div()
     selected_event_key = state.extra.get("sz_selected_event_key")
-    if has_results:
+    if has_results or bg_events:
         # Apply persisted filters to get the same filtered list
         if filter_enabled:
             filtered = _apply_filters(rec, state.seizure_events, persisted_classify,
@@ -442,7 +452,9 @@ def layout(sid: str | None) -> html.Div:
             selected_event_key=selected_event_key,
             all_channels=persisted_channels,
             n_total=len(state.seizure_events),
+            background=bg_events,
         )
+    has_rows = has_results or bool(bg_events)
 
     # Persisted detection method
     persisted_method = state.extra.get("sz_method", "spike_train")
@@ -469,242 +481,230 @@ def layout(sid: str | None) -> html.Div:
             return persisted[key]
         return _ENS_DEFAULTS[key]
 
-    return html.Div(
-        style={"padding": "24px"},
-        children=[
-            html.Div(
-                style={"display": "flex", "alignItems": "center", "gap": "16px",
-                       "marginBottom": "20px"},
-                children=[
-                    html.H4("Seizure Detection", style={"margin": "0"}),
-                    html.Span(
-                        id="sz-method-badge",
-                        children={o["value"]: o["label"] for o in _METHOD_OPTIONS}.get(
-                            persisted_method, "Spike-Train"),
-                        style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
-                               "border": "1px solid #2d333b", "borderRadius": "12px",
-                               "padding": "2px 10px"},
-                    ),
-                ],
-            ),
+    # Results area hint until there are detections (replaced by the
+    # detection callback's output)
+    if not has_rows:
+        existing_results = html.Div(
+            "No detections yet. Choose a method and its parameters in the "
+            "panel on the right, then press Detect Seizures.",
+            className="page-empty-hint",
+        )
 
-            # ── Detection method selector ───────────────────────────
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "8px",
-                               "marginBottom": "6px"},
-                        children=[
-                            html.Label(
-                                "Detection method",
-                                style={"fontSize": "0.82rem", "fontWeight": "500",
-                                       "color": "var(--ned-text-muted)", "margin": "0"},
-                            ),
-                            dbc.Button(
-                                "?", id="sz-method-help-btn", size="sm",
-                                color="secondary", outline=True,
-                                style={"padding": "0px 7px", "fontSize": "0.75rem",
-                                       "lineHeight": "1.4", "borderRadius": "50%"},
-                            ),
-                        ],
-                    ),
-                    dbc.RadioItems(
-                        id="sz-method-selector",
-                        options=_METHOD_OPTIONS,
-                        value=persisted_method,
-                        inline=True,
-                        className="mb-2",
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ],
-            ),
-
-            # ── Help modal ─────────────────────────────────────────────
-            dbc.Modal(
-                [
-                    dbc.ModalHeader(dbc.ModalTitle("Detection Methods Reference")),
-                    dbc.ModalBody(dcc.Markdown(
-                        _METHOD_HELP_TEXT,
-                        style={"fontSize": "0.85rem", "lineHeight": "1.6"},
-                    )),
-                    dbc.ModalFooter(
-                        dbc.Button("Close", id="sz-method-help-close",
-                                   className="ms-auto btn-ned-secondary"),
-                    ),
-                ],
-                id="sz-method-help-modal",
-                size="xl",
-                scrollable=True,
-                is_open=False,
-            ),
-
-            # Channel selector
-            html.Div(
-                style={"marginBottom": "16px"},
-                children=[
-                    html.Label(
-                        "Channels to analyze",
-                        style={"fontSize": "0.82rem", "fontWeight": "500",
-                               "marginBottom": "6px", "display": "block",
-                               "color": "var(--ned-text-muted)"},
-                    ),
-                    dcc.Dropdown(
-                        id="sz-channel-selector",
-                        options=ch_options,
-                        value=persisted_channels,
-                        multi=True,
-                        placeholder="Select channels...",
-                        style={"fontSize": "0.82rem"},
-                    ),
-                ],
-            ),
-
-            # ── Spike-Train params (shown/hidden) ──────────────────
-            # Flow: Baseline → Spike Frontend → Boundary → Grouping
-            html.Div(
-                id="sz-params-spike-train",
-                style={"display": "block" if persisted_method == "spike_train" else "none"},
-                children=[
-                    dbc.Row([
-                        dbc.Col([_baseline_params(_val, persisted_bl_method)], width=3),
-                        dbc.Col([_spike_frontend_params(_val)], width=3),
-                        dbc.Col([_boundary_params(_val, persisted_bnd_method)], width=3),
-                        dbc.Col([_train_grouping_params(_val)], width=3),
-                    ], className="g-3 mb-3"),
-                ],
-            ),
-
-            # ── Spectral Band params (shown/hidden) ────────────────
-            html.Div(
-                id="sz-params-spectral-band",
-                style={"display": "block" if persisted_method == "spectral_band" else "none"},
-                children=[_spectral_band_params(
-                    _sb_val,
-                    sb_bnd_method=overrides.get(
-                        "sz-sb-bnd-method",
-                        state.extra.get("sz_sb_bnd_method", "none")),
-                )],
-            ),
-
-            # ── Autocorrelation params (shown/hidden) ──────────────
-            html.Div(
-                id="sz-params-autocorrelation",
-                style={"display": "block" if persisted_method == "autocorrelation" else "none"},
-                children=[_autocorrelation_params(
-                    _ac_val,
-                    ac_bl_method=overrides.get(
-                        "sz-ac-bl-method",
-                        state.extra.get("sz_ac_bl_method", "percentile")),
-                    ac_bnd_method=overrides.get(
-                        "sz-ac-bnd-method",
-                        state.extra.get("sz_ac_bnd_method", "signal")),
-                )],
-            ),
-
-            # ── Ensemble params (shown/hidden) ─────────────────────
-            html.Div(
-                id="sz-params-ensemble",
-                style={"display": "block" if persisted_method == "ensemble" else "none"},
-                children=[_ensemble_params(_ens_val, state.extra.get("sz_ens_methods",
-                          ["spike_train", "spectral_band"]))],
-            ),
-
-            # ── U-Net params (shown/hidden) ───────────────────────
-            html.Div(
-                id="sz-params-unet",
-                style={"display": "block" if persisted_method == "unet" else "none"},
-                children=[_unet_params(state)],
-            ),
-
-            # ── BENDR params (shown/hidden) ───────────────────────
-            html.Div(
-                id="sz-params-bendr",
-                style={"display": "block" if persisted_method == "bendr" else "none"},
-                children=[_bendr_params(state)],
-            ),
-
-            # Hidden: subtype params (kept for callback compatibility —
-            # the detect callback still reads these param-slider States)
-            html.Div(
-                children=[
-                    dbc.Checkbox(id="sz-classify-subtypes", value=False),
-                    _subtype_params(_val, classify_on=False),
-                ],
-                style={"display": "none"},
-            ),
-
-            # ── Event re-ranker (post-processing, detector-agnostic) ──
-            # A trained tabular model re-scores every candidate's confidence
-            # from raw-signal features. Applies on top of ANY detector.
-            _reranker_control(state),
-
-            # Action buttons
-            html.Div(
-                style={"display": "flex", "gap": "12px", "marginBottom": "20px",
-                       "flexWrap": "wrap"},
-                children=[
-                    dbc.Button("Detect Seizures", id="sz-detect-btn",
-                               className="btn-ned-primary"),
-                    # The main action when several files are open (shown only then)
-                    dbc.Button(
-                        "\U0001F4C1 Detect All Files",
-                        id="sz-detect-all-btn",
-                        className="btn-ned-primary",
-                        style={"display": "inline-block"
-                               if state.extra.get("project_files")
-                               else "none"},
-                    ),
-                    dbc.Button("Clear Results", id="sz-clear-btn",
-                               className="btn-ned-danger",
-                               style={"display": "inline-block" if has_results else "none"}),
-                    dbc.Button("Add to project database", id="sz-add-to-db-btn",
-                               className="btn-ned-secondary",
-                               style={"display": "inline-block" if has_results else "none"}),
-                    html.Div(style={"flex": "1"}),
-                    params_menu("sz", has_results),
-                ],
-            ),
-
-            # Detect All progress area
-            html.Div(id="sz-detect-all-status", style={"marginBottom": "8px"}),
-            # Hidden interval + store for polling Detect All progress
-            dcc.Interval(id="sz-detect-all-poll", interval=800, disabled=True),
-            dcc.Store(id="sz-detect-all-running", data=False),
-
-            html.Div(id="sz-settings-status", style={"marginBottom": "8px"}),
-            html.Div(id="sz-add-to-db-status", style={"marginBottom": "8px"}),
-
-            dcc.Loading(html.Div(id="sz-status"), type="circle", color="#58a6ff"),
-
-            # Confidence filtering controls
-            _confidence_filter_controls(has_results, rec, fv,
-                                        filter_enabled=filter_enabled,
-                                        seizure_events=state.seizure_events),
-
-            # Results area — pre-populated if results exist
-            html.Div(id="sz-results", children=existing_results),
-
-            # Inspector controls
-            _inspector_controls(has_results, insp_yr, insp_opts,
-                                context=iv.context_sec(state, "sz_insp"),
-                                ovspan=iv.ovspan_sec(state, "sz_insp")),
-
-            # Event inspector — pre-render if event was selected before tab switch
-            html.Div(
-                id="sz-event-inspector",
-                style={"marginTop": "4px"},
-                children=_prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid=sid)
-                if has_results and selected_event_key else [],
-            ),
-
-            # Export section
-            _export_controls(has_results, state.seizure_events, rec),
-
-            # Download component
-            dcc.Download(id="sz-export-download"),
-        ],
+    method_badge = html.Span(
+        id="sz-method-badge",
+        children={o["value"]: o["label"] for o in _METHOD_OPTIONS}.get(
+            persisted_method, "Spike-Train"),
+        className="page-badge",
     )
+
+    actions = [
+        dbc.Button("Detect Seizures", id="sz-detect-btn",
+                   className="btn-ned-primary"),
+        # The main action when several files are open (shown only then)
+        dbc.Button(
+            "Detect All Files",
+            id="sz-detect-all-btn",
+            className="btn-ned-primary",
+            style={"display": "inline-block"
+                   if state.extra.get("project_files")
+                   else "none"},
+        ),
+        dbc.Button("Clear Results", id="sz-clear-btn",
+                   className="btn-ned-danger",
+                   style={"display": "inline-block" if has_rows else "none"}),
+        dbc.Button("Add to project database", id="sz-add-to-db-btn",
+                   className="btn-ned-secondary",
+                   style={"display": "inline-block" if has_results else "none"}),
+        params_menu("sz", has_results),
+    ]
+
+    # ── Work area (left): actions, results, event inspector, export ──
+    main = [
+        page_header("Seizure Detection", badge=method_badge, actions=actions),
+
+        # Detect All progress area
+        html.Div(id="sz-detect-all-status", style={"marginBottom": "8px"}),
+        # Hidden interval + store for polling Detect All progress
+        dcc.Interval(id="sz-detect-all-poll", interval=800, disabled=True),
+        dcc.Store(id="sz-detect-all-running", data=False),
+
+        html.Div(id="sz-settings-status", style={"marginBottom": "8px"}),
+        html.Div(id="sz-add-to-db-status", style={"marginBottom": "8px"}),
+
+        loading(html.Div(id="sz-status"), type="circle", color="#58a6ff"),
+
+        # Confidence filtering controls
+        _confidence_filter_controls(has_results, rec, fv,
+                                    filter_enabled=filter_enabled,
+                                    seizure_events=state.seizure_events),
+
+        # Results area — pre-populated if results exist
+        html.Div(id="sz-results", children=existing_results),
+
+        # Inspector controls
+        _inspector_controls(has_rows, insp_yr, insp_opts,
+                            context=iv.context_sec(state, "sz_insp"),
+                            ovspan=iv.ovspan_sec(state, "sz_insp")),
+
+        # Event inspector — pre-render if event was selected before tab switch
+        html.Div(
+            id="sz-event-inspector",
+            style={"marginTop": "4px"},
+            children=_prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid=sid)
+            if has_rows and selected_event_key else [],
+        ),
+
+        # Export section
+        _export_controls(has_results, state.seizure_events, rec),
+
+        # Download component
+        dcc.Download(id="sz-export-download"),
+
+        # ── Help modal ─────────────────────────────────────────────
+        dbc.Modal(
+            [
+                dbc.ModalHeader(dbc.ModalTitle("Detection Methods Reference")),
+                dbc.ModalBody(dcc.Markdown(
+                    _METHOD_HELP_TEXT,
+                    style={"fontSize": "0.85rem", "lineHeight": "1.6"},
+                )),
+                dbc.ModalFooter(
+                    dbc.Button("Close", id="sz-method-help-close",
+                               className="ms-auto btn-ned-secondary"),
+                ),
+            ],
+            id="sz-method-help-modal",
+            size="xl",
+            scrollable=True,
+            is_open=False,
+        ),
+    ]
+
+    # ── Settings panel (right): method, channels, parameters ─────────
+    panel = [
+        # Detection method
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Div(
+                    className="panel-label-row",
+                    children=[
+                        html.Label("Detection method", className="panel-label"),
+                        dbc.Button(
+                            "?", id="sz-method-help-btn", size="sm",
+                            color="secondary", outline=True,
+                            className="help-btn",
+                            title="About the detection methods",
+                        ),
+                    ],
+                ),
+                dbc.RadioItems(
+                    id="sz-method-selector",
+                    options=_METHOD_OPTIONS,
+                    value=persisted_method,
+                    inline=False,
+                    className="panel-radio",
+                ),
+            ],
+        ),
+
+        # Channel selector
+        html.Div(
+            className="panel-field",
+            children=[
+                html.Label("Channels to analyze", className="panel-label"),
+                dcc.Dropdown(
+                    id="sz-channel-selector",
+                    options=ch_options,
+                    value=persisted_channels,
+                    multi=True,
+                    placeholder="Select channels...",
+                ),
+            ],
+        ),
+
+        # ── Spike-Train params (shown/hidden) ──────────────────
+        # Flow: Baseline → Spike Frontend → Boundary → Grouping
+        html.Div(
+            id="sz-params-spike-train",
+            style={"display": "block" if persisted_method == "spike_train" else "none"},
+            children=[
+                _baseline_params(_val, persisted_bl_method),
+                _spike_frontend_params(_val),
+                _boundary_params(_val, persisted_bnd_method),
+                _train_grouping_params(_val),
+            ],
+        ),
+
+        # ── Spectral Band params (shown/hidden) ────────────────
+        html.Div(
+            id="sz-params-spectral-band",
+            style={"display": "block" if persisted_method == "spectral_band" else "none"},
+            children=[_spectral_band_params(
+                _sb_val,
+                sb_bnd_method=overrides.get(
+                    "sz-sb-bnd-method",
+                    state.extra.get("sz_sb_bnd_method", "none")),
+            )],
+        ),
+
+        # ── Autocorrelation params (shown/hidden) ──────────────
+        html.Div(
+            id="sz-params-autocorrelation",
+            style={"display": "block" if persisted_method == "autocorrelation" else "none"},
+            children=[_autocorrelation_params(
+                _ac_val,
+                ac_bl_method=overrides.get(
+                    "sz-ac-bl-method",
+                    state.extra.get("sz_ac_bl_method", "percentile")),
+                ac_bnd_method=overrides.get(
+                    "sz-ac-bnd-method",
+                    state.extra.get("sz_ac_bnd_method", "signal")),
+            )],
+        ),
+
+        # ── Ensemble params (shown/hidden) ─────────────────────
+        html.Div(
+            id="sz-params-ensemble",
+            style={"display": "block" if persisted_method == "ensemble" else "none"},
+            children=[_ensemble_params(_ens_val, state.extra.get("sz_ens_methods",
+                      ["spike_train", "spectral_band"]))],
+        ),
+
+        # ── U-Net params (shown/hidden) ───────────────────────
+        html.Div(
+            id="sz-params-unet",
+            style={"display": "block" if persisted_method == "unet" else "none"},
+            children=[_unet_params(state)],
+        ),
+
+        # ── BENDR params (shown/hidden) ───────────────────────
+        html.Div(
+            id="sz-params-bendr",
+            style={"display": "block" if persisted_method == "bendr" else "none"},
+            children=[_bendr_params(state)],
+        ),
+
+        # Hidden: subtype params (kept for callback compatibility —
+        # the detect callback still reads these param-slider States)
+        html.Div(
+            children=[
+                dbc.Checkbox(id="sz-classify-subtypes", value=False),
+                _subtype_params(_val, classify_on=False),
+            ],
+            style={"display": "none"},
+        ),
+
+        # ── Event re-ranker (post-processing, detector-agnostic) ──
+        # A trained tabular model re-scores every candidate's confidence
+        # from raw-signal features. Applies on top of ANY detector.
+        _reranker_control(state),
+
+        # ── Propose background (all methods, incl. Detect All Files) ──
+        _background_controls(state),
+    ]
+
+    return split_page(main, panel, panel_title="Detection settings")
 
 
 # ── Confidence filtering controls ──────────────────────────────────
@@ -1494,8 +1494,8 @@ def _ensemble_params(_val, selected_methods=None) -> html.Div:
             ], width=6),
             dbc.Col([
                 html.Div(
-                    "Individual method parameters are inherited from the other "
-                    "tabs above. Switch to each method to tune its parameters, "
+                    "Individual method parameters are inherited from each "
+                    "method's own settings. Switch to each method to tune its parameters, "
                     "then select Ensemble to combine results.",
                     style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
                            "padding": "12px", "border": "1px solid var(--ned-border)",
@@ -1588,13 +1588,13 @@ def _bendr_params(state) -> html.Div:
             dbc.Col([
                 html.Div([
                     html.Div(
-                        "\U0001f9e0 BENDR is a learned model — no rule-based parameters to tune.",
+                        "BENDR is a learned model — no rule-based parameters to tune.",
                         style={"fontSize": "0.82rem", "fontWeight": "500",
                                "marginBottom": "8px"},
                     ),
                     html.Div(
-                        "To improve detection accuracy, annotate more seizures in the "
-                        "Training tab and re-train the model. BENDR uses a self-supervised "
+                        "To improve detection accuracy, annotate more seizures in "
+                        "Seizure Annotation and re-train the model. BENDR uses a self-supervised "
                         "pre-trained encoder fine-tuned on your annotations.",
                         style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
                     ),
@@ -1684,6 +1684,210 @@ def _reranker_control(state) -> html.Div:
             dcc.Dropdown(id="sz-reranker-model", options=[], value=None),
         ],
     )
+
+
+# ── Propose background (seizure-free stretches for training) ────────
+# Training needs "no seizure" examples, but unreviewed time hides seizures, so
+# the user confirms quiet stretches in Training > Background. Proposals come
+# from a per-channel rule (detection/background.py) and are written to the
+# recording's _ned_background_annotations.json. They are kept OUT of
+# state.seizure_events (state.extra[_BG_STATE_KEY] instead), so filters,
+# Add to DB, export and the re-ranker never see them; the results grid shows
+# them as extra rows marked _source="background".
+
+_BG_STATE_KEY = "sz_bg_proposals"     # {"edf": path, "rows": [AnnotatedEvent dicts]}
+_BG_SETTINGS_KEY = "sz_bg_settings"   # checkbox + params, restored by layout()
+_BG_KEY_PREFIX = "bg_"                # _event_key prefix of background rows
+
+
+def _bg_settings(state) -> dict:
+    s = {"enabled": False, "k": _BG_DEFAULTS["k"],
+         "stretch_sec": _BG_DEFAULTS["stretch_sec"],
+         "n_per_hour": _BG_DEFAULTS["n_per_hour"]}
+    s.update(state.extra.get(_BG_SETTINGS_KEY) or {})
+    return s
+
+
+def _background_controls(state) -> html.Div:
+    """Checkbox + rule parameters, shown for every detection method."""
+    s = _bg_settings(state)
+    lbl = {"fontSize": "0.78rem", "color": "var(--ned-text-muted)",
+           "margin": "0 4px 0 0", "whiteSpace": "nowrap"}
+    inp = {"width": "80px", "fontSize": "0.8rem"}
+    pend = BG_COLORS["pending"]
+    return html.Div(
+        style={"marginBottom": "16px", "padding": "8px 12px",
+               "border": f"1px solid {pend['line']}", "borderRadius": "6px",
+               "background": pend["fill"]},
+        children=[
+            dcc.Store(id="sz-bg-settings-store"),
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "14px",
+                       "flexWrap": "wrap"},
+                children=[
+                    dbc.Checkbox(id="sz-bg-enabled", value=bool(s["enabled"]),
+                                 label="Propose background",
+                                 label_style={"fontSize": "0.82rem",
+                                              "fontWeight": "500",
+                                              "color": pend["text"]}),
+                    html.Div([
+                        html.Label("× channel median", style=lbl),
+                        dbc.Input(id="sz-bg-k", type="number", min=1.0, max=10.0,
+                                  step=0.1, value=s["k"], size="sm", style=inp),
+                    ], style={"display": "flex", "alignItems": "center"},
+                        title="An epoch is quiet if its RMS and line length are "
+                              "both at most this many times the channel's median."),
+                    html.Div([
+                        html.Label("stretch length (s)", style=lbl),
+                        dbc.Input(id="sz-bg-stretch", type="number", min=5,
+                                  max=600, step=1, value=s["stretch_sec"],
+                                  size="sm", style=inp),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                    html.Div([
+                        html.Label("per channel per hour", style=lbl),
+                        dbc.Input(id="sz-bg-per-hour", type="number", min=0,
+                                  max=120, step=1, value=s["n_per_hour"],
+                                  size="sm", style=inp),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                ],
+            ),
+            html.Div(
+                "Also proposes stretches the rule thinks are seizure-free (quiet, "
+                "and at least 10 s from any detection or annotation), to confirm "
+                "in Training › Background. They are not seizures: they are listed "
+                "in blue and never added to the database.",
+                style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)",
+                       "marginTop": "4px"},
+            ),
+        ],
+    )
+
+
+@callback(
+    Output("sz-bg-settings-store", "data"),
+    Input("sz-bg-enabled", "value"),
+    Input("sz-bg-k", "value"),
+    Input("sz-bg-stretch", "value"),
+    Input("sz-bg-per-hour", "value"),
+    State("session-id", "data"),
+    prevent_initial_call=True,
+)
+def save_bg_settings(enabled, k, stretch, per_hour, sid):
+    """Remember the background settings across tab switches."""
+    state = server_state.get_session(sid)
+    s = _bg_settings(state)
+    s["enabled"] = bool(enabled)
+    for key, v in (("k", k), ("stretch_sec", stretch), ("n_per_hour", per_hour)):
+        if v is not None and v != "":
+            s[key] = float(v)
+    state.extra[_BG_SETTINGS_KEY] = s
+    return s
+
+
+def _bg_params(enabled, k, stretch, per_hour) -> dict | None:
+    """Rule parameters for propose_background, or None when the box is off."""
+    if not enabled:
+        return None
+
+    def f(v, default):
+        try:
+            return float(v) if v is not None and v != "" else float(default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    return {"k": f(k, _BG_DEFAULTS["k"]),
+            "stretch_sec": f(stretch, _BG_DEFAULTS["stretch_sec"]),
+            "n_per_hour": f(per_hour, _BG_DEFAULTS["n_per_hour"])}
+
+
+def _propose_background_for_rec(rec, edf_path: str, channels, seizure_events,
+                                ch_ids: dict, params: dict) -> dict:
+    """Propose background on each channel of an in-memory recording and merge the
+    proposals into the EDF's background file.
+
+    Avoids this run's (and any other in-memory) seizure detections on the channel
+    and every seizure annotation of any label (pending ones may be seizures).
+    Returns write_background_proposals' counts.
+    """
+    from eeg_seizure_analyzer.detection.background import propose_background
+    from eeg_seizure_analyzer.io.annotation_store import (
+        load_annotations, write_background_proposals,
+    )
+    avoid: dict[int, list[tuple[float, float]]] = {}
+    for e in seizure_events or []:
+        avoid.setdefault(int(e.channel), []).append((e.onset_sec, e.offset_sec))
+    for a in load_annotations(edf_path) or []:
+        avoid.setdefault(int(a.channel), []).append((a.onset_sec, a.offset_sec))
+    from eeg_seizure_analyzer.detection.base import DetectedEvent
+    from eeg_seizure_analyzer.io.annotation_store import load_background_annotations
+    run_chs = [ch for ch in channels if 0 <= ch < rec.n_channels]
+    events = []
+    for ch in run_chs:
+        events += propose_background(
+            rec.data[ch], rec.fs, ch, avoid=avoid.get(ch, []),
+            animal_id=(ch_ids or {}).get(ch, ""), **params)
+    # write_background_proposals replaces every pending proposal in the file;
+    # carry over the pending ones on channels this run did not touch, so
+    # detecting on a subset of channels doesn't drop the others.
+    for a in load_background_annotations(edf_path) or []:
+        if (a.label == "pending" and a.source != "manual"
+                and a.channel not in run_chs):
+            events.append(DetectedEvent(
+                onset_sec=a.onset_sec, offset_sec=a.offset_sec,
+                duration_sec=a.offset_sec - a.onset_sec, channel=a.channel,
+                event_type="background", confidence=a.detector_confidence,
+                animal_id=a.animal_id, features=dict(a.features or {})))
+    n_proposed = sum(e.channel in run_chs for e in events)
+    settings = {**_BG_DEFAULTS, **params, "method": BACKGROUND_METHOD}
+    r = write_background_proposals(edf_path, events, channel_ids=ch_ids,
+                                   proposal_settings=settings)
+    r["n_new"] = min(r["n_new"], n_proposed)  # this run's, not carried-over ones
+    return r
+
+
+def _load_bg_into_state(state, edf_path: str) -> int:
+    """Show the recording's background file (proposed and reviewed) in the grid."""
+    from eeg_seizure_analyzer.io.annotation_store import load_background_annotations
+    anns = load_background_annotations(edf_path) or []
+    state.extra[_BG_STATE_KEY] = {"edf": edf_path,
+                                  "rows": [a.to_dict() for a in anns]}
+    return len(anns)
+
+
+def _bg_events(state, rec) -> list:
+    """Background stretches to display for the loaded recording, as
+    DetectedEvent (event_type "background"); [] if none or another file's."""
+    from eeg_seizure_analyzer.detection.base import DetectedEvent
+    held = state.extra.get(_BG_STATE_KEY) or {}
+    src = getattr(rec, "source_path", "") if rec is not None else ""
+    if not held or not src or held.get("edf") != src:
+        return []
+    out = []
+    for d in held.get("rows", []):
+        feat = dict(d.get("features") or {})
+        feat["detection_method"] = BACKGROUND_METHOD
+        feat["bg_label"] = d.get("label", "pending")
+        out.append(DetectedEvent(
+            onset_sec=float(d["onset_sec"]), offset_sec=float(d["offset_sec"]),
+            duration_sec=float(d["offset_sec"]) - float(d["onset_sec"]),
+            channel=int(d["channel"]), event_type="background", confidence=0.0,
+            features=feat, animal_id=d.get("animal_id", ""),
+            event_id=int(d.get("event_id", 0)), source=d.get("source", "detector"),
+        ))
+    return out
+
+
+def _is_bg(event) -> bool:
+    return getattr(event, "event_type", "") == "background"
+
+
+def _find_event(state, rec, key):
+    """The seizure or background event with this _event_key, or None."""
+    if not key:
+        return None
+    pool = _bg_events(state, rec) if str(key).startswith(_BG_KEY_PREFIX) \
+        else (state.seizure_events or [])
+    return next((e for e in pool if _event_key(e) == key), None)
 
 
 def _read_model_metadata(model_name: str) -> dict:
@@ -1868,13 +2072,13 @@ def _unet_params(state) -> html.Div:
             dbc.Col([
                 html.Div([
                     html.Div(
-                        "\U0001f9e0 U-Net is a learned model — no rule-based parameters to tune.",
+                        "U-Net is a learned model — no rule-based parameters to tune.",
                         style={"fontSize": "0.82rem", "fontWeight": "500",
                                "marginBottom": "8px"},
                     ),
                     html.Div(
-                        "To improve detection accuracy, annotate more seizures in the "
-                        "Training tab and re-train the model. U-Net is trained from "
+                        "To improve detection accuracy, annotate more seizures in "
+                        "Seizure Annotation and re-train the model. U-Net is trained from "
                         "scratch on your annotations (no pre-training).",
                         style={"fontSize": "0.78rem", "color": "var(--ned-text-muted)"},
                     ),
@@ -2293,6 +2497,11 @@ def auto_save_sz_extras(*args):
     # ── Event re-ranker (post-processing) ──
     State("sz-reranker-enabled", "value"),
     State("sz-reranker-model", "value"),
+    # ── Propose background (all methods) ──
+    State("sz-bg-enabled", "value"),
+    State("sz-bg-k", "value"),
+    State("sz-bg-stretch", "value"),
+    State("sz-bg-per-hour", "value"),
     # Session
     State("session-id", "data"),
     prevent_initial_call=True,
@@ -2345,6 +2554,8 @@ def run_detection(
     unet_conv_threshold, unet_min_dur, unet_merge_gap, unet_conv_min_dur,
     # Event re-ranker
     reranker_enabled, reranker_model,
+    # Propose background
+    bg_enabled, bg_k, bg_stretch, bg_per_hour,
     sid,
 ):
     """Run seizure detection (multi-method), clear results, or apply filters."""
@@ -2380,6 +2591,9 @@ def run_detection(
     if trigger == "sz-clear-btn":
         server_state.clear_detections(sid, "seizures")
         state.extra.pop("sz_selected_event_key", None)
+        # Background rows leave the display too; the background file (with any
+        # reviewed stretches) is kept, as the seizure sidecar is.
+        state.extra.pop(_BG_STATE_KEY, None)
         return (
             alert("Results cleared.", "info"),
             html.Div(), hide_style, hide_style, hide_style, [],
@@ -2401,7 +2615,8 @@ def run_detection(
                                  excluded_ids=state.extra.get("sz_excluded_event_ids", set()),
                                  selected_event_key=selected_ek,
                                  all_channels=selected_channels,
-                                 n_total=n_total)
+                                 n_total=n_total,
+                                 background=_bg_events(state, rec))
         n_shown = len(filtered)
         status = alert(f"Showing {n_shown} of {n_total} seizure(s) after filtering.", "info")
         method_opts = _method_filter_options(state.seizure_events)
@@ -2424,7 +2639,7 @@ def run_detection(
         return (
             alert(
                 f"Animal IDs not assigned for channel(s): {missing_ids}. "
-                "Go to the Load tab and fill in the Animal ID column before detecting.",
+                "Go to the Load page and fill in the Animal ID column before detecting.",
                 "warning",
             ),
             no_update, no_update, no_update, no_update, no_update,
@@ -2590,8 +2805,8 @@ def run_detection(
 
             if not _ml_model:
                 return (
-                    alert(f"No {_ml_label} model selected. Train one in the "
-                          "Training tab first.", "warning"),
+                    alert(f"No {_ml_label} model selected. Train one in "
+                          "Dataset & Model first.", "warning"),
                     no_update, no_update, no_update, no_update, no_update,
                 )
             from eeg_seizure_analyzer.ml.predict import predict_seizures
@@ -3004,6 +3219,27 @@ def run_detection(
         except Exception:
             pass  # save failure must not break detection
 
+        # ── Propose background (optional, any method) ─────────────
+        # After the seizure events are final, so it avoids every detection
+        # (all methods in memory) and every seizure annotation on the channel.
+        bg_msg = ""
+        bg_params = _bg_params(bg_enabled, bg_k, bg_stretch, bg_per_hour)
+        if bg_params is not None:
+            if _src and _src.lower().endswith(".edf"):
+                try:
+                    r = _propose_background_for_rec(
+                        rec, _src, selected_channels, state.seizure_events,
+                        state.extra.get("channel_animal_ids", {}), bg_params)
+                    _load_bg_into_state(state, _src)
+                    bg_msg = (f" Proposed {r['n_new']} background stretch(es) "
+                              f"(blue rows; review in Training › Background).")
+                except Exception as _bg_exc:
+                    import traceback
+                    traceback.print_exc()
+                    bg_msg = f" Background proposal failed: {_bg_exc}."
+            else:
+                bg_msg = " Background proposal needs an EDF recording."
+
         # Apply any active filters to the FULL accumulated list
         all_events = state.seizure_events
         if filt_enabled:
@@ -3016,7 +3252,8 @@ def run_detection(
         results = _build_results(rec, filtered, classify_subtypes,
                                  excluded_ids=state.extra.get("sz_excluded_event_ids", set()),
                                  all_channels=selected_channels,
-                                 n_total=len(all_events))
+                                 n_total=len(all_events),
+                                 background=_bg_events(state, rec))
         n_ch = len(selected_channels)
         n_new = len(seizures)
         n_total = len(all_events)
@@ -3025,7 +3262,8 @@ def run_detection(
         return (
             alert(f"[{({o['value']: o['label'] for o in _METHOD_OPTIONS}).get(method, method)}] "
                   f"Found {n_new} seizure(s) across {n_ch} channel(s). "
-                  f"Total: {n_total}.", "success"),
+                  f"Total: {n_total}.{bg_msg}",
+                  "warning" if "failed" in bg_msg else "success"),
             results, show_style, block_style, insp_block, method_opts,
         )
 
@@ -3059,6 +3297,8 @@ def on_sz_exclude_toggle(changed, sid):
     for ch in changes:
         if not isinstance(ch, dict) or ch.get("colId") != "Exclude":
             continue
+        if (ch.get("data") or {}).get("_source") == "background":
+            continue  # background stretches are not seizures
         eid = (ch.get("data") or {}).get("_event_id")
         if eid is None:
             continue
@@ -3113,6 +3353,9 @@ def add_to_project_db(n_clicks, sid):
             **{k: fv.get(k, v) for k, v in _FILTER_DEFAULTS.items()})
     else:
         events = list(state.seizure_events)
+    # Background stretches live outside seizure_events; guard anyway, they are
+    # never seizures.
+    events = [ev for ev in events if not _is_bg(ev)]
     if not events:
         return alert("No events pass the current filters.", "warning")
 
@@ -3208,7 +3451,7 @@ def add_to_project_db(n_clicks, sid):
     note = f" ({n_no_id} without an Animal ID)" if n_no_id else ""
     return alert(
         f"Added {total} event(s) to project '{proj}'{note}. "
-        f"View them in the Results tab.", "success")
+        f"View them on the Results page.", "success")
 
 
 def _apply_filters(rec, seizures, classify_on, *,
@@ -3339,19 +3582,20 @@ def _apply_filters(rec, seizures, classify_on, *,
 
 
 def _event_key(event):
-    """Stable unique key for an event: (onset_sec rounded, channel)."""
-    return f"{event.onset_sec:.4f}_{event.channel}"
+    """Stable unique key for an event: (onset_sec rounded, channel).
+
+    Background stretches get a "bg_" prefix so they never collide with (or are
+    looked up as) a seizure event.
+    """
+    prefix = _BG_KEY_PREFIX if _is_bg(event) else ""
+    return f"{prefix}{event.onset_sec:.4f}_{event.channel}"
 
 
 def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid=None):
     """Pre-render the inspector for a previously selected event (tab restoration)."""
-    if not selected_event_key or not state.seizure_events:
+    if not selected_event_key:
         return []
-    event = None
-    for e in state.seizure_events:
-        if _event_key(e) == selected_event_key:
-            event = e
-            break
+    event = _find_event(state, rec, selected_event_key)
     if event is None:
         return []
     try:
@@ -3370,10 +3614,17 @@ def _prerender_inspector(state, rec, selected_event_key, insp_opts, insp_yr, sid
 
 
 def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
-                    all_channels=None, n_total=None, excluded_ids=None):
-    """Build the results display (summary line + table)."""
+                    all_channels=None, n_total=None, excluded_ids=None,
+                    background=None):
+    """Build the results display (summary line + table).
+
+    ``background`` holds background stretches (event_type "background"). They are
+    appended as extra rows (Method "Background", _source "background", blue tint)
+    and are never counted, filtered or excluded as seizures.
+    """
     excluded_ids = excluded_ids or set()
-    if not seizures:
+    background = list(background or [])
+    if not seizures and not background:
         if n_total:
             return hidden_by_filters(n_total, "detected seizures", "sz-filter-show-all")
         return empty_state("\u2714", "No Seizures Found",
@@ -3381,6 +3632,22 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
 
     n_shown = len(seizures)
     n_all = n_total if n_total is not None else n_shown
+    bg_summary = []
+    if background:
+        by_lbl: dict[str, int] = {}
+        for b in background:
+            lb = (b.features or {}).get("bg_label", "pending")
+            by_lbl[lb] = by_lbl.get(lb, 0) + 1
+        parts = ", ".join(f"{n} {lb}" for lb, n in sorted(by_lbl.items()))
+        bg_summary = [
+            html.Span("\u2022", style={"color": "var(--ned-text-muted)"}),
+            html.Span(
+                f"{BACKGROUND_LABEL} stretches: {len(background)} ({parts}) "
+                "\u2014 not seizures; review in Training \u203a Background",
+                style={"fontSize": "0.82rem", "fontWeight": "500",
+                       "color": BG_COLORS["pending"]["text"]},
+            ),
+        ]
     summary = html.Div(
         style={"display": "flex", "alignItems": "center", "gap": "16px",
                "marginBottom": "12px", "padding": "8px 16px",
@@ -3398,6 +3665,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
                 style={"fontSize": "0.82rem", "fontWeight": "500",
                        "color": "var(--ned-accent)" if n_shown < n_all else "var(--ned-text)"},
             ),
+            *bg_summary,
         ],
     )
 
@@ -3451,8 +3719,39 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         if selected_event_key and ek == selected_event_key:
             selected_rows = [row]
 
+    # Background stretches: extra rows, blank where a seizure column doesn't apply
+    for b in sorted(background, key=lambda e: (e.channel, e.onset_sec)):
+        ek = _event_key(b)
+        row = {
+            "#": None, "ID": None, "Exclude": None,
+            "_event_id": None,
+            "_event_key": ek,
+            "_source": "background",
+            "_bg_label": (b.features or {}).get("bg_label", "pending"),
+            "Method": BACKGROUND_LABEL,
+            "Channel": (rec.channel_names[b.channel]
+                        if 0 <= b.channel < len(rec.channel_names) else str(b.channel)),
+            "Onset (s)": round(b.onset_sec, 2),
+            "Offset (s)": round(b.offset_sec, 2),
+            "Duration (s)": round(b.duration_sec, 2),
+        }
+        table_data.append(row)
+        if selected_event_key and ek == selected_event_key:
+            selected_rows = [row]
+
+    method_cell_style = {
+        "styleConditions": [
+            {"condition": f"params.data._source === 'background' && "
+                          f"params.data._bg_label === '{lb}'",
+             "style": {"color": c["text"], "fontWeight": "600"}}
+            for lb, c in BG_COLORS.items()
+        ],
+    }
+
     col_defs = [
-        {"field": "Exclude", "maxWidth": 85, "minWidth": 70, "editable": True,
+        {"field": "Exclude", "maxWidth": 85, "minWidth": 70,
+         # Background rows are not seizures: nothing to exclude
+         "editable": {"function": "params.data._source !== 'background'"},
          "cellDataType": "boolean",
          "headerTooltip": "Exclude from 'Add to project database'"},
         {"field": "#", "maxWidth": 55, "minWidth": 40},
@@ -3460,8 +3759,11 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         {"field": "_event_id", "hide": True},
         {"field": "_event_key", "hide": True},
         {"field": "_source", "hide": True},
+        {"field": "_bg_label", "hide": True},
         {"field": "Method", "flex": 1, "minWidth": 75,
-         "headerTooltip": "Detection method used"},
+         "headerTooltip": "Detection method used (Background = proposed "
+                          "seizure-free stretch, not a seizure)",
+         "cellStyle": method_cell_style},
         {"field": "Channel", "flex": 1, "minWidth": 75},
         {"field": "Onset (s)", "flex": 1, "minWidth": 70},
         {"field": "Offset (s)", "flex": 1, "minWidth": 70},
@@ -3482,10 +3784,12 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         {"field": "Peak Freq", "hide": True},
         {"field": "\u03b8/\u03b4", "hide": True},
     ]
+    fit_header_widths(col_defs)
     grid_props = {
         "animateRows": False,
         "rowSelection": iv.grid_row_selection(),
-        "headerHeight": 32,
+        "headerHeight": 28,
+        "rowHeight": 26,
         "enableCellTextSelection": True,
     }
 
@@ -3495,6 +3799,10 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
             {
                 "condition": "params.data.Exclude === true",
                 "style": {"opacity": 0.4, "textDecoration": "line-through"},
+            },
+            {
+                "condition": "params.data._source === 'background'",
+                "style": dict(BG_ROW_STYLE),
             },
             {
                 "condition": "params.data._source === 'manual'",
@@ -3510,7 +3818,7 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
         selectedRows=selected_rows if selected_rows else [],
         defaultColDef={"sortable": True, "resizable": True, "filter": True},
         className="ag-theme-alpine-dark",
-        style={"height": "300px", "width": "100%"},
+        style={"height": grid_height(len(table_data)), "width": "100%"},
         dashGridOptions=grid_props,
         getRowStyle=manual_row_style,
         getRowId="params.data._event_key",  # Prev/Next select rows by id
@@ -3522,7 +3830,12 @@ def _build_results(rec, seizures, classify_on, *, selected_event_key=None,
             style={"display": "flex", "alignItems": "center", "justifyContent": "space-between",
                    "marginBottom": "12px"},
             children=[
-                html.H6("Detected Seizures", style={"margin": "0"}),
+                html.H6(["Detected Seizures",
+                         html.Span(f" + {BACKGROUND_LABEL.lower()} stretches (blue rows)",
+                                   style={"color": BG_COLORS["pending"]["text"],
+                                          "fontWeight": "400"})
+                         if background else None],
+                        style={"margin": "0"}),
                 html.Span("Click a row to inspect; step with Prev / Next or the , . \u2190 \u2192 keys",
                           style={"fontSize": "0.75rem", "color": "var(--ned-text-muted)"}),
             ],
@@ -3752,12 +4065,15 @@ def _progress_path(sid: str) -> _Path:
 def _write_progress(sid: str, current: int, total: int,
                     current_file: str, events_so_far: int,
                     done: bool = False, error_msg: str = "",
-                    skipped_msg: str = ""):
-    """Write progress info to a JSON file for polling."""
+                    skipped_msg: str = "", background: int | None = None):
+    """Write progress info to a JSON file for polling.
+
+    ``background`` is the number of background stretches proposed so far
+    (None when "Propose background" is off)."""
     _json.dump(
         {"current": current, "total": total, "file": current_file,
          "events": events_so_far, "done": done, "error": error_msg,
-         "skipped": skipped_msg},
+         "skipped": skipped_msg, "background": background},
         open(_progress_path(sid), "w"),
     )
 
@@ -3879,12 +4195,14 @@ def _build_per_channel_detector(method: str, sz_params: dict):
 
 
 def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
-                       sel_channels=None):
+                       sel_channels=None, bg_params: dict | None = None):
     """Run detection on all project files in a background thread.
 
     ``sel_channels`` is the user's channel selection (indices) from the
     Seizure tab; applied per file (filtered to its valid range). ``None`` or
-    empty means all channels.
+    empty means all channels. ``bg_params`` (from "Propose background"; None =
+    off) proposes background stretches per file after its detections are
+    written, avoiding that file's detections and seizure annotations.
     """
     from eeg_seizure_analyzer.detection.spike_train_seizure import (
         SpikeTrainSeizureDetector,
@@ -3938,6 +4256,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
             return
 
     total_events = 0
+    total_bg = 0 if bg_params is not None else None
     errors = []
     skipped_no_ids = []
     n_total = len(project_files)
@@ -3945,7 +4264,7 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     for i, pf in enumerate(project_files):
         edf_path = pf["edf_path"]
         fname = pf["filename"]
-        _write_progress(sid, i, n_total, fname, total_events)
+        _write_progress(sid, i, n_total, fname, total_events, background=total_bg)
         try:
             channel_info = scan_edf_channels(edf_path)
             eeg_indices, act_indices, pairings = auto_pair_channels(channel_info)
@@ -4076,6 +4395,19 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
             except Exception:
                 pass
 
+            # Propose background on this file (after its annotations are
+            # written, so they are avoided along with this run's detections).
+            if bg_params is not None and edf_path.lower().endswith(".edf"):
+                try:
+                    r = _propose_background_for_rec(
+                        rec, edf_path, selected_channels, seizures, ch_ids,
+                        bg_params)
+                    total_bg += r["n_new"]
+                except Exception as e:
+                    errors.append(f"{fname} (background): {e}")
+                    import traceback
+                    traceback.print_exc()
+
             total_events += len(seizures)
             pf["has_detections"] = True
 
@@ -4096,7 +4428,8 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
         skipped_msg = (f"{len(skipped_no_ids)} file(s) skipped — no Animal IDs "
                        f"assigned: {shown}{more}")
     _write_progress(sid, n_total, n_total, "", total_events,
-                    done=True, error_msg=err_msg, skipped_msg=skipped_msg)
+                    done=True, error_msg=err_msg, skipped_msg=skipped_msg,
+                    background=total_bg)
 
     # Reload the active file into session state
     try:
@@ -4110,6 +4443,8 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
         state.sp_detection_info = {}
         from eeg_seizure_analyzer.dash_app.pages.upload import _load_edf_into_state
         _load_edf_into_state(state, project_files[original_idx]["edf_path"])
+        if bg_params is not None:
+            _load_bg_into_state(state, project_files[original_idx]["edf_path"])
     except Exception:
         import traceback
         traceback.print_exc()
@@ -4137,13 +4472,19 @@ def _detect_all_worker(sid: str, project_files: list, sz_params: dict,
     State({"type": "param-slider", "key": "sz-unet-min-dur"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-merge-gap"}, "value"),
     State({"type": "param-slider", "key": "sz-unet-conv-min-dur"}, "value"),
+    # Propose background (same checkbox + params as single-file Detect)
+    State("sz-bg-enabled", "value"),
+    State("sz-bg-k", "value"),
+    State("sz-bg-stretch", "value"),
+    State("sz-bg-per-hour", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
 def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
                      bendr_convthr, bendr_mindur, bendr_merge, unet_model,
                      unet_convmodel, unet_thr, unet_bnd, unet_convthr,
-                     unet_mindur, unet_merge, unet_convmin, sid):
+                     unet_mindur, unet_merge, unet_convmin,
+                     bg_enabled, bg_k, bg_stretch, bg_per_hour, sid):
     """Launch the background detection thread and start polling."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -4212,9 +4553,10 @@ def start_detect_all(n_clicks, bendr_model, bendr_convmodel, bendr_thr,
     _write_progress(sid, 0, len(project_files), project_files[0]["filename"], 0)
 
     # Launch background thread
+    bg_params = _bg_params(bg_enabled, bg_k, bg_stretch, bg_per_hour)
     t = threading.Thread(
         target=_detect_all_worker,
-        args=(sid, project_files, sz_params, sel_channels),
+        args=(sid, project_files, sz_params, sel_channels, bg_params),
         daemon=True,
     )
     t.start()
@@ -4281,6 +4623,9 @@ def poll_detect_all(n_intervals, sid, is_running, refresh):
 
         skipped = data.get("skipped", "")
         msg = f"Detected {events} seizure(s) across {total} files."
+        if data.get("background") is not None:
+            msg += (f" Proposed {data['background']} background stretch(es) "
+                    "(review in Training \u203a Background).")
         if skipped:
             msg += f" {skipped}."
         if error_msg:
@@ -4351,15 +4696,14 @@ def on_row_select(selected_rows, show_spikes, show_baseline, show_threshold,
     if rec is None:
         return html.Div()
 
-    # Find event by stable key (onset_sec + channel), not by table row index
-    event = None
-    for e in state.seizure_events:
-        if _event_key(e) == ek:
-            event = e
-            break
+    # Find event by stable key (onset_sec + channel), not by table row index.
+    # Background rows (key "bg_…") resolve to their background stretch.
+    event = _find_event(state, rec, ek)
+    if event is None and row.get("_source") == "background":
+        return html.Div()
     if event is None:
         # Fallback: try by "#" index (legacy)
-        event_idx = row.get("#", 1) - 1
+        event_idx = (row.get("#") or 1) - 1
         if 0 <= event_idx < len(state.seizure_events):
             event = state.seizure_events[event_idx]
         else:
@@ -4416,7 +4760,7 @@ def on_overview_click(click, show_spikes, show_baseline, show_threshold,
     state = server_state.get_session(sid)
     rec = state.recording
     ek = state.extra.get("sz_selected_event_key")
-    event = next((e for e in state.seizure_events if _event_key(e) == ek), None)
+    event = _find_event(state, rec, ek)
     if rec is None or event is None:
         return no_update
     iv.jump_view(state, "sz_insp", ek, float(click["points"][0]["x"]),
@@ -4481,6 +4825,19 @@ def _render_inspector(rec, event, det_info, state, *,
     det_method = features.get("detection_method", "spike_train")
     has_spikes = det_method in ("spike_train", "autocorrelation", "ensemble")
 
+    # Event colours: seizures red; background stretches their own blue/grey
+    # family by review label (never red, so they can't pass for a seizure).
+    is_bg = _is_bg(event)
+    bg_label = features.get("bg_label", "pending")
+    if is_bg:
+        _bgc = bg_colors(bg_label)
+        ev_fill, ev_line, ev_fill_act = _bgc["fill"], _bgc["line"], _bgc["fill"]
+    else:
+        ev_fill, ev_line = "rgba(248, 81, 73, 0.15)", "#f85149"
+        ev_fill_act = "rgba(248, 81, 73, 0.1)"
+    # Background stretches on this channel (for shading in the trace/overview)
+    ch_bg = [b for b in _bg_events(state, rec) if b.channel == ch] if state else []
+
     # Y range
     if y_range is None or y_range <= 0:
         y_range = state.extra.get("viewer_settings", {}).get("yrange", 1.0)
@@ -4504,15 +4861,26 @@ def _render_inspector(rec, event, det_info, state, *,
         line=dict(width=0.8, color=_eeg_color),
     ), row=1, col=1)
 
+    # Other background stretches in view (lighter, no outline)
+    for b in ch_bg:
+        if is_bg and _event_key(b) == _event_key(event):
+            continue
+        if b.offset_sec >= win_start and b.onset_sec <= win_end:
+            fig_eeg.add_vrect(
+                x0=b.onset_sec, x1=b.offset_sec,
+                fillcolor=bg_colors((b.features or {}).get("bg_label", "pending"))["fill"],
+                line=dict(width=0), layer="below", row=1, col=1,
+            )
+
     # Event shadow
     fig_eeg.add_vrect(
         x0=onset, x1=offset,
-        fillcolor="rgba(248, 81, 73, 0.15)",
-        line=dict(color="#f85149", width=1),
+        fillcolor=ev_fill,
+        line=dict(color=ev_line, width=1),
         layer="below", row=1, col=1,
     )
     for t in [onset, offset]:
-        fig_eeg.add_vline(x=t, line=dict(color="#f85149", width=1, dash="dash"),
+        fig_eeg.add_vline(x=t, line=dict(color=ev_line, width=1, dash="dash"),
                           row=1, col=1)
 
     # Spike dots (spike-train, autocorrelation, ensemble — not spectral_band)
@@ -4582,7 +4950,7 @@ def _render_inspector(rec, event, det_info, state, *,
             line=dict(width=1, color="#3fb950"),
         ), row=2, col=1)
         fig_eeg.add_vrect(x0=onset, x1=offset,
-                          fillcolor="rgba(248, 81, 73, 0.1)",
+                          fillcolor=ev_fill_act,
                           line=dict(width=0), layer="below", row=2, col=1)
         act_unit = act_rec.units[0] if act_rec.units else ""
         fig_eeg.update_yaxes(
@@ -4637,8 +5005,8 @@ def _render_inspector(rec, event, det_info, state, *,
         colorbar=dict(title="dB", len=0.8),
         hovertemplate="Time: %{x:.2f}s<br>Freq: %{y:.1f}Hz<br>Power: %{z:.1f}dB<extra></extra>",
     ))
-    fig_spec.add_vline(x=onset, line=dict(color="#f85149", width=1.5, dash="dash"))
-    fig_spec.add_vline(x=offset, line=dict(color="#f85149", width=1.5, dash="dash"))
+    fig_spec.add_vline(x=onset, line=dict(color=ev_line, width=1.5, dash="dash"))
+    fig_spec.add_vline(x=offset, line=dict(color=ev_line, width=1.5, dash="dash"))
     fig_spec.update_layout(
         height=250, xaxis_title="Time (s)", yaxis_title="Frequency (Hz)",
         showlegend=False, uirevision=f"spec_{view_rev}",
@@ -4684,8 +5052,8 @@ def _render_inspector(rec, event, det_info, state, *,
             stackgroup="bands",
         ))
 
-    fig_bp.add_vline(x=onset, line=dict(color="#f85149", width=1.5, dash="dash"))
-    fig_bp.add_vline(x=offset, line=dict(color="#f85149", width=1.5, dash="dash"))
+    fig_bp.add_vline(x=onset, line=dict(color=ev_line, width=1.5, dash="dash"))
+    fig_bp.add_vline(x=offset, line=dict(color=ev_line, width=1.5, dash="dash"))
 
     power_unit = f"{unit_label}\u00b2/Hz" if unit_label else "Power"
     fig_bp.update_layout(
@@ -4866,15 +5234,28 @@ def _render_inspector(rec, event, det_info, state, *,
             short = [m.replace("_", " ").title()[:8] for m in contrib]
             extra_cards.append(dbc.Col(metric_card("Sources", ", ".join(short)), width=2))
 
-    detail_metrics = dbc.Row([
-        dbc.Col(method_card, width=2),
-        dbc.Col(metric_card("Channel", ch_name), width=2),
-        dbc.Col(metric_card("Onset", f"{onset:.2f}s"), width=2),
-        dbc.Col(metric_card("Duration", f"{event.duration_sec:.2f}s"), width=2),
-        dbc.Col(metric_card("Spikes", str(features.get("n_spikes", "\u2014"))), width=2),
-        dbc.Col(metric_card("Confidence", f"{event.confidence:.2f}"), width=2),
-        *extra_cards,
-    ], className="g-3 mb-3")
+    if is_bg:
+        _rr, _lr = features.get("rms_ratio_max"), features.get("ll_ratio_max")
+        detail_metrics = dbc.Row([
+            dbc.Col(metric_card("Method", BACKGROUND_LABEL), width=2),
+            dbc.Col(metric_card("Channel", ch_name), width=2),
+            dbc.Col(metric_card("Onset", f"{onset:.2f}s"), width=2),
+            dbc.Col(metric_card("Duration", f"{event.duration_sec:.2f}s"), width=2),
+            dbc.Col(metric_card("Review", bg_label), width=2),
+            dbc.Col(metric_card(
+                "Max RMS / LL", "\u2014" if _rr is None or _lr is None
+                else f"{_rr:.2f}\u00d7 / {_lr:.2f}\u00d7"), width=2),
+        ], className="g-3 mb-3")
+    else:
+        detail_metrics = dbc.Row([
+            dbc.Col(method_card, width=2),
+            dbc.Col(metric_card("Channel", ch_name), width=2),
+            dbc.Col(metric_card("Onset", f"{onset:.2f}s"), width=2),
+            dbc.Col(metric_card("Duration", f"{event.duration_sec:.2f}s"), width=2),
+            dbc.Col(metric_card("Spikes", str(features.get("n_spikes", "\u2014"))), width=2),
+            dbc.Col(metric_card("Confidence", f"{event.confidence:.2f}"), width=2),
+            *extra_cards,
+        ], className="g-3 mb-3")
 
     # ── Video player (if available) ────────────────────────────────
     video_section = []
@@ -4918,8 +5299,10 @@ def _render_inspector(rec, event, det_info, state, *,
 
     return html.Div([
         html.Hr(style={"borderColor": "var(--ned-border)", "margin": "24px 0"}),
-        html.H5("Event Inspector",
-                 style={"marginBottom": "16px", "color": "var(--ned-accent)"}),
+        html.H5("Background stretch (proposed seizure-free, not a seizure)"
+                if is_bg else "Event Inspector",
+                 style={"marginBottom": "16px",
+                        "color": ev_line if is_bg else "var(--ned-accent)"}),
         detail_metrics,
         html.Div("Overview (1–50 Hz amplitude; click to view there)",
                  style={"fontSize": "0.82rem", "fontWeight": "600",
@@ -4927,8 +5310,12 @@ def _render_inspector(rec, event, det_info, state, *,
         iv.overview_graph("sz-insp-overview", iv.overview_figure(
             state, "sz_insp", rec, ch, (win_start, win_end),
             [(e.onset_sec, e.offset_sec, "#f85149") for e in state.seizure_events
-             if e.channel == ch],
-            (onset, offset))),
+             if e.channel == ch]
+            + [(b.onset_sec, b.offset_sec,
+                bg_colors((b.features or {}).get("bg_label", "pending"))["line"])
+               for b in ch_bg],
+            (onset, offset),
+            current_color=ev_line)),
         html.Div("EEG Trace", style={"fontSize": "0.82rem", "fontWeight": "600",
                                       "color": "var(--ned-text-muted)", "marginBottom": "4px"}),
         dcc.Graph(id=graph_id, figure=fig_eeg,

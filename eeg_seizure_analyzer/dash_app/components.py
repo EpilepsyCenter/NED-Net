@@ -177,10 +177,17 @@ def filter_panel(switch_id: str, enabled: bool, ranges: list, *, title="Result f
     ``hidden`` holds components that must stay in the layout for callbacks but
     are not shown.
     """
+    # Title and switch as one centred group (the header row itself aligns to
+    # the bottom so extra dropdowns with labels line up)
     header = [
-        html.Span(title, style={"fontSize": "0.82rem", "fontWeight": "600",
-                                "color": "var(--ned-text-muted)"}),
-        dbc.Switch(id=switch_id, value=enabled, style={"fontSize": "0.78rem"}),
+        html.Div(
+            className="filter-title",
+            children=[
+                html.Span(title, style={"fontSize": "0.82rem", "fontWeight": "600",
+                                        "color": "var(--ned-text-muted)"}),
+                dbc.Switch(id=switch_id, value=enabled, className="filter-switch"),
+            ],
+        ),
     ]
     if summary_id:
         header.append(html.Span(summary, id=summary_id,
@@ -320,6 +327,105 @@ def param_control(
     )
 
 
+def fit_y_range(data) -> float | None:
+    """Y range (full span) that fits a signal: twice the 99.5th percentile of
+    |signal - median| plus 15 % headroom, to 3 significant figures. Robust to
+    single outliers. None if the signal is empty or flat."""
+    import numpy as np
+    x = np.asarray(data, dtype=np.float64)
+    if x.size < 10:
+        return None
+    peak = float(np.percentile(np.abs(x - np.median(x)), 99.5))
+    if not np.isfinite(peak) or peak <= 0:
+        return None
+    return float(f"{2 * peak * 1.15:.3g}")
+
+
+def loading(children=None, type=None, color=None, **kwargs) -> dcc.Loading:
+    """dcc.Loading with the app's behaviour: shown only after 250 ms (quick
+    updates don't flash), content stays visible but dimmed underneath, and a
+    single accent ring (styled in assets/style.css). ``type`` and ``color``
+    are accepted for older call sites and ignored."""
+    kwargs.setdefault("delay_show", 250)
+    kwargs.setdefault("overlay_style", {"visibility": "visible", "opacity": 0.45,
+                                        "transition": "opacity 150ms ease"})
+    return dcc.Loading(children, type="circle", **kwargs)
+
+
+def fit_header_widths(col_defs: list[dict]) -> list[dict]:
+    """Give each visible grid column at least the width of its header text,
+    so headers are not cut off (the grid scrolls sideways when narrow)."""
+    for c in col_defs:
+        if c.get("hide"):
+            continue
+        title = str(c.get("headerName") or c.get("field") or "")
+        est = int(7 * len(title) + 34)   # 12 px semibold + padding + sort icon
+        c["minWidth"] = max(int(c.get("minWidth", 0)), est)
+        if "maxWidth" in c and c["maxWidth"] < c["minWidth"]:
+            c["maxWidth"] = c["minWidth"]
+    return col_defs
+
+
+def grid_height(n_rows: int, max_px: int = 300, min_rows: int = 3) -> str:
+    """Grid height that fits its rows (26 px each, 28 px header), capped."""
+    return f"{min(max_px, 28 + 26 * max(n_rows, min_rows) + 4)}px"
+
+
+def split_page(main_children: list, panel_children: list, *,
+               panel_title: str = "Settings", panel_id: str | None = None) -> html.Div:
+    """Two-pane page, like a desktop app with an inspector: the work area on
+    the left and a settings panel on the right. Each pane scrolls on its own
+    (styles: .page-split / .page-main / .page-panel in assets/style.css)."""
+    panel_kwargs = {"id": panel_id} if panel_id else {}
+    return html.Div(
+        className="page-split",
+        children=[
+            html.Div(main_children, className="page-main"),
+            # Drag to resize the panel (assets/app_shell.js)
+            html.Div(className="page-panel-resizer", title="Drag to resize"),
+            html.Aside(
+                [
+                    html.Div(panel_title, className="page-panel-title"),
+                    html.Div(panel_children, className="page-panel-body"),
+                ],
+                className="page-panel",
+                **panel_kwargs,
+            ),
+        ],
+    )
+
+
+def panel_row(label: str, control, unit: str | None = None) -> html.Div:
+    """One settings row: label on the left, a compact control on the right."""
+    right = [control] + ([html.Span(unit, className="panel-row-unit")] if unit else [])
+    return html.Div(
+        className="panel-row",
+        children=[
+            html.Label(label, className="panel-row-label"),
+            html.Div(right, className="panel-row-control"),
+        ],
+    )
+
+
+def icon(name: str, title: str | None = None) -> html.Span:
+    """A 16 px icon (CSS mask .icon-<name>) that takes the text colour."""
+    return html.Span(className=f"btn-icon icon-{name}", title=title)
+
+
+def page_header(title: str, badge=None, actions: list | None = None) -> html.Div:
+    """Page title (with an optional badge) and the page's action buttons."""
+    left = [html.H4(title, style={"margin": "0"})]
+    if badge is not None:
+        left.append(badge)
+    return html.Div(
+        className="page-header",
+        children=[
+            html.Div(left, className="page-header-title"),
+            html.Div(actions or [], className="page-header-actions"),
+        ],
+    )
+
+
 def collapsible_section(
     title: str,
     section_id: str,
@@ -364,13 +470,15 @@ def no_recording_placeholder() -> html.Div:
     return empty_state(
         icon="\u2191",
         title="No recording loaded",
-        text="Upload an EDF file in the Upload tab to get started.",
+        text="Open a recording on the Load page to get started.",
     )
 
 
 # ── Plotly figure defaults ────────────────────────────────────────────
 
-_FONT = "IBM Plex Sans, sans-serif"
+# The platform's own UI font (macOS, Windows, Linux), as in assets/style.css
+_FONT = ("-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, "
+         "Cantarell, Ubuntu, 'Noto Sans', sans-serif")
 
 _PLOTLY_DARK = {
     "paper_bgcolor": "#1c2128",

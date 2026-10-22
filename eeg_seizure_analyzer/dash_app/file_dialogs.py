@@ -190,7 +190,34 @@ def _tk(body: str) -> str:
         "root.destroy()",
         "print(out or '')",
     ])
+    if getattr(sys, "frozen", False):
+        return _tk_frozen(script)
     return _stdout([sys.executable, "-c", script])
+
+
+def _tk_frozen(script: str) -> str:
+    """The packaged app has no separate Python to run ``-c``: run the snippet in
+    a second instance of the app (packaging/nednet_entry.py handles
+    ``--nednet-run-script``). The result goes through a temporary file, since a
+    windowed app has no usable stdout on Windows."""
+    import tempfile
+    fd, out_path = tempfile.mkstemp(prefix="nednet_dialog_", suffix=".txt")
+    os.close(fd)
+    script = script.replace(
+        "print(out or '')",
+        f"open({out_path!r}, 'w', encoding='utf-8').write(out or '')")
+    try:
+        subprocess.run([sys.executable, "--nednet-run-script", script],
+                       timeout=_TIMEOUT)
+        with open(out_path, encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+    finally:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
 
 
 # ── public API ──────────────────────────────────────────────────────────

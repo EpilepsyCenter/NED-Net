@@ -195,7 +195,7 @@ def layout(sid: str | None) -> html.Div:
             _step_card(1, "Project & output", [
                 html.P(
                     "Analysis writes to the active project database; the Results "
-                    "tab reads from it. Use separate projects to keep experiments "
+                    "page reads from it. Use separate projects to keep experiments "
                     "apart, or add cohorts to an existing one.",
                     style=_HINT),
                 dbc.Row([
@@ -237,10 +237,10 @@ def layout(sid: str | None) -> html.Div:
                     style={"fontSize": "0.85rem"},
                 ),
                 html.Div(
-                    "Database: feeds the Results tab and statistics. Training review "
+                    "Database: feeds the Results page and statistics. Training review "
                     "queue: events are added to each EDF's _ned_annotations.json as "
                     "pending, marked as coming from Analysis; confirm or reject them "
-                    "in the Training tab and they become training data. Existing "
+                    "in Seizure Annotation and they become training data. Existing "
                     "labels are never changed. Seizures only: spikes always go to "
                     "the database.",
                     style={**_HINT, "margin": "2px 0 10px"},
@@ -433,7 +433,7 @@ def layout(sid: str | None) -> html.Div:
             ]),
 
             # ── Results summary (below modes) ──────────────────────
-            html.Hr(style={"borderColor": "#21262d", "marginTop": "24px"}),
+            html.Hr(style={"borderColor": "var(--ned-border)", "marginTop": "24px"}),
             html.Div(id="an-results-summary", children=_results_summary()),
 
             # ── Stores & intervals ─────────────────────────────────
@@ -999,7 +999,7 @@ def show_model_info(model_name):
                        "marginTop": "8px"},
             ),
         ]),
-        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid #21262d"},
+        style={"backgroundColor": "var(--ned-sidebar)", "border": "1px solid var(--ned-border)"},
     )
 
 

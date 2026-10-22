@@ -614,6 +614,12 @@ def process_chunk(
             "n_flagged": sum(1 for d in event_dicts if d["movement_flag"]),
             "processing_sec": round(processing_sec, 1),
             "sidecar": sidecar,
+            # Peak detector probability per event: an event survives a higher
+            # detection threshold t iff its peak >= t, so one low-threshold run
+            # gives the whole recall-vs-detections curve.
+            "event_peaks": [(ev.channel, ev.onset_sec, ev.offset_sec,
+                             (ev.features or {}).get("peak_probability"))
+                            for ev in events],
         }
 
     except Exception as e:
