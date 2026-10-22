@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use NED-Net, please cite it as below."
 type: software
 title: "NED-Net: Neural Event Detection Network for automated seizure detection in rodent EEG"
-version: 1.0.1
-date-released: 2026-10-14
+version: 2.0.0
+date-released: 2026-10-22
 license: GPL-3.0-only
 doi: 10.5281/zenodo.23372245
 repository-code: "https://github.com/EpilepsyCenter/NED-Net"

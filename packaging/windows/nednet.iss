@@ -7,7 +7,7 @@
 ; The release workflow passes the version (iscc /DAppVersion=x.y.z); otherwise
 ; keep this in step with eeg_seizure_analyzer/__init__.py
 #ifndef AppVersion
-  #define AppVersion "1.0.1"
+  #define AppVersion "2.0.0"
 #endif
 #define AppExe "NED-Net.exe"
 
