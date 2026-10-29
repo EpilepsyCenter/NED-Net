@@ -1,0 +1,283 @@
+---
+import Base from '../layouts/Base.astro';
+import Lightbox from '../components/Lightbox.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const link = (p: string) => `${base}${p}`;
+const repo = 'https://github.com/EpilepsyCenter/NED-Net';
+const releases = `${repo}/releases`;
+
+// Screenshots are the app's own, read out of its asset directory.
+const shotModules = import.meta.glob(
+  '../../../eeg_seizure_analyzer/dash_app/assets/screenshots/*.png',
+  { eager: true, query: '?url', import: 'default' }
+) as Record<string, string>;
+
+const shotUrl = (file: string): string | undefined =>
+  Object.entries(shotModules).find(([path]) => path.endsWith('/' + file))?.[1];
+
+const blocks = [
+  {
+    id: 'loading',
+    num: '01',
+    kicker: 'EDF/EDF+ · multi-rate channels · animal IDs · ADICHT',
+    title: 'Loading',
+    chips: ['One file', 'Folder'],
+    shot: 'animal_ids.png',
+    shotCaption: 'Channel table with animal ID, cohort and group',
+    lead: 'EDF and EDF+ with multi-rate channels, and automatic pairing of each EEG channel with its activity channel. Load a single recording or a whole folder; the start screen lists what you opened recently. LabChart ADICHT files go through the built-in converter on Windows.',
+    bullets: [
+      ['Animal, cohort, group', 'Set them per channel in the table, or apply a batch metadata template across a folder. They travel with every event into the project database, which is what makes per-animal and per-group statistics possible later.'],
+      ['Sidecars next to the recording', 'Channel IDs go to <name>_ned_channels.json and cohort/group to <name>_ned_meta.json, next to the file itself — plain JSON you can read, diff and version.'],
+    ],
+  },
+  {
+    id: 'viewer',
+    num: '02',
+    kicker: 'Multi-channel · filters · overlays · video · SVG',
+    title: 'EEG viewer',
+    chips: ['Band-pass', 'Notch', 'Video'],
+    shot: 'viewer.png',
+    shotCaption: 'Viewer with traces, overlays and the display panel',
+    lead: 'A scrollable multi-channel browser over recordings that run for days. Band-pass and notch filters, min/max downsampling so long windows stay honest about their peaks, the activity channel underneath, and event overlays for seizures, spikes and reviewed background.',
+    bullets: [
+      ['Synchronised video', 'Behavioural video plays alongside the trace, so a candidate seizure can be checked against what the animal was doing. WMV recordings convert to MP4 in Tools.'],
+      ['Vector export', 'Export the current view as SVG — the window you are looking at, as a figure, with the overlays and scale bar it has on screen.'],
+    ],
+  },
+  {
+    id: 'rule-based',
+    num: '03',
+    kicker: 'Spike-train · spectral band · autocorrelation · ensemble',
+    title: 'Rule-based detection',
+    chips: ['No training', 'No GPU'],
+    shot: 'method_selector.png',
+    shotCaption: 'Seizures page, with the detection settings panel',
+    lead: 'Four detectors that work from the first recording. Spike-Train groups baseline z-scored spikes into trains and refines the boundaries on RMS. Spectral Band uses power in 17–25 Hz against 1–50 Hz. Autocorrelation needs both rhythmicity and spike frequency over threshold. Ensemble votes across them, taking the union or the intersection of the boundaries.',
+    bullets: [
+      ['Quality metrics on every event', 'Local baseline ratio, amplitude, spike frequency and others are computed per event, and the result filters work on exactly those numbers.'],
+      ['Parameters you keep', 'Tuned thresholds save to defaults.json from the Parameters menu, so the settings that suit your preparation come back on the next recording.'],
+    ],
+  },
+  {
+    id: 'unet',
+    num: '04',
+    kicker: 'Per-sample probability · hysteresis · convulsive classifier',
+    title: 'Trained two-stage model',
+    chips: ['1-D U-Net', 'Operating point'],
+    shot: 'unet_params.png',
+    shotCaption: 'U-Net panel with its recommended operating point',
+    lead: 'Stage one is a 1-D U-Net over 60 s windows at 250 Hz with 15 s overlap, giving a seizure probability for every sample. Events form by hysteresis: a core above the detection threshold grows outward until the probability drops below the lower boundary threshold, then a minimum duration and a merge gap apply. Stage two is an optional convulsive classifier on a 60 s crop — it labels events and never removes them.',
+    bullets: [
+      ['Recommended operating points', 'Choosing a model fills in the point it was validated at — from its own operating_point entry if you set one, otherwise the threshold that maximised event F1 during training.'],
+      ['HVSW and HPD subtypes', 'Non-convulsive events can be sub-classified as high-voltage slow waves or fast periodic discharges, from dominant frequency and the slow-wave and high-frequency indices.'],
+    ],
+  },
+  {
+    id: 'inspector',
+    num: '05',
+    kicker: 'Filters · event table · context · overview strip',
+    title: 'Result filters and inspector',
+    chips: ['±10–120 s', 'Keyboard'],
+    shot: 'event_inspector.png',
+    shotCaption: 'Event inspector with overview strip, trace and spectrogram',
+    lead: 'Narrow a run down with filters on the quality metrics, then walk the events. The inspector pans through the recording, changes the context window from ±10 to ±120 s, and shows an amplitude overview strip — ±5 min, ±15 min or the whole recording — that you click to jump.',
+    bullets: [
+      ['Step through with the keyboard', 'Prev and Next, or the keyboard, move between events without leaving the trace. A shows autoscale.'],
+      ['Export what you filtered', 'The event table exports to CSV as it stands, filters included, or goes to the project database with Add to project database.'],
+    ],
+  },
+  {
+    id: 'annotation',
+    num: '06',
+    kicker: 'Confirm · reject · boundaries · convulsive · background',
+    title: 'Seizure annotation',
+    chips: ['Training data', 'Provenance'],
+    shot: 'training_review.png',
+    shotCaption: 'Seizure annotation in review mode, with the event list',
+    lead: 'The review page is where training data comes from. Confirm or reject each candidate, drag its boundaries, flag it convulsive, add events the detector missed or remove ones it invented. Every candidate shows where it came from, so a model\'s proposals and your own additions never blur together.',
+    bullets: [
+      ['Confirmed and rejected both matter', 'Confirmed events are the positives; rejected ones become hard negatives, which is what teaches the next model the difference. Pending candidates never reach a model until someone has looked at them.'],
+      ['Background too', 'Seizure-free stretches are proposed and reviewed the same way, giving the trainer clean negative material instead of random background.'],
+    ],
+  },
+  {
+    id: 'spikes',
+    num: '07',
+    kicker: 'Morphology features · spike-rate metrics · filters',
+    title: 'Interictal spikes',
+    chips: ['Rule-based', 'U-Net'],
+    shot: 'spike_detection.png',
+    shotCaption: 'Interictal spike detection',
+    lead: 'Interictal spike detection by rule or by model, with morphology features per spike and spike-rate metrics over the recording. The same filter, inspect and export pattern as the seizure page, and its own review page feeding its own training data.',
+    bullets: [
+      ['Its own review state', 'Spike review lives in <name>_ned_spike_annotations.json, separate from the seizure annotations, so the two can be worked on independently.'],
+      ['Rate as an outcome', 'Spike-rate metrics land in the project database alongside seizures, and Results has a dedicated interictal-spike panel.'],
+    ],
+  },
+  {
+    id: 'training',
+    num: '08',
+    kicker: 'Datasets · U-Net · convulsive classifier · live progress',
+    title: 'Dataset and model training',
+    chips: ['Dice + BCE', 'Early stopping'],
+    shot: 'ml_datasets.png',
+    shotCaption: 'Dataset & Model page',
+    lead: 'Build a dataset from the recordings you have reviewed, then train the U-Net or the convulsive classifier with progress shown as it goes. Dice plus BCE loss with a positive-class weight, AdamW, ReduceLROnPlateau and early stopping on patience.',
+    bullets: [
+      ['The checkpoint that is kept', 'Not the last epoch and not the best loss — the epoch with the best event F1 over swept thresholds, with that threshold saved as the model\'s training optimum.'],
+      ['Splits that do not cheat', 'Validation splits by animal by default, or by recording, or temporally on each animal\'s later recordings. Splitting by window would leak, and the default refuses to.'],
+    ],
+  },
+  {
+    id: 'batch',
+    num: '09',
+    kicker: 'Single file · folder · watched folder',
+    title: 'Batch analysis',
+    chips: ['Live monitoring', 'Project output'],
+    shot: 'analysis_tab.png',
+    shotCaption: 'Batch Analysis page',
+    lead: 'Run a trained model over one file, a folder, or a folder it watches as new recordings land. Choosing a model fills in its recommended thresholds. Output goes to a project database, to the training review queue, or to both at once when a new cohort needs checking as it is processed.',
+    bullets: [
+      ['Headless and on a cluster', 'The trainers and batch detectors run without the UI for HPC; example SLURM scripts are in scripts/slurm, and batch detection parallelises across cores.'],
+      ['Both outputs at once', 'Sending a run to the database and the review queue together is the normal way to start a cohort: you get the numbers now and the annotated sample for retraining later.'],
+    ],
+  },
+  {
+    id: 'results',
+    num: '10',
+    kicker: 'Group · per animal · longitudinal · circadian · burden',
+    title: 'Results',
+    chips: ['Per animal-hour', 'CSV / XLSX'],
+    shot: 'results_summary.png',
+    shotCaption: 'Results page',
+    lead: 'Per-project statistics over everything in the database: group comparison raw or per animal-hour, a per-animal summary with include and valid-until controls, longitudinal series, distributions, daily burden and circadian plots, and a separate interictal-spike panel.',
+    bullets: [
+      ['Rates that account for time', 'The database records analysed files, animals and recorded time per animal, so an event count can be expressed per animal-hour instead of per recording — which is the comparison you usually want.'],
+      ['Include and valid-until', 'Drop an animal, or cut its series at the day an implant failed, without deleting anything or re-running the detection.'],
+    ],
+  },
+  {
+    id: 'projects',
+    num: '11',
+    kicker: 'SQLite per experiment · JSON sidecars · your own machine',
+    title: 'Projects and files',
+    chips: ['SQLite', 'Plain JSON'],
+    shot: 'export_csv.png',
+    shotCaption: 'Export panel',
+    lead: 'One project per experiment, as a SQLite file under ~/.eeg_seizure_analyzer/projects/. Review state, detections, spikes and background stretches sit in plain JSON next to each recording. Trained models and their metadata.json live under models/. Nothing leaves the machine.',
+    bullets: [
+      ['Readable on purpose', 'Sidecars are JSON, projects are SQLite, exports are CSV and XLSX. Every artefact can be opened by something other than NED-Net, which is what makes an analysis auditable six months later.'],
+      ['Separation of concerns', 'A Seizures-page run and your review of it are different files: training edits never overwrite the detection record, and the page can always restore the run you last made.'],
+    ],
+  },
+];
+---
+<Base title="NED-Net — Features">
+<style>
+.feature-block { padding: 60px 0; border-bottom: 1px solid var(--rule); }
+.feature-block:last-of-type { border-bottom: none; }
+.feature-block .head { display: grid; grid-template-columns: 76px 1fr auto; gap: 24px; align-items: baseline; margin-bottom: 20px; }
+.feature-block .num { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.07em; }
+.feature-block h2 { font-weight: 600; font-size: 32px; letter-spacing: -0.03em; margin: 0; line-height: 1.1; }
+.feature-block .kicker { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.07em; text-transform: uppercase; }
+.feature-block .lead { margin: 4px 0 24px 100px; color: var(--ink-soft); font-size: 16px; line-height: 1.65; max-width: 64ch; }
+.feature-block .body { margin-left: 100px; display: grid; grid-template-columns: 1fr 1.1fr; gap: 20px; align-items: start; }
+.feature-block .points { display: flex; flex-direction: column; gap: 14px; }
+.feature-block .pt {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.feature-block .pt h3 { font-weight: 600; font-size: 15px; margin: 0 0 6px; letter-spacing: -0.01em; }
+.feature-block .pt p { margin: 0; color: var(--ink-soft); font-size: 14.5px; line-height: 1.6; }
+
+.feature-block figure { margin: 0; }
+.feature-block figure img {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.feature-block figcaption { margin: 11px 0 0; }
+
+@media (max-width: 900px) {
+  .feature-block .head { grid-template-columns: 1fr; }
+  .feature-block .lead, .feature-block .body { margin-left: 0; }
+  .feature-block .body { grid-template-columns: 1fr; }
+  .feature-block h2 { font-size: 27px; }
+}
+</style>
+
+<div class="scope-zone">
+<header class="page-hd"><div class="wrap">
+  <div>
+    <div class="eyebrow">Features · Reference</div>
+    <h1>Every page <span>of the app.</span></h1>
+    <p class="sub">A guided tour of the eleven areas, from loading an EDF to reporting a cohort. What each one does, how it is configured, and what it writes to disk.</p>
+  </div>
+  <div class="meta">
+    <span><strong>11</strong> areas</span>
+    <span><strong>5</strong> detection methods</span>
+    <span><strong>2.0.0</strong> current build</span>
+    <span class="led">GPL-3.0 · open source</span>
+  </div>
+</div></header>
+</div>
+
+<div class="toc"><div class="wrap">
+  <span class="k">Jump to</span>
+  {blocks.map(b => <a href={`#${b.id}`}>{b.num} {b.title}</a>)}
+</div></div>
+
+{blocks.map(b => (
+  <section class="feature-block" id={b.id}>
+    <div class="wrap">
+      <div class="head">
+        <div class="num">{b.num} / {String(blocks.length).padStart(2, '0')}</div>
+        <div>
+          <div class="kicker">{b.kicker}</div>
+          <h2>{b.title}</h2>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          {b.chips.map(c => <span class="chip">{c}</span>)}
+        </div>
+      </div>
+      <p class="lead">{b.lead}</p>
+      <div class="body">
+        <div class="points">
+          {b.bullets.map(([h, p]) => (
+            <div class="pt">
+              <h3>{h}</h3>
+              <p>{p}</p>
+            </div>
+          ))}
+        </div>
+        {shotUrl(b.shot) && (
+          <figure>
+            <a class="shot" href={shotUrl(b.shot)} data-caption={b.shotCaption}>
+              <img src={shotUrl(b.shot)} alt={b.shotCaption} loading="lazy" />
+            </a>
+            <figcaption class="eyebrow plain">{b.shotCaption}</figcaption>
+          </figure>
+        )}
+      </div>
+    </div>
+  </section>
+))}
+
+<section class="band">
+  <div class="wrap">
+    <div class="eyebrow">v2.0.0 · Released</div>
+    <h2>Read the manual. <span>Then run it.</span></h2>
+    <p>The full user manual is bundled with the app and served here — twenty chapters covering every page, the file formats, and the keyboard shortcuts.</p>
+    <div class="btns">
+      <a class="btn-lg primary" href={link('/docs')}>Open the manual</a>
+      <a class="btn-lg" href={releases}>Download v2.0.0</a>
+    </div>
+  </div>
+</section>
+
+<Lightbox />
+</Base>

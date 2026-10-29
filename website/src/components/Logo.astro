@@ -1,0 +1,20 @@
+---
+interface Props {
+  size?: number;
+  showVersion?: boolean;
+  href?: string;
+}
+const base = import.meta.env.BASE_URL;
+const { size = 26, showVersion = true, href = base } = Astro.props;
+const icon = `${base.replace(/\/$/, '')}/logo/nednet-icon.png`;
+---
+<a class="brand" href={href}>
+  <img src={icon} alt="" width={size} height={size} style={`height:${size}px;width:${size}px;display:block;`} />
+  <span class="wm">NED-Net</span>
+  {showVersion && <span class="version">v2.0.0</span>}
+</a>
+
+<style>
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .wm { white-space: nowrap; font-weight: 600; font-size: 16px; letter-spacing: -0.02em; color: var(--ink); }
+</style>

@@ -1,0 +1,64 @@
+name: Deploy website
+
+# Builds the Astro site under website/ and deploys it to GitHub Pages.
+# Final URL: https://epilepsycenter.github.io/NED-Net/
+#
+# Pages must be enabled for this repository with "GitHub Actions" as the
+# source (Settings → Pages) before the first run can deploy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'eeg_seizure_analyzer/dash_app/assets/USER_MANUAL.md'
+      - 'eeg_seizure_analyzer/dash_app/assets/screenshots/**'
+      - '.github/workflows/deploy-website.yml'
+  workflow_dispatch:
+
+# Pages requires these permissions on the deploying job.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one concurrent deploy; cancel in-progress runs of the same group.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

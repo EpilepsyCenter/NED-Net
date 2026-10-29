@@ -1,0 +1,24 @@
+---
+import Logo from './Logo.astro';
+const base = import.meta.env.BASE_URL;
+const { pathname } = Astro.url;
+// Strip the base prefix so route comparisons work regardless of deployment base.
+const trimmedBase = base.replace(/\/$/, '');
+const route = pathname.startsWith(trimmedBase) ? pathname.slice(trimmedBase.length) || '/' : pathname;
+const isActive = (path: string) => route === path || route === path + '/';
+const link = (p: string) => `${trimmedBase}${p}`;
+const repoHref = 'https://github.com/EpilepsyCenter/NED-Net';
+const releasesHref = `${repoHref}/releases`;
+---
+<nav class="site-nav"><div class="wrap nav">
+  <Logo />
+  <ul>
+    <li><a href={link('/features')} class={isActive('/features') ? 'active' : ''}>Features</a></li>
+    <li><a href={link('/workflow')} class={isActive('/workflow') ? 'active' : ''}>Workflow</a></li>
+    <li><a href={link('/docs')} class={isActive('/docs') ? 'active' : ''}>Docs</a></li>
+    <li><a href={repoHref} rel="noopener">GitHub</a></li>
+  </ul>
+  <div class="spacer"></div>
+  <a class="btn ghost" href={repoHref} rel="noopener">Source</a>
+  <a class="btn primary" href={releasesHref} rel="noopener">Download</a>
+</div></nav>

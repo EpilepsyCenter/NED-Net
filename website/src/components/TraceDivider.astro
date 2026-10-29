@@ -1,0 +1,28 @@
+---
+// A seizure riding on an EEG baseline: quiet interictal trace, a burst of
+// high-amplitude rhythmic activity, then quiet again — the signature NED-Net
+// is built to find, and the same motif as its card on the hub. Decorative,
+// so aria-hidden.
+---
+
+<svg class="trace" viewBox="0 0 1000 46" preserveAspectRatio="none" aria-hidden="true">
+  <path class="base" d="M0 30 H1000" />
+  <path
+    d="M0 30 L40 28 L74 33 L110 29 L142 32 L180 30
+       L206 10 L220 48 L234 11 L248 47 L262 9 L276 50 L290 12 L304 46 L318 8 L332 49 L346 13 L360 45
+       L374 10 L388 48 L402 14 L416 44 L430 11 L444 47 L458 16 L472 42 L486 13 L500 45 L514 18 L528 38
+       L548 26 L570 32 L600 29 L640 31 L680 28 L720 32 L770 29 L820 31 L880 29 L940 31 L1000 30"
+  />
+</svg>
+
+<style>
+  .trace { display: block; width: 100%; height: 46px; margin: 44px 0 0; }
+  .trace path {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.25;
+    opacity: 0.55;
+    vector-effect: non-scaling-stroke;
+  }
+  .trace .base { stroke: var(--rule); opacity: 1; }
+</style>
