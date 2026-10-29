@@ -1,0 +1,165 @@
+---
+import Base from '../layouts/Base.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const link = (p: string) => `${base}${p}`;
+const repo = 'https://github.com/EpilepsyCenter/NED-Net';
+const releases = `${repo}/releases`;
+
+const stages = [
+  {
+    id: 'load',
+    num: '01',
+    title: 'Load the recordings',
+    kicker: 'EDF · folder · animal IDs',
+    body: 'Open one recording or point NED-Net at a folder. EDF and EDF+ are read directly, including multi-rate channels, and each EEG channel is paired with its activity channel automatically. Set animal ID, cohort and group per channel before anything else — every event you detect inherits them, and the statistics at the end depend on them.',
+    bullets: [
+      ['From the table or a template', 'Type the IDs into the channel table for one file, or apply a batch metadata template across a folder when a cohort shares a layout.'],
+      ['ADICHT via the converter', 'LabChart .adicht files convert to EDF in Tools on Windows, with the windows extra installed.'],
+      ['Recent files and folders', 'The start screen lists what you opened last, so a study you come back to each week is one click away.'],
+    ],
+  },
+  {
+    id: 'viewer',
+    num: '02',
+    title: 'Look at the trace first',
+    kicker: 'Filters · overlays · video',
+    body: 'Before detecting anything, scroll the recording. Band-pass and notch filters, min/max downsampling that keeps the peaks honest at long window sizes, the activity channel underneath, and synchronised behavioural video. This is where you learn what a seizure looks like in this preparation, which is what makes the thresholds in the next step mean something.',
+    bullets: [
+      ['Overlays as you go', 'Seizures, interictal events, spike dots, reviewed background, baseline and threshold can each be switched on over the trace.'],
+      ['Export the view', 'Any window exports as vector SVG, with the overlays and scale bar it has on screen — useful for a figure or a lab meeting.'],
+    ],
+  },
+  {
+    id: 'detect',
+    num: '03',
+    title: 'Detect',
+    kicker: 'Rule-based or trained',
+    body: 'On a first cohort, use the rule-based detectors: Spike-Train, Spectral Band, Autocorrelation or the Ensemble vote. They need no model and no GPU. Once you have reviewed recordings and trained a U-Net, run that instead — picking a model fills in the operating point it was validated at, so you are not guessing thresholds.',
+    bullets: [
+      ['Filter before you trust', 'Every event carries quality metrics — local baseline ratio, amplitude, spike frequency. The result filters work on those, so a noisy run can be narrowed instead of re-run.'],
+      ['Inspect, then decide where it goes', 'Step through the events in the inspector, then export CSV, add them to the project database, or send them to the review queue.'],
+    ],
+  },
+  {
+    id: 'review',
+    num: '04',
+    title: 'Review a sample',
+    kicker: 'Confirm · reject · boundaries',
+    body: 'In Seizure Annotation, confirm or reject each candidate, drag boundaries that are wrong, flag convulsive events, and add the ones the detector missed. This is not quality control bolted on at the end — it is how the training set gets made, and it is the step that decides what the next model learns.',
+    bullets: [
+      ['Rejections are data too', 'Confirmed events become positives and rejected ones hard negatives. A model trained only on positives has nothing to learn the difference from.'],
+      ['Provenance on every candidate', 'Each one shows where it came from — which detector or model, or your own hand — so proposals and corrections stay distinguishable.'],
+      ['Background as well', 'Seizure-free stretches get proposed and reviewed the same way, giving the trainer clean negatives rather than random background.'],
+    ],
+  },
+  {
+    id: 'train',
+    num: '05',
+    title: 'Train, then check it blind',
+    kicker: 'Dataset · U-Net · blind review',
+    body: 'Build a dataset from the reviewed recordings and train the U-Net, and the convulsive classifier if you want convulsive labels. Then — before trusting it on the rest of the study — run Blind Review on held-out recordings, which shows you the model\'s detections without showing you its scores.',
+    bullets: [
+      ['Split by animal', 'Validation splits by animal by default, or by recording, or temporally on each animal\'s later recordings. The split that would leak is the one NED-Net does not offer.'],
+      ['The checkpoint that is kept', 'The epoch with the best event F1 over swept thresholds, with that threshold saved as the model\'s training optimum and offered as its operating point later.'],
+    ],
+  },
+  {
+    id: 'report',
+    num: '06',
+    title: 'Run the study and report it',
+    kicker: 'Batch · project database · results',
+    body: 'Point Batch Analysis at the folder, or at a folder it watches as recordings arrive, and send the output to the project database. Results then reads that database: group comparison raw or per animal-hour, per-animal summaries, longitudinal series, daily burden, circadian plots and an interictal-spike panel, exported to CSV or XLSX.',
+    bullets: [
+      ['One project per experiment', 'A SQLite file per project, holding events, the files and animals analysed, and recorded time per animal — which is what lets a rate be per animal-hour rather than per recording.'],
+      ['Both outputs at once', 'On a new cohort, send the run to the review queue as well. You get the numbers now and the annotated sample you will need to retrain before the next one.'],
+      ['Headless for a cluster', 'The same trainers and batch detectors run without the UI; example SLURM scripts are in scripts/slurm.'],
+    ],
+  },
+];
+---
+<Base title="NED-Net — Workflow">
+<style>
+.stage { padding: 58px 0; border-bottom: 1px solid var(--rule); }
+.stage:last-of-type { border-bottom: none; }
+.stage .head { display: grid; grid-template-columns: 76px 1fr auto; gap: 24px; align-items: baseline; margin-bottom: 18px; }
+.stage .num { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.07em; }
+.stage h2 { font-weight: 600; font-size: 30px; letter-spacing: -0.03em; margin: 0; line-height: 1.1; }
+.stage .kicker { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.07em; text-transform: uppercase; }
+.stage .lead { margin: 4px 0 24px 100px; color: var(--ink-soft); font-size: 16px; line-height: 1.65; max-width: 62ch; }
+.stage .bullets { margin-left: 100px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.stage .bullet {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.stage .bullet h3 { margin: 0 0 6px; font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.stage .bullet p { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--ink-soft); }
+
+@media (max-width: 900px) {
+  .stage .head { grid-template-columns: 1fr; }
+  .stage .lead, .stage .bullets { margin-left: 0; }
+  .stage .bullets { grid-template-columns: 1fr; }
+  .stage h2 { font-size: 26px; }
+}
+</style>
+
+<div class="scope-zone">
+<header class="page-hd"><div class="wrap">
+  <div>
+    <div class="eyebrow">Workflow · Step by step</div>
+    <h1>From a week of EEG <span>to a cohort figure.</span></h1>
+    <p class="sub">Six stages, in the order they actually happen: load the recordings, read the trace, detect, review a sample, train and check the model, then run the study and report it.</p>
+  </div>
+  <div class="meta">
+    <span><strong>6</strong> stages</span>
+    <span><strong>11</strong> pages</span>
+    <span><strong>2.0.0</strong> current build</span>
+    <span class="led">No CLI required</span>
+  </div>
+</div></header>
+</div>
+
+<div class="toc"><div class="wrap">
+  <span class="k">Stages</span>
+  {stages.map(s => <a href={`#${s.id}`}>{s.num} {s.title}</a>)}
+</div></div>
+
+{stages.map(s => (
+  <section class="stage" id={s.id}>
+    <div class="wrap">
+      <div class="head">
+        <div class="num">{s.num} / {String(stages.length).padStart(2, '0')}</div>
+        <div>
+          <div class="kicker">{s.kicker}</div>
+          <h2>{s.title}</h2>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <span class="chip">Stage {s.num}</span>
+        </div>
+      </div>
+      <p class="lead">{s.body}</p>
+      <div class="bullets">
+        {s.bullets.map(([h, p]) => (
+          <div class="bullet">
+            <h3>{h}</h3>
+            <p>{p}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+))}
+
+<section class="band">
+  <div class="wrap">
+    <div class="eyebrow">Try it</div>
+    <h2>Open a recording. <span>The rest is review.</span></h2>
+    <p>NED-Net runs entirely on your machine. No account, no upload, no telemetry.</p>
+    <div class="btns">
+      <a class="btn-lg primary" href={releases}>Download v2.0.0</a>
+      <a class="btn-lg" href={link('/features')}>See the features</a>
+    </div>
+  </div>
+</section>
+</Base>

@@ -1,0 +1,48 @@
+---
+import Logo from './Logo.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const link = (p: string) => `${base}${p}`;
+const repo = 'https://github.com/EpilepsyCenter/NED-Net';
+---
+<footer class="site-foot"><div class="wrap">
+  <div class="foot">
+    <div>
+      <Logo size={24} showVersion={false} />
+      <p class="desc">Seizure and interictal spike detection in long-term rodent EEG, locally on your machine.</p>
+      <div style="margin-top:14px;"><span class="led">GPL-3.0 · free and open source</span></div>
+    </div>
+    <div>
+      <h5>Product</h5>
+      <ul>
+        <li><a href={link('/features')}>Features</a></li>
+        <li><a href={link('/workflow')}>Workflow</a></li>
+        <li><a href={`${repo}/releases`}>Releases</a></li>
+        <li><a href={`${repo}/blob/main/README.md`}>README</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Reference</h5>
+      <ul>
+        <li><a href={link('/docs')}>User manual</a></li>
+        <li><a href={`${repo}/blob/main/docs/PACKAGING.md`}>Packaging</a></li>
+        <li><a href={`${repo}/tree/main/scripts/slurm`}>SLURM scripts</a></li>
+        <li><a href="https://www.edfplus.info/">EDF/EDF+ format</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Project</h5>
+      <ul>
+        <li><a href={repo}>Source on GitHub</a></li>
+        <li><a href={`${repo}/issues`}>Issues</a></li>
+        <li><a href={`${repo}/blob/main/CITATION.cff`}>How to cite</a></li>
+        <li><a href={`${repo}/blob/main/LICENSE`}>Licence</a></li>
+        <li><a href="https://epilepsycenter.github.io/">Epilepsy Center</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot-rule"></div>
+  <div class="foot-bot">
+    <span>Epilepsy Center, Lund University · v2.0.0</span>
+    <span>Built for long-term EEG, quietly.</span>
+  </div>
+</div></footer>

@@ -1,0 +1,385 @@
+---
+import Base from '../layouts/Base.astro';
+import TraceDivider from '../components/TraceDivider.astro';
+import Lightbox from '../components/Lightbox.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const link = (p: string) => `${base}${p}`;
+const repo = 'https://github.com/EpilepsyCenter/NED-Net';
+const releases = `${repo}/releases`;
+
+// The screenshots are the app's own, read straight out of its asset directory
+// so the site and the in-app manual can never drift apart.
+const shotModules = import.meta.glob(
+  '../../../eeg_seizure_analyzer/dash_app/assets/screenshots/*.png',
+  { eager: true, query: '?url', import: 'default' }
+) as Record<string, string>;
+
+const shotUrl = (file: string): string | undefined =>
+  Object.entries(shotModules).find(([path]) => path.endsWith('/' + file))?.[1];
+
+// A missing file drops out rather than breaking the build.
+const shots = [
+  { file: 'interface_overview.png', caption: 'The app window · sidebar, recording, settings panel' },
+  { file: 'method_selector.png', caption: 'Seizures · detected events and the detection settings' },
+  { file: 'training_review.png', caption: 'Seizure annotation · confirming candidates as training data' },
+  { file: 'results_charts.png', caption: 'Results · group statistics, burden and circadian plots' },
+]
+  .map((s) => ({ ...s, url: shotUrl(s.file) }))
+  .filter((s): s is { file: string; caption: string; url: string } => Boolean(s.url));
+---
+<Base title="NED-Net — Seizure detection in long-term rodent EEG">
+<style>
+/* ═══════ HERO ═══════ */
+.hero { padding: 64px 0 0; }
+.hero h1 {
+  font-weight: 600;
+  font-size: 60px;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  margin: 18px 0 0;
+  max-width: 16ch;
+  text-wrap: pretty;
+}
+.hero h1 span { color: var(--accent); }
+.hero p.lead {
+  font-size: 18px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+  max-width: 60ch;
+  margin: 26px 0 0;
+}
+.hero p.lead .mono {
+  color: var(--ink);
+  font-size: 15px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.hero .cta { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin: 30px 0 0; }
+.hero .specs { display: flex; gap: 28px; margin: 34px 0 0; flex-wrap: wrap; }
+.hero .specs div {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.hero .specs b { color: var(--ink); font-weight: 500; }
+
+/* ═══════ SHARED SECTION FURNITURE ═══════ */
+section { padding: 64px 0; }
+section h2 {
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 14px 0 0;
+  max-width: 24ch;
+  line-height: 1.1;
+}
+section h2 span { color: var(--accent); }
+section p.sub { color: var(--ink-soft); font-size: 16px; line-height: 1.65; max-width: 62ch; margin: 16px 0 0; }
+
+/* ═══════ SCREENSHOTS ═══════ */
+.shots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 26px 0 0; }
+.shots figure { margin: 0; }
+.shots img {
+  width: 100%;
+  display: block;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: top left;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.shots figcaption { margin: 11px 0 0; }
+
+/* ═══════ WHAT'S INSIDE ═══════ */
+.inside { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 26px 0 0; }
+.inside div {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--nednet);
+  border-radius: 9px;
+  padding: 14px 16px;
+}
+.inside b { display: block; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.inside span {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+/* ═══════ FEATURES ═══════ */
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 32px 0 0; }
+.feature {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s;
+}
+.feature:hover { border-color: var(--rule-strong); }
+.feature .f-head { display: flex; align-items: center; justify-content: space-between; }
+.feature .num { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.07em; }
+.feature .icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--nednet) 7%, #fff);
+  color: var(--nednet);
+}
+.feature h3 { margin: 16px 0 0; font-weight: 600; font-size: 18px; letter-spacing: -0.02em; }
+.feature p { margin: 10px 0 0; font-size: 14.5px; line-height: 1.6; color: var(--ink-soft); }
+.feature p .mono {
+  color: var(--ink);
+  font-size: 13px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.feature .meta-row { margin-top: auto; padding-top: 18px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ═══════ WORKFLOW ═══════ */
+.steps { display: grid; grid-template-columns: 1fr 1fr; gap: 0 36px; margin: 32px 0 0; }
+.step {
+  padding: 22px 0;
+  border-top: 1px solid var(--rule);
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.step .n { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: 0.07em; padding-top: 4px; }
+.step h4 { margin: 0 0 5px; font-weight: 600; font-size: 16px; letter-spacing: -0.015em; }
+.step p { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--ink-soft); }
+.step p .mono {
+  color: var(--ink);
+  font-size: 13px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* ═══════ RETRAINING NOTE ═══════ */
+.why p.body { color: var(--ink-soft); font-size: 17px; line-height: 1.7; max-width: 66ch; margin: 18px 0 0; }
+.why .row { display: flex; gap: 6px; flex-wrap: wrap; margin: 22px 0 0; }
+
+/* responsive */
+@media (max-width: 900px) {
+  .hero h1 { font-size: 42px; }
+  section h2 { font-size: 27px; }
+  .features, .inside { grid-template-columns: 1fr 1fr; }
+  .steps, .shots { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .hero h1 { font-size: 34px; }
+  .features, .inside { grid-template-columns: 1fr; }
+}
+</style>
+
+<!-- ══════ HERO ══════ -->
+<div class="scope-zone">
+  <header class="hero"><div class="wrap">
+    <div class="eyebrow">v2.0.0 · macOS · Windows · Linux</div>
+    <h1>Find the seizures in <span>months of EEG.</span></h1>
+    <p class="lead">NED-Net detects, reviews and quantifies seizures and interictal spikes in long-term rodent EEG. Four rule-based detectors need no training at all; a trained U-Net takes over once you have annotated recordings of your own. Everything runs locally, on your machine.</p>
+    <div class="cta">
+      <a class="btn-lg primary" href={releases}>Download v2.0.0</a>
+      <a class="btn-lg" href={link('/features')}>See what's inside</a>
+    </div>
+    <div class="specs">
+      <div>Recordings <b>EDF/EDF+ · ADICHT</b></div>
+      <div>Licence <b>GPL-3.0 · open source</b></div>
+      <div>Data <b>Stays local</b></div>
+    </div>
+
+    <TraceDivider />
+  </div></header>
+</div>
+
+<!-- ══════ SCREENSHOTS ══════ -->
+{shots.length > 0 && (
+  <section id="screens">
+    <div class="wrap">
+      <div class="eyebrow">The application</div>
+      <h2>Detect, review, retrain, report.</h2>
+      <p class="sub">Pages down the left, the open recording across the top, and a settings panel on the right that resizes and hides. It runs in its own desktop window or in a browser. Click any screenshot to see it full size.</p>
+      <div class="shots">
+        {shots.map((s) => (
+          <figure>
+            <a class="shot" href={s.url} data-caption={s.caption}>
+              <img src={s.url} alt={s.caption} loading="lazy" />
+            </a>
+            <figcaption class="eyebrow plain">{s.caption}</figcaption>
+          </figure>
+        ))}
+      </div>
+    </div>
+  </section>
+)}
+
+<!-- ══════ WHAT'S INSIDE ══════ -->
+<section id="inside">
+  <div class="wrap">
+    <div class="eyebrow">What's inside</div>
+    <div class="inside">
+      <div><b>Load &amp; viewer</b><span>EDF · filters · overlays · video</span></div>
+      <div><b>Seizures</b><span>4 rule-based · U-Net</span></div>
+      <div><b>Interictal spikes</b><span>morphology · spike rate</span></div>
+      <div><b>Annotation</b><span>confirm · boundaries · convulsive</span></div>
+      <div><b>Dataset &amp; model</b><span>train · blind review</span></div>
+      <div><b>Results</b><span>group · per animal · circadian</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════ FEATURES ══════ -->
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow">What it does</div>
+    <h2>Two routes to detection, <span>one place to review.</span></h2>
+    <p class="sub">Start with detectors that work out of the box, move to a trained model once you have annotated recordings. Both land in the same reviewer, write to the same project database, and feed the same statistics.</p>
+
+    <div class="features">
+      <div class="feature bracketed">
+        <div class="f-head">
+          <div class="icon"><svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M8 32 H24 M24 32 C 34 32 34 16 44 16 H56 M24 32 C 34 32 34 48 44 48 H56" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="56" cy="16" r="2.4" fill="currentColor"></circle><circle cx="56" cy="48" r="2.4" fill="currentColor"></circle></svg></div>
+          <div class="num">01</div>
+        </div>
+        <h3>Rule-based detectors</h3>
+        <p>Spike-Train, Spectral Band, Autocorrelation and Ensemble. No training data, no model, no GPU — tune the thresholds and detect. Every event carries quality metrics the result filters can work on.</p>
+        <div class="meta-row"><span class="chip">Spike-train</span><span class="chip">Spectral</span><span class="chip">Ensemble</span></div>
+      </div>
+      <div class="feature bracketed">
+        <div class="f-head">
+          <div class="icon"><svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M6 44 C 14 44 14 20 22 20 C 30 20 30 44 38 44 C 46 44 46 20 54 20 H58" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path><path d="M14 54 H50" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"></path><path d="M22 10 V14 M38 10 V14" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"></path></svg></div>
+          <div class="num">02</div>
+        </div>
+        <h3>Trained two-stage model</h3>
+        <p>A 1-D U-Net scores every sample for seizure probability, with hysteresis boundaries, a minimum duration and a merge gap. An optional convulsive classifier labels each event — it never removes one.</p>
+        <div class="meta-row"><span class="chip">U-Net</span><span class="chip">Hysteresis</span><span class="chip">Convulsive</span></div>
+      </div>
+      <div class="feature bracketed">
+        <div class="f-head">
+          <div class="icon"><svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M10 20 L18 28 L30 12" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></path><path d="M42 14 L56 28 M56 14 L42 28" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" opacity=".5"></path><path d="M8 44 H56 M8 54 H38" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></div>
+          <div class="num">03</div>
+        </div>
+        <h3>Review is the training set</h3>
+        <p>Confirm or reject candidates, drag boundaries, flag convulsive events, add or remove by hand. Confirmed events become positives and rejected ones hard negatives — pending candidates never reach a model.</p>
+        <div class="meta-row"><span class="chip">Confirm</span><span class="chip">Boundaries</span><span class="chip">Blind review</span></div>
+      </div>
+      <div class="feature bracketed">
+        <div class="f-head">
+          <div class="icon"><svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M6 30 L32 18 L58 30 L32 42 Z" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" fill="none"></path><path d="M6 42 L32 54 L58 42" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" fill="none" opacity=".55"></path></svg></div>
+          <div class="num">04</div>
+        </div>
+        <h3>Batch and live monitoring</h3>
+        <p>Run a trained model on one file, a folder, or a watched folder as recordings arrive. Picking a model fills in its recommended operating point. Output goes to a project database, the review queue, or both.</p>
+        <div class="meta-row"><span class="chip">Folder</span><span class="chip">Watched</span><span class="chip">HVSW / HPD</span></div>
+      </div>
+      <div class="feature bracketed">
+        <div class="f-head">
+          <div class="icon"><svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M6 54 H58" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".5"></path><g stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M16 54 V34"></path><path d="M30 54 V18"></path><path d="M44 54 V28"></path></g><path d="M12 12 H24" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"></path></svg></div>
+          <div class="num">05</div>
+        </div>
+        <h3>Project statistics</h3>
+        <p>One SQLite project per experiment, holding events, files, animals and recorded time — so rates can be expressed per animal-hour. Group comparison, per-animal summaries, longitudinal, daily burden and circadian plots.</p>
+        <div class="meta-row"><span class="chip">Per animal-hour</span><span class="chip">CSV</span><span class="chip">XLSX</span></div>
+      </div>
+      <div class="feature bracketed">
+        <div class="f-head">
+          <div class="icon"><svg width="22" height="22" viewBox="0 0 64 64" fill="none"><path d="M14 10 H38 L50 22 V54 H14 Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"></path><path d="M38 10 V22 H50" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"></path><path d="M21 38 C 25 38 25 30 29 30 C 33 30 33 44 37 44 C 41 44 41 36 44 36" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"></path></svg></div>
+          <div class="num">06</div>
+        </div>
+        <h3>Open files, local data</h3>
+        <p>EDF/EDF+ with multi-rate channels and automatic EEG–activity pairing, plus ADICHT through the built-in converter. Review state and detections sit in plain JSON next to each recording. Nothing is uploaded.</p>
+        <div class="meta-row"><span class="chip">EDF/EDF+</span><span class="chip">ADICHT</span><span class="chip">JSON sidecars</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════ WORKFLOW ══════ -->
+<section id="workflow">
+  <div class="wrap">
+    <div class="eyebrow">The workflow</div>
+    <h2>Load a folder. Review a sample. <span>Report the cohort.</span></h2>
+
+    <div class="steps">
+      <div class="step">
+        <div class="n">01</div>
+        <div><h4>Load the recordings</h4><p>One file or a whole folder. Set animal ID, cohort and group per channel, from the table or a batch metadata template. The start screen keeps your recent files and folders.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">02</div>
+        <div><h4>Detect</h4><p>Pick a rule-based method and tune it, or run a trained model at its recommended operating point. Filter the results, step through them in the event inspector, export CSV or add them to the project database.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">03</div>
+        <div><h4>Review and retrain</h4><p>Confirm, reject and correct candidates in <span class="mono">Seizure Annotation</span>. Build a dataset from the reviewed recordings, train the U-Net, then check it on held-out recordings in <span class="mono">Blind Review</span>.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">04</div>
+        <div><h4>Report</h4><p>Group comparison raw or per animal-hour, per-animal summaries with include and valid-until controls, longitudinal and circadian plots, an interictal-spike panel, and CSV or XLSX export.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════ RETRAINING ══════ -->
+<section id="retraining" class="why">
+  <div class="wrap">
+    <div class="eyebrow">Before you start</div>
+    <h2>NED-Net ships <span>no trained models.</span></h2>
+    <p class="body">Seizure detectors transfer poorly to animals they have not seen — a model trained on one cohort or one implant will usually disappoint on the next. So retraining is part of the intended workflow, not a fallback: review a sample of each new cohort, add it to the dataset, retrain, and check the result in Blind Review before you trust it. The four rule-based detectors need none of this and are there from the first recording.</p>
+    <div class="row">
+      <span class="chip">Retrain per cohort</span>
+      <span class="chip">Validation splits by animal</span>
+      <span class="chip">Blind review on held-out files</span>
+    </div>
+    <div class="row">
+      <a class="btn" href={link('/features')}>Browse features</a>
+      <a class="btn" href={link('/workflow')}>See the workflow</a>
+    </div>
+  </div>
+</section>
+
+<!-- ══════ CLOSING BAND ══════ -->
+<section class="band">
+  <div class="wrap">
+    <div class="eyebrow">v2.0.0 · Released</div>
+    <h2>Start with your <span>own recordings.</span></h2>
+    <p>Free and open source under GPL-3.0. Self-contained apps for macOS, Windows and Linux are built on every release — no Python needed. No account, no telemetry, no upload.</p>
+    <div class="btns">
+      <a class="btn-lg primary" href={releases}>Download NED-Net 2.0.0</a>
+      <a class="btn-lg" href={link('/docs')}>Read the manual</a>
+    </div>
+    <p class="install-note">
+      <strong>Running from source instead:</strong> Python 3.9 or later, then
+      <code>pip install -e ".[desktop,ml]"</code> in a virtual environment.
+      The <em>ml</em> extra brings PyTorch, which the U-Net and training need — the rule-based
+      detectors run without it. PyTorch uses the Apple-silicon GPU automatically; for an NVIDIA
+      card, install the CUDA build first. On Linux the Browse dialogs need <code>zenity</code> or
+      <code>kdialog</code>.
+    </p>
+    <div class="foot-line">
+      <span>macOS · Windows · Linux</span>
+      <span>Python 3.9+ from source</span>
+      <span>CUDA or Apple silicon optional</span>
+      <span>GPL-3.0</span>
+    </div>
+  </div>
+</section>
+
+<Lightbox />
+</Base>
