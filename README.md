@@ -24,16 +24,16 @@ It runs locally as a Dash app, in its own desktop window or in a browser.
 
 | Area | What it does |
 |---|---|
-| **Loading** | EDF/EDF+ with multi-rate channels and automatic EEG–activity pairing. Animal ID, cohort and group per channel, from the table or a batch metadata template. Load one file or a folder. The start screen lists recent files and folders. ADICHT (LabChart) via the built-in converter. |
+| **Loading** | EDF/EDF+ with multi-rate channels and automatic EEG–activity pairing. Animal ID, cohort and group per channel, from the table or a batch metadata template. Load one file or a folder. The start screen lists recent files and folders. ADICHT (LabChart) via the built-in converter, on any operating system. |
 | **Viewer** | Scrollable multi-channel EEG with band-pass/notch filters, min/max downsampling, activity overlay, event overlays, synchronised video, and vector SVG export of the current view. |
 | **Seizure detection** | Four rule-based methods plus the trained U-Net. The U-Net runs with an optional convulsive classifier and hysteresis boundaries. Result filters, an event inspector, CSV export, and "Add to project database". |
 | **Interictal spikes** | Rule-based or U-Net spike detection with morphology features, spike-rate metrics and filters. |
 | **Event inspector** | Pan through the recording, change the context (±10–120 s), and click an amplitude overview strip (±5 min, ±15 min or the whole recording) to jump. Step through events with Prev/Next or the keyboard. |
 | **Training (review)** | Confirm or reject candidates, edit boundaries, flag convulsive seizures, add or remove events by hand, jump to any event from the event list, autoscale with `A`. Every candidate shows where it came from. Confirmed and rejected events become training data. Seizure-free background stretches are reviewed the same way. |
-| **Dataset & Model** | Build datasets from reviewed recordings and train the U-Net or the convulsive classifier, with live progress. **Blind Review** checks a model's detections on held-out recordings without showing its scores. |
-| **Batch Analysis** | Run a trained model on one file, a folder (batch) or a watched folder (live monitoring). Choosing a model fills in its recommended operating point. Output goes to a project database, the training review queue, or both. HVSW/HPD subtype classification. |
-| **Results** | Per-project statistics: group comparison (raw or per animal-hour), per-animal summary with include/valid-until controls, longitudinal, distributions, daily burden and circadian plots, an interictal-spike panel, and CSV/XLSX export. |
-| **Tools** | WMV→MP4 video conversion, and ADICHT→EDF conversion (Windows). |
+| **Dataset & Model** | Build datasets from reviewed recordings and train the U-Net or the convulsive classifier, with live progress. Signal scaling per recording (default) makes a model less dependent on each animal's signal size. **Blind Review** checks a model's detections on held-out recordings without showing its scores. |
+| **Batch Analysis** | Run a trained model on one file, a folder (batch) or a watched folder (live monitoring; finished LabChart files are converted and analysed too). Choosing a model fills in its recommended operating point. Output goes to a project database, the training review queue, or both. HVSW/HPD subtype classification. |
+| **Results** | Per-project statistics: group comparison (raw or per animal-hour), per-animal summary with include/valid-until controls, longitudinal, distributions, daily burden and circadian plots, an interictal-spike panel, and CSV/XLSX export. **Review events** opens the reviewer on a project's detected seizures: each verdict is saved to the database and to the recording's annotation file, rejected events drop out of the results, and the summaries can count confirmed events only. |
+| **Tools** | WMV→MP4 video conversion, and ADICHT→EDF conversion (LabChart files; Windows, macOS, Linux). |
 
 ---
 
@@ -62,7 +62,7 @@ Extras:
 | (core) | numpy, scipy, pandas, pyEDFlib, plotly, matplotlib, dash, dash-bootstrap-components, dash-ag-grid, openpyxl, watchdog | everything else, incl. rule-based detection and live monitoring |
 | `ml` | PyTorch (plus scikit-learn/joblib for retained research code) | training models and running the U-Net / convulsive classifier |
 | `desktop` | pywebview, waitress | the native desktop window |
-| `windows` | adi-reader | opening ADICHT (LabChart) files on Windows |
+| `windows` | adi-reader | opening ADICHT (LabChart) files directly on Windows (conversion to EDF does not need it) |
 
 PyTorch uses the Apple-silicon GPU (MPS) automatically. For an NVIDIA GPU, install the CUDA
 build of PyTorch first, following [pytorch.org](https://pytorch.org/get-started/locally/).
@@ -249,7 +249,9 @@ python scripts/slurm/detect_batch.py --edf-dir /path/to/edfs \
 
 Run any of them with `--help` for all options. `scripts/slurm/detect_spikes_batch.py` does
 the same for interictal spikes. ADICHT files convert from the command line with
-`eeg-convert input.adicht output.edf` (Windows).
+`python -m eeg_seizure_analyzer.io.adicht_native recording.adicht [output_folder]` on any
+operating system (one EDF per LabChart block), or with `eeg-convert input.adicht output.edf`
+on Windows with `adi-reader`.
 
 ---
 
@@ -309,7 +311,7 @@ NED-Net is released under the **GNU General Public License v3.0**. See [LICENSE]
 If you use NED-Net, please cite the software:
 
 > Ledri, M. (2026). NED-Net: Neural Event Detection Network for automated seizure detection in
-> rodent EEG (v2.0.0). Zenodo. https://doi.org/10.5281/zenodo.23372245
+> rodent EEG (v2.1.0). Zenodo. https://doi.org/10.5281/zenodo.23372245
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23372245.svg)](https://doi.org/10.5281/zenodo.23372245)
 

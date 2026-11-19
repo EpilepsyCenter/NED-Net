@@ -1,6 +1,6 @@
 # NED-Net User Manual
 
-**Neural Event Detection Network**, v2.0.0
+**Neural Event Detection Network**, v2.1.0
 
 A desktop application for detecting, reviewing and quantifying seizures and interictal spikes in
 long-term rodent EEG.
@@ -56,8 +56,8 @@ NED-Net runs locally and no data leaves your computer. It needs no internet conn
 ### Supported file formats
 
 - **EDF / EDF+:** the format for all detection, review and model features.
-- **ADICHT (LabChart):** can be opened for viewing on Windows. Convert to EDF with
-  **Tools → ADICHT → EDF** for everything else.
+- **ADICHT (LabChart):** convert to EDF with **Tools → ADICHT → EDF** (Windows, macOS and
+  Linux; section 17.2). On Windows an ADICHT file can also be opened directly, for viewing only.
 
 ---
 
@@ -110,7 +110,7 @@ pip install -e ".[desktop,ml]"
 | core | numpy, scipy, pandas, pyEDFlib, plotly, matplotlib, dash and its components, openpyxl, watchdog | everything, incl. rule-based detection and live monitoring |
 | `ml` | PyTorch | training models and running the U-Net / convulsive classifier |
 | `desktop` | pywebview, waitress | the desktop app window |
-| `windows` | adi-reader | opening ADICHT files (Windows only) |
+| `windows` | adi-reader | opening ADICHT files directly for viewing (Windows only; conversion to EDF does not need it) |
 
 PyTorch uses the GPU of Apple-silicon Macs automatically. For an NVIDIA GPU, first install the
 CUDA build of PyTorch, following [pytorch.org](https://pytorch.org/get-started/locally/).
@@ -224,7 +224,8 @@ Keyboard shortcuts for moving around are in section 19.
 
 ![Screenshot: Load page, path and Browse](screenshots/load_single.png)
 
-ADICHT files skip channel selection and open for viewing only.
+ADICHT files skip channel selection and open for viewing only (Windows, with `adi-reader`).
+Convert them to EDF first for anything else (section 17.2).
 
 ### 4.2 Animal ID, cohort and group
 
@@ -853,6 +854,7 @@ Saved datasets can be reloaded (**Load**, then **Scan** to refresh) or deleted.
 | **Patience** | 10 | Stop after this many epochs without improvement; the best epoch is kept |
 | **Pos weight** | 5.0 | Extra weight on seizure samples in the loss |
 | **Neg/Pos ratio** | 2.0 | Negative windows per positive one |
+| **Signal scaling** | Per recording | How the EEG is put on a common scale before the model sees it. **Per recording:** each animal's channel is scaled by its median and spread over the whole recording, so differences in signal size between animals and implants matter less; recommended, in particular for a model that will be used on new animals. **Per window:** each window is scaled on its own. The choice is stored with the model and applied automatically at detection |
 | **Exclude animal IDs** | — | Animals left out entirely |
 
 Validation is a fixed split **by animal**: 20% of animals are held out. This measures how well a
@@ -1002,6 +1004,11 @@ Subtypes apply to **non-convulsive** events:
   - **Process backlog on startup** also analyses files already in the folder.
   - **Channel metadata template (optional)** sets animal IDs, cohort and group for incoming
     files; **Save empty template** saves a blank one to fill in.
+  - **LabChart files:** a finished `.adicht` file in the folder is converted to EDF (section
+    17.2) and analysed. A file counts as finished when LabChart has closed it and a newer
+    file exists (or it has not changed for three hours). The file being recorded is never
+    read, so LabChart must start a new file for each recording block; a single file that
+    grows all day is analysed only after it is closed.
 
   Live monitoring needs the `watchdog` package, which is installed with NED-Net.
 
@@ -1058,13 +1065,51 @@ full picture.
 
 The table lists the filtered events. Only the first 500 are shown, and the page says so; the
 exports include all of them. **Exclude** removes an event from all summaries, plots and
-exports. Clicking a row opens an inspector with the EEG around the event, if
+exports. **Reviewed** shows a person's verdict (see 14.4). Clicking a row opens an inspector with the EEG around the event, if
 the recording is available.
 
-### 14.4 Exports
+### 14.4 Reviewing the events
+
+A detector's events should be checked by a person before they are reported. **Review events…**
+next to the table opens the reviewer of [Training: Reviewing Seizures](#10-training-reviewing-seizures)
+on the seizure events the filters show, whichever detector found them. Nothing is detected again.
+
+1. Set the filters to the events you want to review and click **Review events…**. The dialog says
+   how many events can be reviewed. If recordings are not where the database says (for example
+   after an analysis on a cluster), give the folder that holds them; sub-folders are searched.
+2. **Start review.** The Results page shows the reviewer with a banner on top. Confirm or reject
+   each event as in Training; **Next pending** moves on to the next recording when one is done.
+   Filters are off, so no event is hidden.
+3. **Exit review** brings back Results and the recordings you had open before. You can stop at
+   any time and continue later.
+
+Every verdict is saved at once, in two places:
+
+- **In the project database.** The table gets a **Reviewed** column (confirmed, rejected or
+  empty) and a line above it says how many events are reviewed. A rejected event is excluded
+  from all summaries, plots and exports. A confirmed event takes the boundaries and the
+  convulsive box you set; the detector's own values are kept in the export (`orig_start_sec`,
+  `orig_end_sec`, `orig_type`).
+- **In the recording's annotation file,** so reviewed events can go into the next training set
+  without being reviewed again. The file is backed up the first time
+  (`~/.eeg_seizure_analyzer/results_review_backups/`).
+
+Events that overlap a seizure you confirmed or rejected earlier take that verdict and are not
+asked again. Events you excluded by hand are left out of the review. Two detectors' events for
+the same seizure get one verdict.
+
+Events that are not reviewed still count in the summaries. Turn on **Count only events
+confirmed in a review** (next to Apply filters) to count the confirmed ones only; the exports
+follow the same switch.
+
+Interictal spikes are not reviewed this way. If a recording is analysed again, its events are
+replaced and lose their verdicts in the database; the verdicts stay in the annotation file and
+come back when you start a review again.
+
+### 14.5 Exports
 
 - **Export filtered CSV:** the current selection, without excluded events.
-- **Export all events CSV:** everything, with the exclude flag.
+- **Export all events CSV:** everything, with the exclude flag and the review columns.
 - **Export graph data (XLSX):** the numbers behind the plots, one sheet per panel. The sheets
   are PerAnimal, PerGroup, daily counts and rates by group, circadian, duration per animal, and
   ISI sheets for spikes.
@@ -1140,14 +1185,29 @@ Converts LabChart WMV recordings (`Record1.wmv`, `Record2.wmv`, …) into one MP
 Requires **ffmpeg** (macOS: `brew install ffmpeg`; Windows: [ffmpeg.org](https://ffmpeg.org/download.html)).
 The page says whether it was found.
 
-### 17.2 ADICHT → EDF (Windows only)
+### 17.2 ADICHT → EDF
 
-Converts LabChart files to EDF. Requires `pip install adi-reader`.
+Converts LabChart files to EDF on Windows, macOS and Linux. LabChart is not needed.
+
 1. **ADICHT files:** one path per line, or **Browse** (several at once).
 2. **Output folder:** leave empty to write next to the originals.
-3. **Fast write mode** (on): much faster. Turn it off only if a file fails.
-4. **Convert to EDF.** **Stop** cancels and removes the partial file. Existing files are not
+3. **Convert to EDF.** **Stop** cancels and removes the partial file. Existing files are not
    overwritten.
+
+Each LabChart block (the stretch between a start and a stop of sampling) becomes one EDF,
+named as LabChart names its own exports: `name(1).edf`, `name(2).edf`, … or `name.edf` for a
+single block. Every channel keeps its own sampling rate and unit, comments become EDF
+annotations, and nothing is resampled.
+
+The built-in reader was checked sample by sample against LabChart's own EDF export on
+recordings from one acquisition setup (PowerLab, 2 kHz EEG with 2 Hz activity channels). For
+another setup, compare one converted file with a LabChart export before relying on it.
+
+On Windows with `adi-reader` installed, the page uses ADInstruments' own library instead:
+it writes one EDF for the whole file, needs all channels at the same sampling rate, and offers
+**Fast write mode** (on; turn it off only if a file fails).
+
+From the command line: `python -m eeg_seizure_analyzer.io.adicht_native recording.adicht [output_folder]`.
 
 ---
 

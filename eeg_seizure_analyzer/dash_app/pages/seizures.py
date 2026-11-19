@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -34,6 +35,8 @@ from eeg_seizure_analyzer.dash_app.components import (
     grid_height,
     page_header,
     split_page,
+    add_to_db_controls,
+    register_add_to_db_callbacks,
 )
 from eeg_seizure_analyzer.config import (
     SpikeTrainSeizureParams,
@@ -512,9 +515,7 @@ def layout(sid: str | None) -> html.Div:
         dbc.Button("Clear Results", id="sz-clear-btn",
                    className="btn-ned-danger",
                    style={"display": "inline-block" if has_rows else "none"}),
-        dbc.Button("Add to project database", id="sz-add-to-db-btn",
-                   className="btn-ned-secondary",
-                   style={"display": "inline-block" if has_results else "none"}),
+        add_to_db_controls("sz", has_results),
         params_menu("sz", has_results),
     ]
 
@@ -3316,14 +3317,22 @@ def on_sz_exclude_toggle(changed, sid):
         style={"color": "var(--ned-text-muted)", "fontSize": "0.78rem"})
 
 
+_PROVENANCE_KEYS = ("model_name", "model_sha256", "convulsive_model_name",
+                    "convulsive_model_sha256", "run_params")
+
+
+register_add_to_db_callbacks("sz")
+
+
 @callback(
     Output("sz-add-to-db-status", "children"),
     Input("sz-add-to-db-btn", "n_clicks"),
     State("session-id", "data"),
+    State("sz-add-to-db-project", "data"),
     prevent_initial_call=True,
 )
-def add_to_project_db(n_clicks, sid):
-    """Write the current post-filter detections to the active project DB.
+def add_to_project_db(n_clicks, sid, project):
+    """Write the current post-filter detections to the selected project DB.
 
     Per-event cohort/group come from each channel's tags; the detector is
     recorded as the event source. Non-destructive: ML or other-detector events
@@ -3332,6 +3341,9 @@ def add_to_project_db(n_clicks, sid):
     if not n_clicks:
         return no_update
     from eeg_seizure_analyzer import db
+    # Write to the project shown next to the button.
+    if project and project != db.get_active_project():
+        db.set_active_project(project)
     from eeg_seizure_analyzer.io.channel_ids import (
         load_channel_tags, load_channel_ids,
     )
@@ -3386,7 +3398,7 @@ def add_to_project_db(n_clicks, sid):
             return "seizure_unet"
         return method
 
-    by_source: dict[str, list] = {}
+    by_source: dict[tuple, list] = {}
     n_no_id = 0
     for ev in events:
         ch = ev.channel
@@ -3398,7 +3410,11 @@ def add_to_project_db(n_clicks, sid):
         aid = ev.animal_id or ch_ids.get(ch, "")
         if not aid:
             n_no_id += 1
-        by_source.setdefault(_ev_source(ev), []).append({
+        # One DB run per distinct stamp (source, models, hashes, settings).
+        run_key = (_ev_source(ev), json.dumps(
+            {k: feat.get(k) for k in _PROVENANCE_KEYS},
+            sort_keys=True, default=str))
+        by_source.setdefault(run_key, []).append({
             "animal_id": aid,
             "date": date,
             "start_sec": ev.onset_sec,
@@ -3438,17 +3454,34 @@ def add_to_project_db(n_clicks, sid):
         }
 
     try:
+        from eeg_seizure_analyzer.ml.provenance import run_id_from_features
+        # Group by source: add_manual_events replaces a source's events for
+        # the file, so all runs of one source go in one call.
+        by_src: dict[str, list] = {}
+        for (src, stamp_json), dicts in by_source.items():
+            rid = run_id_from_features(src, json.loads(stamp_json))
+            for d in dicts:
+                d["run_id"] = rid
+            by_src.setdefault(src, []).extend(dicts)
         total = sum(
             db.add_manual_events(src_path, dicts, source=src,
                                  category="seizure", recording_sec=rec_sec,
                                  file_animals=fa_map)
-            for src, dicts in by_source.items()
+            for src, dicts in by_src.items()
         )
     except Exception as e:
         return alert(f"Failed to add events: {e}", "danger")
 
     proj = db.get_active_project()
     note = f" ({n_no_id} without an Animal ID)" if n_no_id else ""
+    # ML events detected before model tracking existed carry no model name.
+    n_unknown = sum(
+        len(d) for (src, stamp_json), d in by_source.items()
+        if src in ("seizure_unet", "seizure_bendr")
+        and not json.loads(stamp_json).get("model_name"))
+    if n_unknown:
+        note += (f". {n_unknown} ML event(s) have no recorded model (detected "
+                 f"before model tracking); run detection again to record it")
     return alert(
         f"Added {total} event(s) to project '{proj}'{note}. "
         f"View them on the Results page.", "success")

@@ -31,6 +31,8 @@ from eeg_seizure_analyzer.dash_app.components import (
     grid_height,
     page_header,
     split_page,
+    add_to_db_controls,
+    register_add_to_db_callbacks,
 )
 from eeg_seizure_analyzer.config import SpikeDetectionParams
 from eeg_seizure_analyzer.dash_app import inspector_view as iv
@@ -189,12 +191,7 @@ def layout(sid: str | None) -> html.Div:
             className="btn-ned-danger",
             style={"display": "inline-block" if has_results else "none"},
         ),
-        dbc.Button(
-            "Add to project database",
-            id="sp-add-to-db-btn",
-            className="btn-ned-secondary",
-            style={"display": "inline-block" if has_results else "none"},
-        ),
+        add_to_db_controls("sp", has_results),
         params_menu("sp", has_results),
     ]
 
@@ -600,6 +597,17 @@ def _detect_spikes_unet(rec, channels, model_name, threshold,
     )
     n_raw = len(events)
     events = _isolate_events(events, float(iso_win), int(iso_max))
+    # Provenance: remember the model so "Add to project DB" can record it.
+    run_params = {
+        "threshold": float(threshold),
+        "min_duration_sec": float(min_dur_ms) / 1000.0,
+        "merge_gap_sec": float(merge_gap_ms) / 1000.0,
+        "isolation_window_sec": float(iso_win),
+        "isolation_max_neighbours": int(iso_max),
+    }
+    for ev in events:
+        ev.features = {**(ev.features or {}), "model_name": model_name,
+                       "run_params": run_params}
     detection_info = {ch: {} for ch in channels}
     detection_info["_ml"] = {
         "model": model_name, "threshold": float(threshold),
@@ -1164,13 +1172,17 @@ def run_spike_detection(
                 html.Div(), hide_style, hide_style, hide_style, html.Div(), html.Div())
 
 
+register_add_to_db_callbacks("sp")
+
+
 @callback(
     Output("sp-add-to-db-status", "children"),
     Input("sp-add-to-db-btn", "n_clicks"),
     State("session-id", "data"),
+    State("sp-add-to-db-project", "data"),
     prevent_initial_call=True,
 )
-def add_spikes_to_project_db(n_clicks, sid):
+def add_spikes_to_project_db(n_clicks, sid, project):
     """Write the current post-filter spike detections to the active project DB.
 
     Stored with category='spike' so they show under the Interictal Spikes view
@@ -1181,6 +1193,9 @@ def add_spikes_to_project_db(n_clicks, sid):
     if not n_clicks:
         return no_update
     from eeg_seizure_analyzer import db
+    # Write to the project shown next to the button.
+    if project and project != db.get_active_project():
+        db.set_active_project(project)
     from eeg_seizure_analyzer.io.channel_ids import (
         load_channel_tags, load_channel_ids,
     )
@@ -1261,9 +1276,16 @@ def add_spikes_to_project_db(n_clicks, sid):
         }
 
     try:
+        if source == "spike_unet":
+            from eeg_seizure_analyzer.ml.provenance import model_run_id
+            feat0 = events[0].features or {}
+            run_id = model_run_id(source, feat0.get("model_name"), None,
+                                  feat0.get("run_params"))
+        else:
+            run_id = db.get_or_create_run(source)
         total = db.add_manual_events(
             src_path, dicts, source=source, category="spike",
-            recording_sec=rec_sec, file_animals=fa_map)
+            recording_sec=rec_sec, file_animals=fa_map, run_id=run_id)
     except Exception as e:
         return alert(f"Failed to add events: {e}", "danger")
 

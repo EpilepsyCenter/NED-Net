@@ -12,6 +12,7 @@ import dash_bootstrap_components as dbc
 
 from eeg_seizure_analyzer.dash_app import server_state
 from eeg_seizure_analyzer.dash_app import inspector_view as iv
+from eeg_seizure_analyzer import results_review as _rr
 from eeg_seizure_analyzer.dash_app.components import (
     fit_y_range,
     loading,
@@ -78,6 +79,25 @@ def _is_blind(state) -> bool:
             and state.extra.get("project_folder") == state.extra.get("blind_folder"))
 
 
+def _results_scope(state) -> tuple[str, set[int]] | None:
+    """(project, database event ids) while a review of database events is open
+    (Results > Review events), else None.
+
+    The page then steps through those events only, with no filters, and every save
+    also writes the verdicts to the database (``_auto_save``).
+    """
+    scope = _rr.scope_ids(state.extra)
+    if scope is None:
+        return None
+    return state.extra["rr_review"]["project"], scope
+
+
+def _guided(state) -> bool:
+    """A blind review or a review of database events is open: a fixed set of events
+    over several recordings, shown without filters."""
+    return _is_blind(state) or _results_scope(state) is not None
+
+
 def _set_annotations(state, annotations: list[AnnotatedEvent]):
     """Store annotations into state.extra as dicts."""
     state.extra["tr_annotations"] = [a.to_dict() for a in annotations]
@@ -99,6 +119,14 @@ def _auto_save(state, annotations: list[AnnotatedEvent]):
         except Exception as e:
             import traceback
             traceback.print_exc()  # log save failures instead of silencing
+    rs = _results_scope(state)
+    if rs is not None:
+        try:
+            _rr.sync_annotations(annotations, rs[0], rs[1],
+                                 reviewer=state.extra.get("tr_annotator", ""))
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
 
 def _progress_counts(annotations: list[AnnotatedEvent]) -> dict:
@@ -621,6 +649,11 @@ def _review_list(state, annotations, ch_filter, method=None):
     out = _filter_by_channel(annotations, ch_filter)
     if _is_blind(state):
         # Blind review: no method or range filters, so no sampled event is hidden
+        return out, len(out)
+    rs = _results_scope(state)
+    if rs is not None:
+        # Review of database events: those events only, none hidden by a filter
+        out = [a for a in out if _rr.in_scope(a, rs[0], rs[1])]
         return out, len(out)
     method = method if method is not None else state.extra.get("tr_method_filter")
     if method:
@@ -1183,6 +1216,7 @@ def layout(sid: str | None) -> html.Div:
                     pass
 
     blind = _is_blind(state)
+    guided = _guided(state)
 
     # Restore state
     current_idx = state.extra.get("tr_current_idx", 0)
@@ -1194,7 +1228,7 @@ def layout(sid: str | None) -> html.Div:
     browse_start = state.extra.get("tr_browse_start", 0)
 
     # Restore filter settings from seizure tab (or training-specific overrides)
-    tr_filter_on = state.extra.get("tr_filter_on", True) and not blind
+    tr_filter_on = state.extra.get("tr_filter_on", True) and not guided
     sz_fv = state.extra.get("sz_filter_values", {})
     tr_min_conf = state.extra.get("tr_min_conf", sz_fv.get("min_conf", 0))
     tr_min_dur = state.extra.get("tr_min_dur", sz_fv.get("min_dur", 0))
@@ -1271,8 +1305,8 @@ def layout(sid: str | None) -> html.Div:
     ]
     method_filter = state.extra.get("tr_method_filter", None)
 
-    # Blind review: a recording just opened starts at its first pending event
-    if blind and "tr_current_idx" not in state.extra:
+    # A review: a recording just opened starts at its first pending event
+    if guided and "tr_current_idx" not in state.extra:
         first = next((i for i, a in enumerate(filtered) if a.label == "pending"), None)
         if first is not None:
             current_idx = first
@@ -1344,6 +1378,12 @@ def layout(sid: str | None) -> html.Div:
             style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
                    "marginTop": "-8px", "marginBottom": "12px"},
         )] if blind else []),
+        *([html.Div(
+            "Review of database events: confirm or reject each event. The boundaries "
+            "and the convulsive box of a confirmed event go into the results.",
+            style={"fontSize": "0.82rem", "color": "var(--ned-text-muted)",
+                   "marginTop": "-8px", "marginBottom": "12px"},
+        )] if guided and not blind else []),
 
         # ── Review Mode ──────────────────────────────────────────
         html.Div(
@@ -1380,7 +1420,7 @@ def layout(sid: str | None) -> html.Div:
                             "Next (. →) ▶", id="tr-next-btn", size="sm",
                             className="btn-ned-secondary",
                         ),
-                        *(_blind_nav(state, annotations) if blind else []),
+                        *(_blind_nav(state, annotations) if guided else []),
                     ],
                 ),
 
@@ -1792,7 +1832,7 @@ def layout(sid: str | None) -> html.Div:
                     clearable=True,
                 ),
                 html.Div(
-                    style={"display": "none"} if blind else {"marginTop": "10px"},
+                    style={"display": "none"} if guided else {"marginTop": "10px"},
                     children=[
                         html.Label("Method", className="panel-label"),
                         dcc.Dropdown(
@@ -1836,7 +1876,7 @@ def layout(sid: str | None) -> html.Div:
             className="panel-field panel-filters",
             children=filter_panel(
                 "tr-filter-toggle", tr_filter_on, title="Filters",
-                visible=not blind,
+                visible=not guided,
                 summary_id="tr-filter-summary",
                 summary=filter_summary(len(filtered), n_prefilter, tr_filter_on),
                 ranges=[
@@ -2247,7 +2287,7 @@ def update_review(mode, ch_filter, method_filter, filt_on, min_conf, min_dur, mi
     rec = state.recording
     annotations = _get_annotations(state)
     filtered, n_pre = _review_list(state, annotations, ch_filter, method=method_filter or "")
-    filt_on = state.extra.get("tr_filter_on", True) and not _is_blind(state)
+    filt_on = state.extra.get("tr_filter_on", True) and not _guided(state)
 
     if not filtered:
         fig, nav = _empty_review(n_pre, filt_on)
@@ -2511,7 +2551,13 @@ def _blind_pending_by_recording(state, annotations) -> tuple[int, list[int]]:
     files. Without a project list the open recording is the only one.
     """
     files = state.extra.get("project_files") or []
-    here = sum(a.label == "pending" for a in annotations)
+    rs = _results_scope(state)
+
+    def n_pending(anns):
+        return sum(a.label == "pending" and (rs is None or _rr.in_scope(a, rs[0], rs[1]))
+                   for a in anns)
+
+    here = n_pending(annotations)
     if not files:
         return 0, [here]
     active = int(state.extra.get("project_active_idx", 0) or 0)
@@ -2524,14 +2570,20 @@ def _blind_pending_by_recording(state, annotations) -> tuple[int, list[int]]:
             anns = load_annotations(pf["edf_path"]) or []
         except Exception:
             anns = []
-        counts.append(sum(a.label == "pending" for a in anns))
+        counts.append(n_pending(anns))
     return active, counts
+
+
+def _all_reviewed_text(state) -> str:
+    if _is_blind(state):
+        return "All events reviewed \u2014 use Score in the banner"
+    return "All events reviewed \u2014 use Exit review in the banner"
 
 
 def _blind_progress_text(state, annotations) -> str:
     active, counts = _blind_pending_by_recording(state, annotations)
     if not any(counts):
-        return "All events reviewed \u2014 use Score in the banner"
+        return _all_reviewed_text(state)
     return (f"Recording {active + 1} of {len(counts)} \u00b7 "
             f"{counts[active]} pending here")
 
@@ -2560,7 +2612,7 @@ def _blind_nav(state, annotations) -> list:
 def update_blind_progress(_counts, sid):
     """Refresh "Recording i of n · k pending here" after every label change."""
     state = server_state.get_session(sid)
-    if state.recording is None or not _is_blind(state):
+    if state.recording is None or not _guided(state):
         return no_update
     return _blind_progress_text(state, _get_annotations(state))
 
@@ -2582,7 +2634,7 @@ def next_pending_or_recording(n_clicks, ch_filter, sid):
     if not n_clicks:
         return no_update
     state = server_state.get_session(sid)
-    if state.recording is None or not _is_blind(state):
+    if state.recording is None or not _guided(state):
         return no_update
     annotations = _get_annotations(state)
     filtered, _ = _review_list(state, annotations, ch_filter)
@@ -2594,16 +2646,16 @@ def next_pending_or_recording(n_clicks, ch_filter, sid):
     if nxt is not None:
         set_props("tr-jump-to", {"value": nxt + 1})
         return no_update
-    if any(a.label == "pending" for a in annotations):
-        return "Pending events left on other channels \u2014 clear the Channel filter"
     active, counts = _blind_pending_by_recording(state, annotations)
+    if counts[active]:
+        return "Pending events left on other channels \u2014 clear the Channel filter"
     n = len(counts)
     for step in range(1, n):
         j = (active + step) % n
         if counts[j]:
             set_props("file-bar-dropdown", {"value": j})
             return f"Opening recording {j + 1} of {n}\u2026"
-    return "All events reviewed \u2014 use Score in the banner"
+    return _all_reviewed_text(state)
 
 
 # ── Boundary Adjustment ───────────────────────────────────────────────

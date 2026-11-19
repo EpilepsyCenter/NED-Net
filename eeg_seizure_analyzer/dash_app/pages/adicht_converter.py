@@ -1,4 +1,9 @@
-"""Tools subtab – ADICHT → EDF Converter (Windows only)."""
+"""Tools subtab – ADICHT → EDF Converter.
+
+On Windows with adi-reader installed it uses the ADInstruments library (one EDF per
+file). Everywhere else it uses NED-Net's own reader (io/adicht_native: one EDF per
+LabChart record, every channel at its own sampling rate).
+"""
 
 from __future__ import annotations
 
@@ -36,28 +41,6 @@ def layout(sid: str | None) -> html.Div:
         style={"padding": "24px", "maxWidth": "900px"},
         children=[
             html.H4("ADICHT → EDF Converter", style={"marginBottom": "4px"}),
-            html.Div(
-                [
-                    html.Span(
-                        "Windows only",
-                        style={
-                            "backgroundColor": "#da3633",
-                            "color": "#fff",
-                            "padding": "2px 8px",
-                            "borderRadius": "4px",
-                            "fontSize": "0.75rem",
-                            "fontWeight": "600",
-                            "marginRight": "8px",
-                        },
-                    ),
-                    html.Span(
-                        "Requires adi-reader package (pip install adi-reader)",
-                        style={"color": "var(--ned-text-muted)", "fontSize": "0.82rem"},
-                    ),
-                ],
-                style={"marginBottom": "16px"},
-            ),
-
             html.P(
                 "Convert LabChart .adicht files to EDF+ format. "
                 "EDF is required for detection, training, ML inference, "
@@ -117,7 +100,7 @@ def layout(sid: str | None) -> html.Div:
                 "Convert to EDF",
                 id="ac-convert-btn",
                 className="btn-ned-primary",
-                disabled=not _IS_WINDOWS,
+                disabled=False,
             ),
             dbc.Button(
                 "Stop",
@@ -138,6 +121,17 @@ def layout(sid: str | None) -> html.Div:
     )
 
 
+def _use_native() -> bool:
+    """True when the ADInstruments library is not available (macOS, Linux, or not installed)."""
+    if not _IS_WINDOWS:
+        return True
+    try:
+        import adi  # noqa: F401
+        return False
+    except ImportError:
+        return True
+
+
 def _platform_check():
     if _IS_WINDOWS:
         try:
@@ -148,14 +142,12 @@ def _platform_check():
                        "marginBottom": "12px"},
             )
         except ImportError:
-            return alert(
-                "adi-reader not installed. Install with: pip install adi-reader",
-                "danger",
-            )
-    return alert(
-        "ADICHT conversion requires Windows with the adi-reader package. "
-        "This tool is not available on macOS or Linux.",
-        "warning",
+            pass
+    return html.Div(
+        "Built-in LabChart reader: one EDF per LabChart record, named like "
+        "LabChart's own exports (name(1).edf, name(2).edf, ...).",
+        style={"color": "var(--ned-success)", "fontSize": "0.82rem",
+               "marginBottom": "12px"},
     )
 
 
@@ -202,9 +194,6 @@ def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
     if not n_clicks:
         return no_update, no_update, no_update, no_update
 
-    if not _IS_WINDOWS:
-        return alert("Conversion is only available on Windows.", "danger"), True, False, True
-
     # Parse file list
     paths = [p.strip() for p in (file_list or "").split("\n") if p.strip()]
     if not paths:
@@ -230,8 +219,10 @@ def start_convert(n_clicks, file_list, output_folder, fast_write, sid):
         else:
             edf = str(Path(p).with_suffix(".edf"))
 
-        if os.path.exists(edf):
-            return alert(f"Output already exists: {edf}", "warning"), True, False, True
+        first = str(Path(edf).with_name(stem + "(1).edf"))
+        for existing in (edf, first) if _use_native() else (edf,):
+            if os.path.exists(existing):
+                return alert(f"Output already exists: {existing}", "warning"), True, False, True
         conversions.append((p, edf))
 
     # Init progress
@@ -291,10 +282,18 @@ def _run_conversions(sid: str, conversions: list[tuple[str, str]], mode: str = "
         progress["file_pct"] = 0.0
 
         try:
-            convert_adicht_to_edf(adicht_path, edf_path, mode=mode, progress_cb=_cb)
+            if _use_native():
+                from eeg_seizure_analyzer.io.adicht_native import convert_adicht_native
+                written = convert_adicht_native(
+                    adicht_path, os.path.dirname(edf_path), progress_cb=_cb)
+                output = written[0] if len(written) == 1 else (
+                    f"{len(written)} files in {os.path.dirname(edf_path)}")
+            else:
+                convert_adicht_to_edf(adicht_path, edf_path, mode=mode, progress_cb=_cb)
+                output = edf_path
             progress["results"].append({
                 "file": os.path.basename(adicht_path),
-                "output": edf_path,
+                "output": output,
                 "status": "ok",
             })
         except ConversionCancelled:

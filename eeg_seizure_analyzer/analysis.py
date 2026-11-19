@@ -12,7 +12,9 @@ No CNN logic is reimplemented here — we only wrap ``ml.predict.predict_seizure
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 import time
 import threading
 from dataclasses import dataclass, field
@@ -561,6 +563,31 @@ def process_chunk(
             })
 
         if write_db:
+            # Provenance: model names, weights hashes and settings, one run row
+            # per event source (e.g. seizure_unet / seizure_bendr).
+            from dataclasses import asdict, is_dataclass
+            from eeg_seizure_analyzer.ml.provenance import (
+                model_run_id, weights_sha256,
+            )
+            run_params = {
+                "threshold": confidence_threshold,
+                "boundary_threshold": boundary_threshold,
+                "convulsive_threshold": convulsive_threshold,
+                "min_duration_sec": min_duration_sec,
+                "merge_gap_sec": merge_gap_sec,
+                "reranker_model": reranker_model,
+                "reranker_model_sha256": weights_sha256(reranker_model),
+                "classification": (asdict(classification_params)
+                                   if is_dataclass(classification_params)
+                                   else None),
+            }
+            run_ids: dict[str, int] = {}
+            for d in event_dicts:
+                src = d["source"]
+                if src not in run_ids:
+                    run_ids[src] = model_run_id(
+                        src, model_name, convulsive_model_name, run_params)
+                d["run_id"] = run_ids[src]
             db.write_events(chunk_id, event_dicts, source="seizure_cnn")
 
             # Write per-animal summaries
@@ -735,6 +762,18 @@ def process_spike_chunk(
                 "channel": ev.channel,
             })
 
+        from eeg_seizure_analyzer.ml.provenance import model_run_id
+        run_params = {
+            "threshold": confidence_threshold,
+            "min_duration_sec": min_duration_sec,
+            "merge_gap_sec": merge_gap_sec,
+        }
+        run_ids: dict[str, int] = {}
+        for d in event_dicts:
+            src = d["source"]
+            if src not in run_ids:
+                run_ids[src] = model_run_id(src, model_name, None, run_params)
+            d["run_id"] = run_ids[src]
         db.write_events(chunk_id, event_dicts, source="spike_cnn")
 
         # Per-animal summaries
@@ -936,8 +975,16 @@ def process_spike_chunk_classical(
                 "channel": ev.channel,
             })
 
+        from dataclasses import asdict, is_dataclass
+        run_id = db.get_or_create_run("spike_classical", params={
+            "detector": asdict(params) if is_dataclass(params) else None,
+            "min_confidence": min_confidence,
+            "min_local_snr": min_local_snr,
+            "min_amplitude_x_baseline": min_amplitude_x_baseline,
+        })
         db.write_events(chunk_id, event_dicts,
-                        source="spike_classical", category="spike")
+                        source="spike_classical", category="spike",
+                        run_id=run_id)
 
         # Per-animal summaries (spikes are all non-convulsive by nature).
         events_by_animal: dict[str, list] = {}
@@ -1167,6 +1214,13 @@ def run_batch(
 
 _live_thread: threading.Thread | None = None
 _live_stop_event = threading.Event()
+_live_converting: set[str] = set()  # LabChart files (path without suffix) converted this session
+
+
+def _from_live_conversion(edf_path: str) -> bool:
+    """True for an EDF that live mode itself wrote from a LabChart file."""
+    stem = os.path.normcase(re.sub(r"(\(\d+\))?\.edf$", "", edf_path, flags=re.I))
+    return stem in _live_converting
 
 
 def start_live_monitoring(
@@ -1222,6 +1276,61 @@ def stop_live_monitoring():
 
 def is_live_running() -> bool:
     return _live_thread is not None and _live_thread.is_alive()
+
+
+# LabChart writes .adicht. Live mode converts each one to EDF once LabChart is done
+# with it (io/adicht_native, any operating system). That needs LabChart to start a new
+# file per recording block (for example every 90 minutes, from the macro that stops and
+# restarts sampling): a file that is still being recorded is never read.
+_ADICHT_QUIET_SEC = 60           # no write for this long before a file counts as finished
+_ADICHT_NEWEST_QUIET_SEC = 3 * 3600   # the most recent file waits for a newer one, or this
+
+
+def _released_by_writer(path: str) -> bool:
+    """True when no program holds the file open for writing (Windows sharing rules)."""
+    try:
+        with open(path, "r+b"):
+            return True
+    except OSError:
+        return False
+
+
+def _adicht_ready(folder, ignore=(), now=None, released=_released_by_writer) -> list[str]:
+    """LabChart files under ``folder`` that are finished and not yet converted, oldest first.
+
+    Finished means: no ``.edf`` beside it, not written to for a minute, released by
+    LabChart. The most recently written file is assumed to be the one being recorded
+    and is left alone until a newer file appears or it has been untouched for 3 h.
+    """
+    now = time.time() if now is None else now
+    files = []
+    for f in Path(folder).rglob("*"):
+        if f.suffix.lower() == ".adicht" and f.is_file():
+            try:
+                files.append((f.stat().st_mtime, str(f)))
+            except OSError:
+                pass
+    files.sort()
+    ready = []
+    for i, (mtime, f) in enumerate(files):
+        quiet = _ADICHT_NEWEST_QUIET_SEC if i == len(files) - 1 else _ADICHT_QUIET_SEC
+        p = Path(f)
+        if f in ignore or p.with_suffix(".edf").exists() \
+                or p.with_name(p.stem + "(1).edf").exists():
+            continue
+        if now - mtime >= quiet and released(f):
+            ready.append(f)
+    return ready
+
+
+def _adicht_to_edf_beside(adicht_path: str) -> list[str]:
+    """Convert to EDF in the same folder, one file per LabChart record.
+
+    ``<name>.edf`` for a single record, ``<name>(1).edf``, ``<name>(2).edf`` ... for
+    several. Each EDF appears only when complete. Works on every operating system.
+    """
+    from eeg_seizure_analyzer.io.adicht_native import convert_adicht_native
+    return convert_adicht_native(adicht_path)
 
 
 def _live_monitor_worker(
@@ -1297,6 +1406,8 @@ def _live_monitor_worker(
                 return
             if not event.src_path.lower().endswith(".edf"):
                 return
+            if _from_live_conversion(event.src_path):
+                return               # written by the LabChart conversion below
 
             # Wait before processing to let LabChart finish writing
             _update_status(
@@ -1336,9 +1447,53 @@ def _live_monitor_worker(
 
     _update_status(current_file="Watching for new files...")
 
+    # LabChart files: converted here, then analysed like any other recording.
+    adicht_on = True
+    adicht_skip: set[str] = set()
+    if adicht_on and not process_backlog:
+        old = _adicht_ready(watch_folder, now=float("inf"), released=lambda f: True)
+        adicht_skip = set(old[:-1])  # earlier files; the latest may be the one being recorded
+    last_poll = 0.0
+
     try:
         while not _live_stop_event.is_set():
             time.sleep(1)
+            if not adicht_on or time.time() - last_poll < 30:
+                continue
+            last_poll = time.time()
+            for adicht in _adicht_ready(watch_folder, ignore=adicht_skip):
+                if _live_stop_event.is_set():
+                    break
+                name = Path(adicht).name
+                try:
+                    _update_status(current_file=f"Converting {name}")
+                    _live_converting.add(os.path.normcase(str(Path(adicht).with_suffix(""))))
+                    for edf_path in _adicht_to_edf_beside(adicht):
+                        if _live_stop_event.is_set():
+                            break
+                        _update_status(current_file=Path(edf_path).name)
+                        process_chunk(
+                            edf_path=edf_path,
+                            model_name=model_name,
+                            confidence_threshold=confidence_threshold,
+                            boundary_threshold=boundary_threshold,
+                            convulsive_threshold=convulsive_threshold,
+                            min_duration_sec=min_duration_sec,
+                            merge_gap_sec=merge_gap_sec,
+                            mode="live",
+                            cohort=cohort,
+                            group_id=group_id,
+                            classification_params=classification_params,
+                            file_metadata=live_template,
+                            convulsive_model_name=convulsive_model_name,
+                            output=output,
+                        )
+                        with _status_lock:
+                            _analysis_status["processed_files"] += 1
+                except Exception as e:
+                    adicht_skip.add(adicht)      # do not retry in a loop
+                    _update_status(last_error=f"{name}: {e}")
+            _update_status(current_file="Watching for new files...")
     finally:
         observer.stop()
         observer.join()

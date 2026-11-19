@@ -426,6 +426,76 @@ def page_header(title: str, badge=None, actions: list | None = None) -> html.Div
     )
 
 
+def add_to_db_controls(prefix: str, visible: bool) -> html.Div:
+    """Split button for a detection tab: the main part adds the detections to
+    the project it names; the arrow opens the list of projects.
+
+    Picking a project switches the active project app-wide (as in Analysis
+    and Results). The chosen name is kept in ``<prefix>-add-to-db-project``
+    (a Store) for the add callback. Projects are created in Analysis.
+    Callbacks: :func:`register_add_to_db_callbacks`.
+    """
+    from eeg_seizure_analyzer import db
+    active = db.get_active_project()
+    return html.Div(
+        [
+            dcc.Store(id=f"{prefix}-add-to-db-project", data=active),
+            dbc.ButtonGroup([
+                dbc.Button(
+                    _add_to_db_label(active), id=f"{prefix}-add-to-db-btn",
+                    className="btn-ned-secondary",
+                    title="Add the detections to this project database",
+                    style={"maxWidth": "260px", "overflow": "hidden",
+                           "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+                dbc.DropdownMenu(
+                    label="", group=True, align_end=True,
+                    className="ned-menu",
+                    toggleClassName="btn-ned-secondary dropdown-toggle-split",
+                    toggle_style={"borderLeft": "1px solid var(--ned-border)"},
+                    children=[
+                        dbc.DropdownMenuItem("Add to project", header=True),
+                        *[dbc.DropdownMenuItem(
+                            _pick_label(p, p == active),
+                            id={"type": f"{prefix}-add-to-db-pick", "name": p})
+                          for p in db.list_projects()],
+                    ],
+                ),
+            ]),
+        ],
+        style={"display": "inline-block" if visible else "none"},
+    )
+
+
+def _add_to_db_label(project: str) -> str:
+    return f"Add to {project}"
+
+
+def _pick_label(project: str, current: bool) -> str:
+    # A check marks the current project; the space keeps names aligned.
+    return f"\u2713\u2002{project}" if current else f"\u2003{project}"
+
+
+def register_add_to_db_callbacks(prefix: str) -> None:
+    """Project picking for :func:`add_to_db_controls` on one tab."""
+
+    @callback(
+        Output(f"{prefix}-add-to-db-project", "data"),
+        Output(f"{prefix}-add-to-db-btn", "children"),
+        Output({"type": f"{prefix}-add-to-db-pick", "name": ALL}, "children"),
+        Input({"type": f"{prefix}-add-to-db-pick", "name": ALL}, "n_clicks"),
+        State({"type": f"{prefix}-add-to-db-pick", "name": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def _pick_project(clicks, ids):
+        from eeg_seizure_analyzer import db
+        trig = ctx.triggered_id
+        if not isinstance(trig, dict) or not any(clicks):
+            return no_update, no_update, [no_update] * len(ids)
+        name = db.set_active_project(trig["name"])
+        return (name, _add_to_db_label(name),
+                [_pick_label(i["name"], i["name"] == name) for i in ids])
+
+
 def collapsible_section(
     title: str,
     section_id: str,

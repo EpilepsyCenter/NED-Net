@@ -443,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="drop confirmed events longer than this (0 = no cap). Long imported "
                         "rows can be chained seizures; a 240 s block fills a 60 s window edge "
                         "to edge. Suggested: 100.")
+    p.add_argument("--normalization", default="window", choices=["window", "recording"],
+                   help="EEG scaling, as for the detector (see train_unet --normalization).")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--lr", type=float, default=3e-4,
@@ -472,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         max_positive_sec=args.max_positive_sec,
         val_mode=args.val_mode,
         val_pairs_file=args.val_pairs_file,
+        normalization=args.normalization,
     )
     if args.val_pairs_file:
         print(f"Val pairs file: {args.val_pairs_file}")

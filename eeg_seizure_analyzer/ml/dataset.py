@@ -55,6 +55,15 @@ class DatasetConfig:
     min_seizure_overlap: float = 0.5  # fraction of window that must be seizure
     augment: bool = True
     seed: int = 42
+    normalization: str = "window"  # how the EEG is put on a common scale:
+    #   "window"    — each window z-scored on its own (the original behaviour). A window
+    #                 holding a seizure is shrunk and a quiet one blown up, so amplitude
+    #                 relative to the animal's baseline is not available to the network.
+    #   "recording" — one robust centre and scale per recording and channel (median and
+    #                 1.4826 x MAD over the whole recording), applied to every window and
+    #                 clipped at +-RECORDING_CLIP. Baseline then looks alike across
+    #                 animals and a seizure stands out by its size.
+    #   Saved with the model; detection reads it from the model's metadata.
     exclude_animals: tuple = ()  # animal IDs to drop from the dataset entirely
     #   (no train/val windows) — e.g. noisy recordings.
     stable_convulsive_val: bool = False  # fill the convulsive val stratum with the
@@ -235,6 +244,45 @@ def _normalize_channels(data: np.ndarray) -> np.ndarray:
     std = data.std(axis=1, keepdims=True)
     std[std < 1e-8] = 1.0  # avoid division by zero
     return ((data - mean) / std).astype(np.float32)
+
+
+RECORDING_CLIP = 30.0   # robust SDs; keeps movement artefacts from dominating a window
+_SCALE_CACHE: dict = {}
+
+
+def recording_scale(edf_path: str, channel: int, target_fs: int) -> tuple[float, float]:
+    """Robust centre and scale of one channel over its WHOLE recording, at the model's
+    sampling rate: (median, 1.4826 x MAD). Cached per process."""
+    key = (str(edf_path), int(channel), int(target_fs))
+    if key not in _SCALE_CACHE:
+        import pyedflib
+        f = pyedflib.EdfReader(str(edf_path))
+        try:
+            dur = f.getNSamples()[channel] / f.getSampleFrequency(channel)
+        finally:
+            f.close()
+        rec = read_edf_window(str(edf_path), channels=[channel], start_sec=0.0,
+                              duration_sec=dur)
+        x = _downsample(rec.data, rec.fs, target_fs)[0]
+        med = float(np.median(x))
+        mad = float(np.median(np.abs(x - med))) * 1.4826
+        if not np.isfinite(mad) or mad < 1e-8:
+            mad = float(x.std()) or 1.0
+        _SCALE_CACHE[key] = (med, mad)
+    return _SCALE_CACHE[key]
+
+
+def _scale_one(key):
+    """Process-pool worker for recording_scale; (key, None) when the file can't be read."""
+    try:
+        return key, recording_scale(*key)
+    except Exception:
+        return key, None
+
+
+def _normalize_recording(data: np.ndarray, centre: float, scale: float) -> np.ndarray:
+    """Scale by the recording's robust centre and spread, then clip."""
+    return np.clip((data - centre) / scale, -RECORDING_CLIP, RECORDING_CLIP).astype(np.float32)
 
 
 def _pad_or_trim(data: np.ndarray, target_len: int) -> np.ndarray:
@@ -721,7 +769,8 @@ def _balance_negatives(
 
 
 def _read_window_signal(edf_path, eeg_channel, act_channel,
-                        start_sec, duration_sec, target_fs, target_samples):
+                        start_sec, duration_sec, target_fs, target_samples,
+                        normalization="window", scale=None):
     """Read + downsample + normalize one window's signal (EEG, optionally with
     a paired activity channel). Shared by SeizureDataset and the preload pool."""
     rec = read_edf_window(
@@ -729,7 +778,14 @@ def _read_window_signal(edf_path, eeg_channel, act_channel,
         start_sec=start_sec, duration_sec=duration_sec,
     )
     eeg = _downsample(rec.data, rec.fs, target_fs)
-    eeg = _normalize_channels(eeg)
+    if normalization == "recording":
+        if scale is None:
+            scale = recording_scale(edf_path, eeg_channel, target_fs)
+        eeg = _normalize_recording(eeg, *scale)
+    elif normalization == "window":
+        eeg = _normalize_channels(eeg)
+    else:
+        raise ValueError(f"unknown normalization {normalization!r}")
     eeg = _pad_or_trim(eeg, target_samples)
     if act_channel is not None:
         try:
@@ -752,11 +808,12 @@ def _preload_one(args):
     (index, None) if it can't be read, so a single bad window doesn't abort the
     whole preload (it falls back to a lazy read later)."""
     idx, edf_path, eeg_channel, act_channel, start_sec, duration_sec, \
-        target_fs, target_samples = args
+        target_fs, target_samples, normalization, scale = args
     try:
         return idx, _read_window_signal(
             edf_path, eeg_channel, act_channel,
-            start_sec, duration_sec, target_fs, target_samples)
+            start_sec, duration_sec, target_fs, target_samples,
+            normalization, scale)
     except Exception:
         return idx, None
 
@@ -804,7 +861,8 @@ class SeizureDataset(Dataset):
         return _read_window_signal(
             spec.edf_path, spec.eeg_channel, spec.act_channel,
             spec.start_sec, spec.duration_sec,
-            self.config.target_fs, self.target_samples)
+            self.config.target_fs, self.target_samples,
+            getattr(self.config, "normalization", "window"))
 
     def preload(self, max_workers: int = 8) -> None:
         """Fill the window cache up front, before creating the DataLoader.
@@ -820,12 +878,27 @@ class SeizureDataset(Dataset):
         todo = [i for i in range(len(self.specs)) if i not in self._cache]
         if not todo:
             return
+        norm = getattr(self.config, "normalization", "window")
+        n = max(1, max_workers)
+        scales: dict = {}
+        if norm == "recording":
+            # One whole-channel read per recording, done once here and handed to the
+            # window workers, instead of once per worker process.
+            keys = sorted({(str(self.specs[i].edf_path), int(self.specs[i].eeg_channel),
+                            int(self.config.target_fs)) for i in todo})
+            try:
+                from concurrent.futures import ProcessPoolExecutor
+                with ProcessPoolExecutor(max_workers=n) as ex:
+                    scales = dict(ex.map(_scale_one, keys, chunksize=4))
+            except Exception:
+                scales = dict(_scale_one(k) for k in keys)
+            _SCALE_CACHE.update({k: v for k, v in scales.items() if v is not None})
         args = [
             (i, s.edf_path, s.eeg_channel, s.act_channel, s.start_sec,
-             s.duration_sec, self.config.target_fs, self.target_samples)
+             s.duration_sec, self.config.target_fs, self.target_samples, norm,
+             scales.get((str(s.edf_path), int(s.eeg_channel), int(self.config.target_fs))))
             for i, s in ((i, self.specs[i]) for i in todo)
         ]
-        n = max(1, max_workers)
         if n > 1:
             try:
                 from concurrent.futures import ProcessPoolExecutor

@@ -575,6 +575,15 @@ def _live_panel(store: dict) -> list:
                        outline=True, color="secondary", size="sm"),
         ], className="mb-2"),
 
+        html.Small(
+            "Picks up EDF files. It also converts LabChart (.adicht) files to EDF "
+            "once LabChart has closed them, so LabChart must start a new file for each "
+            "recording block; the file being recorded is never read.",
+            style={"color": "var(--ned-text-muted)", "fontSize": "0.72rem",
+                   "display": "block"},
+            className="mb-2",
+        ),
+
         dbc.Checkbox(
             id="an-live-backlog", label="Process backlog on startup",
             value=prev_backlog,

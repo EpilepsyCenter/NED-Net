@@ -96,6 +96,23 @@ def init_db(db_path: str | Path | None = None) -> None:
             recording_start_date TEXT
         );
 
+        -- Provenance: which detector produced which events. One row per
+        -- distinct (source, model, weights, settings, app version); events
+        -- point here through events.run_id. model_sha256 pins the exact
+        -- weights even if a model folder is later renamed or retrained.
+        CREATE TABLE IF NOT EXISTS detection_runs (
+            id                      INTEGER PRIMARY KEY,
+            fingerprint             TEXT UNIQUE,
+            created_at              TEXT,
+            source                  TEXT,
+            model                   TEXT,
+            model_sha256            TEXT,
+            convulsive_model        TEXT,
+            convulsive_model_sha256 TEXT,
+            params                  TEXT,
+            app_version             TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_events_chunk ON events(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_events_animal ON events(animal_id);
         CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
@@ -180,6 +197,78 @@ def init_db(db_path: str | Path | None = None) -> None:
                 f"WHERE {col} IS NULL"
             )
             conn.commit()
+
+    # Migration: per-event link to detection_runs. Events written before this
+    # column existed keep NULL (provenance unknown; it was never recorded).
+    try:
+        conn.execute("SELECT run_id FROM events LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE events ADD COLUMN run_id INTEGER")
+        conn.commit()
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id)")
+    conn.commit()
+
+    # Migration: a person's verdict on an event (Results > Review events).
+    # review_label is NULL (not reviewed), 'confirmed' or 'rejected'. When a
+    # review changes an event's boundaries or its convulsive call, the
+    # detector's values are kept in the orig_* columns.
+    for col, kind in (("review_label", "TEXT"), ("reviewed_at", "TEXT"),
+                      ("reviewer", "TEXT"), ("orig_start_sec", "REAL"),
+                      ("orig_end_sec", "REAL"), ("orig_type", "TEXT")):
+        try:
+            conn.execute(f"SELECT {col} FROM events LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute(f"ALTER TABLE events ADD COLUMN {col} {kind}")
+            conn.commit()
+
+
+def get_or_create_run(source: str, model: str | None = None,
+                      model_sha256: str | None = None,
+                      convulsive_model: str | None = None,
+                      convulsive_model_sha256: str | None = None,
+                      params: dict | None = None) -> int:
+    """Return the detection_runs id for this detector setup, creating it once.
+
+    Identical setups (same source, model names, weights hashes, settings and
+    app version) share one row, so Results can group events by run.
+    """
+    import hashlib
+    import json
+
+    from eeg_seizure_analyzer import __version__
+
+    params_json = json.dumps(params or {}, sort_keys=True, default=str)
+    key = json.dumps([source, model or "", model_sha256 or "",
+                      convulsive_model or "", convulsive_model_sha256 or "",
+                      params_json, __version__])
+    fingerprint = hashlib.sha256(key.encode()).hexdigest()
+
+    conn = _get_conn()
+    row = conn.execute("SELECT id FROM detection_runs WHERE fingerprint = ?",
+                       (fingerprint,)).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        """INSERT INTO detection_runs (fingerprint, created_at, source, model,
+           model_sha256, convulsive_model, convulsive_model_sha256, params,
+           app_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (fingerprint, datetime.now(timezone.utc).isoformat(), source,
+         model or None, model_sha256 or None, convulsive_model or None,
+         convulsive_model_sha256 or None, params_json, __version__),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_runs() -> list[dict]:
+    """All detection runs in the active DB, with their event counts."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT r.*, COUNT(e.id) AS n_events
+           FROM detection_runs r LEFT JOIN events e ON e.run_id = r.id
+           GROUP BY r.id ORDER BY r.id"""
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -391,13 +480,15 @@ def write_chunk(path: str, meta: dict, mode: str) -> int:
 
 
 def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
-                 category: str | None = None) -> None:
+                 category: str | None = None, run_id: int | None = None) -> None:
     """Insert list of event dicts for a chunk.
 
     ``source`` is the specific detector (seizure_cnn, spike_cnn, autocorrelation,
     spectral_band, spike_train, ensemble, ...). ``category`` is the high-level
     seizure/spike bucket used by the Results Seizures/Spikes split; when omitted
-    it is derived from the source.
+    it is derived from the source. ``run_id`` links the events to
+    ``detection_runs`` (model name, weights hash, settings); see
+    :func:`get_or_create_run`.
     """
     conn = _get_conn()
     for ev in events:
@@ -408,8 +499,8 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
             """INSERT INTO events (chunk_id, animal_id, date, start_sec,
                end_sec, duration_sec, type, subtype, cnn_confidence,
                convulsive_confidence, movement_flag, recording_day, hour_of_day,
-               source, category, cohort, group_id, channel)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               source, category, cohort, group_id, channel, run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
                 ev.get("animal_id", ""),
@@ -429,6 +520,7 @@ def write_events(chunk_id: int, events: list[dict], source: str = "seizure_cnn",
                 ev.get("cohort", ""),
                 ev.get("group_id", ""),
                 ev.get("channel"),
+                ev.get("run_id", run_id),
             ),
         )
     conn.commit()
@@ -442,6 +534,87 @@ def set_event_excluded(event_id: int, excluded: bool) -> None:
         (1 if excluded else 0, int(event_id)),
     )
     conn.commit()
+
+
+def set_event_review(event_id: int, label: str | None, reviewer: str = "",
+                     start_sec: float | None = None, end_sec: float | None = None,
+                     convulsive: bool | None = None) -> bool:
+    """Record a person's verdict on an event. Returns True if the row changed.
+
+    ``label`` is 'confirmed', 'rejected', or None / 'pending' for not reviewed.
+
+    * rejected: the event is also excluded from summaries, plots and exports.
+    * confirmed: ``start_sec`` / ``end_sec`` and ``convulsive``, when given, replace
+      the detector's boundaries and convulsive call; the detector's values are kept
+      in orig_start_sec / orig_end_sec / orig_type.
+    * anything else than confirmed: the detector's boundaries and call come back.
+    Leaving 'rejected' un-excludes the event. An exclusion ticked by hand on an
+    event that was never rejected is not touched.
+    """
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM events WHERE id = ?", (int(event_id),)).fetchone()
+    if row is None:
+        return False
+    old = dict(row)
+    label = label if label in ("confirmed", "rejected") else None
+    new = dict(old)
+    new["review_label"] = label
+    if label == "rejected":
+        new["excluded"] = 1
+    elif old.get("review_label") == "rejected":
+        new["excluded"] = 0
+
+    det_start = old["orig_start_sec"] if old["orig_start_sec"] is not None else old["start_sec"]
+    det_end = old["orig_end_sec"] if old["orig_end_sec"] is not None else old["end_sec"]
+    det_type = old["orig_type"] if old["orig_type"] is not None else old["type"]
+    want_start, want_end, want_type = det_start, det_end, det_type
+    if label == "confirmed":
+        if start_sec is not None and end_sec is not None:
+            want_start, want_end = sorted((float(start_sec), float(end_sec)))
+        if convulsive is not None:
+            want_type = "convulsive" if convulsive else "non_convulsive"
+    moved = (abs(want_start - det_start) > 1e-3 or abs(want_end - det_end) > 1e-3)
+    if not moved:
+        want_start, want_end = det_start, det_end
+    new["start_sec"], new["end_sec"] = want_start, want_end
+    if moved or old["orig_start_sec"] is not None or old["duration_sec"] is None:
+        new["duration_sec"] = want_end - want_start
+    new["orig_start_sec"] = det_start if moved else None
+    new["orig_end_sec"] = det_end if moved else None
+    new["type"] = want_type
+    new["orig_type"] = det_type if want_type != det_type else None
+    if old["hour_of_day"] is not None and old["start_sec"] is not None:
+        shift = int(want_start // 3600) - int(old["start_sec"] // 3600)
+        new["hour_of_day"] = (int(old["hour_of_day"]) + shift) % 24
+
+    cols = ("review_label", "excluded", "start_sec", "end_sec", "duration_sec",
+            "orig_start_sec", "orig_end_sec", "type", "orig_type", "hour_of_day")
+    changed = [c for c in cols if new[c] != old[c]]
+    if not changed:
+        return False
+    new["reviewed_at"] = datetime.now(timezone.utc).isoformat() if label else None
+    new["reviewer"] = (reviewer or old.get("reviewer") or "") if label else None
+    changed += ["reviewed_at", "reviewer"]
+    conn.execute(
+        f"UPDATE events SET {', '.join(c + ' = ?' for c in changed)} WHERE id = ?",
+        [new[c] for c in changed] + [int(event_id)],
+    )
+    conn.commit()
+    return True
+
+
+def get_events_by_id(event_ids) -> list[dict]:
+    """Events with these ids (with their recording's path), in id order."""
+    ids = [int(i) for i in event_ids]
+    conn = _get_conn()
+    out: list[dict] = []
+    for i in range(0, len(ids), 500):
+        part = ids[i:i + 500]
+        rows = conn.execute(
+            f"""SELECT e.*, c.path FROM events e JOIN chunks c ON e.chunk_id = c.id
+                WHERE e.id IN ({','.join('?' * len(part))})""", part).fetchall()
+        out.extend(dict(r) for r in rows)
+    return sorted(out, key=lambda r: r["id"])
 
 
 def write_file_animals(chunk_id: int, animals: dict | None) -> None:
@@ -468,7 +641,8 @@ def write_file_animals(chunk_id: int, animals: dict | None) -> None:
 def add_manual_events(edf_path: str, event_dicts: list[dict], source: str,
                       category: str = "seizure", mode: str = "manual",
                       recording_sec: float | None = None,
-                      file_animals: dict | None = None) -> int:
+                      file_animals: dict | None = None,
+                      run_id: int | None = None) -> int:
     """Add classical/manual detection events to the active project DB.
 
     Non-destructive across detectors: finds or creates the file's chunk WITHOUT
@@ -508,7 +682,8 @@ def add_manual_events(edf_path: str, event_dicts: list[dict], source: str,
         (chunk_id, source),
     )
     conn.commit()
-    write_events(chunk_id, event_dicts, source=source, category=category)
+    write_events(chunk_id, event_dicts, source=source, category=category,
+                 run_id=run_id)
 
     # Record per-animal observation, but only if this file has none yet — don't
     # clobber a mapping written by the ML analysis path. Fall back to the event
@@ -826,9 +1001,13 @@ def get_events(
 
     rows = conn.execute(
         f"""SELECT e.*, c.path, c.cohort as chunk_cohort,
-                   c.group_id as chunk_group, c.mode, c.date as chunk_date
+                   c.group_id as chunk_group, c.mode, c.date as chunk_date,
+                   r.model, r.model_sha256, r.convulsive_model,
+                   r.convulsive_model_sha256, r.params AS run_params,
+                   r.app_version
             FROM events e
             JOIN chunks c ON e.chunk_id = c.id
+            LEFT JOIN detection_runs r ON e.run_id = r.id
             WHERE {where}
             ORDER BY c.date, e.start_sec""",
         params,
@@ -956,11 +1135,16 @@ def get_circadian(
     category: str | None = None,
     cohort: str | None = None,
     group_id: str | None = None,
+    reviewed_only: bool = False,
 ) -> list[dict]:
-    """Return hourly event counts for circadian analysis."""
+    """Return hourly event counts for circadian analysis.
+
+    ``reviewed_only``: count only events a person confirmed."""
     conn = _get_conn()
     conditions = ["c.status = 'ok'"]
     params: list = []
+    if reviewed_only:
+        conditions.append("e.review_label = 'confirmed'")
     if animal_id:
         conditions.append("e.animal_id = ?")
         params.append(animal_id)

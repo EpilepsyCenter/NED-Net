@@ -20,6 +20,8 @@ from eeg_seizure_analyzer.io.channel_ids import load_channel_ids
 from eeg_seizure_analyzer.ml.dataset import (
     _downsample,
     _normalize_channels,
+    _normalize_recording,
+    recording_scale,
     _pad_or_trim,
     _read_window_signal,
 )
@@ -105,6 +107,8 @@ def predict_seizures(
     n_classes = metadata.get("n_classes", 1)
     has_convulsive = n_classes >= 2
     model_target = (metadata.get("dataset_config") or {}).get("target", "seizure")
+    # How the model's training input was scaled; detection must match it.
+    normalization = (metadata.get("dataset_config") or {}).get("normalization", "window")
     if detect_on not in ("seizure", "convulsive"):
         raise ValueError(f"detect_on must be 'seizure' or 'convulsive', not {detect_on!r}")
     if detect_on == "convulsive" and not has_convulsive:
@@ -158,6 +162,8 @@ def predict_seizures(
     for eeg_ch in eeg_idx:
         act_ch = eeg_to_act.get(eeg_ch) if include_activity else None
         animal_id = ch_ids.get(eeg_ch, "")
+        rec_scale = (recording_scale(edf_path, eeg_ch, target_fs)
+                     if normalization == "recording" else None)
 
         # Accumulate predictions for this channel
         total_target_samples = int(rec_duration * target_fs)
@@ -179,7 +185,10 @@ def predict_seizures(
                 start_sec=start_sec, duration_sec=window_sec,
             )
             eeg = _downsample(rec.data, rec.fs, target_fs)
-            eeg = _normalize_channels(eeg)
+            if rec_scale is not None:
+                eeg = _normalize_recording(eeg, *rec_scale)
+            else:
+                eeg = _normalize_channels(eeg)
             eeg = _pad_or_trim(eeg, target_samples)
 
             # Load paired activity if needed
@@ -262,6 +271,21 @@ def predict_seizures(
     # Sort by onset
     all_events.sort(key=lambda e: (e.channel, e.onset_sec))
 
+    # Provenance: every event carries the models (names + weights hashes) and
+    # settings that produced it. Travels with the event into the detection
+    # sidecars and on to the project DB (detection_runs).
+    from eeg_seizure_analyzer.ml.provenance import stamp_provenance
+    stamp_provenance(all_events, model_name, convulsive_model_name, {
+        "threshold": threshold,
+        "boundary_threshold": boundary_threshold,
+        "convulsive_threshold": convulsive_threshold,
+        "min_duration_sec": min_duration_sec,
+        "merge_gap_sec": merge_gap_sec,
+        "overlap_sec": overlap_sec,
+        "convulsive_min_duration_sec": convulsive_min_duration_sec,
+        "detect_on": detect_on,
+    })
+
     return all_events
 
 
@@ -301,6 +325,8 @@ def _apply_convulsive_classifier(
     c_fs = conv_meta.get("target_fs", 250)
     c_win = conv_meta.get("window_sec", 60)
     c_samples = int(c_fs * c_win)
+    # The classifier's own input scaling (it may differ from the detector's).
+    c_norm = (conv_meta.get("dataset_config") or {}).get("normalization", "window")
     # Default the threshold to the model's trained optimum unless the caller
     # explicitly overrode it (i.e. passed something other than the 0.5 default).
     thr = convulsive_threshold
@@ -314,7 +340,7 @@ def _apply_convulsive_classifier(
         start_sec = max(0.0, centre - c_win / 2.0)
         try:
             sig = _read_window_signal(
-                edf_path, ev.channel, None, start_sec, c_win, c_fs, c_samples)
+                edf_path, ev.channel, None, start_sec, c_win, c_fs, c_samples, c_norm)
         except Exception:
             sig = np.zeros((1, c_samples), dtype=np.float32)
         crops.append(sig)

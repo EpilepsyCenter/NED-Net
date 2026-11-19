@@ -266,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
                         "none, confirmed background stretches (_ned_background_annotations"
                         ".json), confirmed topped up with random, or proposed (confirmed + "
                         "unreviewed rule proposals)")
+    p.add_argument("--normalization", default="window", choices=["window", "recording"],
+                   help="EEG scaling: 'window' z-scores each window on its own (original); "
+                        "'recording' uses one robust centre and scale per recording, so "
+                        "amplitude relative to the animal's baseline is kept.")
     p.add_argument("--window-sec", type=int, default=60,
                    help="training window length in s (saved with the model; detection uses it)")
     p.add_argument("--patience", type=int, default=10)
@@ -326,6 +330,7 @@ def main(argv: list[str] | None = None) -> int:
         val_pairs_file=args.val_pairs_file,
         nonconv_negatives=not args.nonconv_left_out,
         window_sec=args.window_sec,
+        normalization=args.normalization,
         background_source=args.background_source,
     )
     if args.target != "seizure" or args.val_pairs_file:

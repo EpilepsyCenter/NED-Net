@@ -1,0 +1,272 @@
+"""Container layer of ADInstruments LabChart ``.adicht`` files.
+
+An ``.adicht`` file is an "ADInstruments Compound File": a structured-storage
+container (in the spirit of Microsoft OLE/CFBF, but ADI's own format) with
+fixed-size clusters, a doubly linked cluster map and a tree of storages that
+hold named streams.  See ``docs/FORMAT.md`` for the byte-level description.
+
+Everything in this module is pure Python (``struct`` + ``mmap``); it does not
+depend on numpy and never decodes sample data.
+"""
+from __future__ import annotations
+
+from .errors import AdichtionError
+
+import mmap
+import os
+import struct
+import sys
+from array import array
+from dataclasses import dataclass, field
+from typing import Iterator, Optional
+
+MAGIC = "ADInstruments Compound File".encode("utf-16le")
+HEADER_SIZE = 512
+ENTRY_SIZE = 160
+NAME_BYTES = 72
+
+TYPE_STORAGE = 1
+TYPE_STREAM = 2
+
+
+class AdichtFormatError(AdichtionError):
+    """Raised when a file does not look like an ADInstruments compound file."""
+
+
+@dataclass
+class Entry:
+    """One directory entry (a stream or a sub-storage)."""
+
+    name: str
+    first: int          # first cluster (see AdichtContainer.offset for the mapping)
+    size: int           # size in bytes
+    last: int           # last cluster
+    flags: int
+    type: int           # TYPE_STORAGE or TYPE_STREAM (0 has been seen for empty streams)
+    path: str = ""      # "/"-joined path from the root, filled in by tree()
+    children: Optional[list["Entry"]] = None
+
+    @property
+    def is_storage(self) -> bool:
+        return self.children is not None
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "Entry":
+        name = raw[:NAME_BYTES].decode("utf-16le", "replace").split("\x00", 1)[0]
+        first, size, last = struct.unpack_from("<qqq", raw, 0x48)
+        flags, typ = struct.unpack_from("<ii", raw, 0x88)
+        return cls(name=name, first=first, size=size, last=last, flags=flags, type=typ)
+
+
+class AdichtContainer:
+    """Read-only access to the streams of an ``.adicht`` file.
+
+    The file is memory mapped; streams are materialised as ``bytes`` on demand
+    with :meth:`read_stream`, or, when the stream is one contiguous run of
+    clusters, served as a zero-copy ``memoryview`` of the mapping with
+    :meth:`stream_view`.  Use it as a context manager or call :meth:`close`;
+    closing releases every view :meth:`stream_view` handed out.
+    """
+
+    def __init__(self, path: str | os.PathLike):
+        self.path = os.fspath(path)
+        self._views: list[memoryview] = []      # the zero-copy views handed out by stream_view (first: close() reads it)
+        self._fh = open(self.path, "rb")
+        try:
+            self.data: mmap.mmap | bytes = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except (ValueError, OSError):  # empty file or platform quirk
+            self.data = self._fh.read()
+        d = self.data
+        if len(d) < HEADER_SIZE or d[: len(MAGIC)] != MAGIC:
+            self.close()
+            raise AdichtFormatError(f"{self.path!r} is not an ADInstruments Compound File")
+        (self.version, self.header_size, self.chunk_size, _, _, _, log2cl) = struct.unpack_from("<7i", d, 0x80)
+        if not (8 <= log2cl <= 20):
+            self.close()
+            raise AdichtFormatError(f"implausible cluster size 2**{log2cl}")
+        if not (HEADER_SIZE <= self.header_size < len(d)):
+            self.close()
+            raise AdichtFormatError(f"implausible header size {self.header_size}")
+        self.cluster_size = 1 << log2cl
+        self.capacity, self.neg_capacity, self.map_first = struct.unpack_from("<qqq", d, 0x9C)
+        self.root = Entry.from_bytes(d[0xB8 : 0xB8 + ENTRY_SIZE])
+        self.n_clusters = (len(d) - self.header_size) // self.cluster_size
+        self.entries_per_page = self.cluster_size // 8
+        self._tree: Optional[Entry] = None
+
+    # -- lifecycle -----------------------------------------------------------
+    def close(self) -> None:
+        """Release the views, unmap and close the file.  Safe to call twice.  A slice of a view that
+        somebody still holds (a worker thread in the middle of a decode, a traceback keeping a
+        frame alive) makes ``mmap.close`` raise ``BufferError``; that is swallowed and the mapping
+        goes when the last slice does, so ``close`` itself never fails."""
+        views, self._views = self._views, []
+        for v in views:
+            try:
+                v.release()
+            except (BufferError, ValueError):
+                pass
+        try:
+            if isinstance(self.data, mmap.mmap):
+                try:
+                    self.data.close()
+                except BufferError:
+                    pass
+        finally:
+            self._fh.close()
+
+    def __enter__(self) -> "AdichtContainer":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    # -- clusters ------------------------------------------------------------
+    def offset(self, cluster: int) -> int:
+        """File offset of a cluster: the first data cluster after the header is
+        cluster 2 (clusters 0 and 1 are virtual)."""
+        return self.header_size + (cluster - 2) * self.cluster_size
+
+    def cluster(self, cluster: int) -> bytes:
+        o = self.offset(cluster)
+        if cluster < 2 or o >= len(self.data):
+            raise AdichtFormatError(f"cluster {cluster} lies outside the file")
+        return bytes(self.data[o : o + self.cluster_size])
+
+    def map_entry(self, cluster: int) -> tuple[int, int]:
+        """(next, prev) links of a cluster from the cluster map; 0 = none."""
+        page, idx = divmod(cluster, self.entries_per_page)
+        o = self.offset(self.map_first + page) + idx * 8
+        if cluster < 0 or o < self.header_size or o + 8 > len(self.data):
+            raise AdichtFormatError(f"the cluster map entry of cluster {cluster} lies outside the file")
+        return struct.unpack_from("<ii", self.data, o)
+
+    def chain(self, first: int, last: int) -> Iterator[int]:
+        """Yield the clusters of a stream by following the cluster map."""
+        c = first
+        seen = 0
+        limit = self.n_clusters + 2
+        while True:
+            yield c
+            seen += 1
+            if c == last or seen > limit:
+                return
+            nxt, _prev = self.map_entry(c)
+            if nxt <= 0:
+                return
+            c = nxt
+
+    def read_stream(self, entry: Entry) -> bytes:
+        """Return the content of a stream entry (``b""`` for empty entries)."""
+        if entry.first <= 0 or entry.size <= 0:
+            return b""
+        clusters = list(self.chain(entry.first, entry.last))
+        # fast path: contiguous run
+        if clusters[-1] - clusters[0] == len(clusters) - 1:
+            o = self.offset(clusters[0])
+            return bytes(self.data[o : o + entry.size])
+        buf = bytearray()
+        for c in clusters:
+            buf += self.cluster(c)
+            if len(buf) >= entry.size:
+                break
+        return bytes(buf[: entry.size])
+
+    def _is_contiguous(self, first: int, last: int) -> bool:
+        """True when the cluster map links every cluster from ``first`` to ``last`` to its successor
+        (``c`` -> ``c + 1``): one read of the (contiguous) map slice, not a walk cluster by cluster."""
+        if last < first or first < 2 or sys.byteorder != "little":
+            return False
+        base = self.offset(self.map_first)
+        raw = self.data[base + first * 8: base + last * 8]
+        if len(raw) != (last - first) * 8:
+            return False
+        links = array("i")
+        links.frombytes(bytes(raw))
+        return links[0::2] == array("i", range(first + 1, last + 1))
+
+    def stream_view(self, entry: Entry) -> Optional[memoryview]:
+        """The content of a stream as a zero-copy ``memoryview`` of the mapping, or ``None`` when that
+        is not possible (no mapping, an empty entry, a chain that is not one contiguous run of
+        clusters, or a stream that reaches past the end of the file): the caller then uses
+        :meth:`read_stream`.  The view is released by :meth:`close`; do not keep slices of it
+        beyond that."""
+        if not isinstance(self.data, mmap.mmap) or entry.first <= 0 or entry.size <= 0:
+            return None
+        start = self.offset(entry.first)
+        if start < 0 or start + entry.size > len(self.data) or not self._is_contiguous(entry.first, entry.last):
+            return None
+        if self.offset(entry.last) + self.cluster_size < start + entry.size:
+            return None                                     # the chain is shorter than the stream says
+        view = memoryview(self.data)[start: start + entry.size]
+        self._views.append(view)
+        return view
+
+    # -- directory -----------------------------------------------------------
+    @staticmethod
+    def parse_table(blob: bytes) -> Optional[list[Entry]]:
+        """Parse a directory table: int32 count, int32 -count, then 160-byte entries."""
+        if len(blob) < 8:
+            return None
+        n, neg = struct.unpack_from("<ii", blob, 0)
+        if not (1 <= n <= 4096 and neg == -n and len(blob) >= 8 + n * ENTRY_SIZE):
+            return None
+        entries = []
+        for i in range(n):
+            e = Entry.from_bytes(blob[8 + i * ENTRY_SIZE : 8 + (i + 1) * ENTRY_SIZE])
+            if not e.name or any(ord(ch) < 32 for ch in e.name):
+                return None
+            entries.append(e)
+        return entries
+
+    def _load_table(self, e: Entry) -> Optional[list[Entry]]:
+        if e.first <= 0:
+            return None
+        try:
+            blob = self.cluster(e.first)  # tables have always fitted in one cluster
+        except AdichtFormatError:
+            return None                   # an entry pointing outside the file is not a table (as before)
+        return self.parse_table(blob[: e.size] if e.size else blob)
+
+    def tree(self) -> Entry:
+        """Return the root storage with ``children`` filled in recursively."""
+        if self._tree is None:
+            root = self.root
+            root.path = ""
+            root.children = self._load_table(root) or []
+            self._descend(root.children, "")
+            self._tree = root
+        return self._tree
+
+    def _descend(self, entries: list[Entry], prefix: str) -> None:
+        for e in entries:
+            e.path = f"{prefix}{e.name}"
+            looks_like_table = e.first > 0 and e.size >= 8 + ENTRY_SIZE and (e.size - 8) % ENTRY_SIZE == 0
+            if looks_like_table or e.type == TYPE_STORAGE:
+                sub = self._load_table(e)
+                if sub:
+                    e.children = sub
+                    self._descend(sub, e.path + "/")
+
+    def walk(self) -> Iterator[Entry]:
+        """Depth-first iteration over all entries (storages and streams)."""
+
+        def rec(entries: list[Entry]) -> Iterator[Entry]:
+            for e in entries:
+                yield e
+                if e.children:
+                    yield from rec(e.children)
+
+        yield from rec(self.tree().children or [])
+
+    def streams(self) -> dict[str, Entry]:
+        """Mapping path -> entry for all streams (non-storage entries)."""
+        return {e.path: e for e in self.walk() if not e.is_storage}
+
+    def find_stream(self, name: str) -> Optional[Entry]:
+        """Find a stream by case-insensitive leaf name (e.g. ``"Blocks_0"``)."""
+        name = name.lower()
+        for e in self.walk():
+            if not e.is_storage and e.name.lower() == name:
+                return e
+        return None

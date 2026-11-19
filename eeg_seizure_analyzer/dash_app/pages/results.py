@@ -29,6 +29,7 @@ from eeg_seizure_analyzer.dash_app.components import (
 )
 from eeg_seizure_analyzer.processing.preprocess import bandpass_filter
 from eeg_seizure_analyzer import db
+from eeg_seizure_analyzer.dash_app.pages import results_review as _rrp
 
 import json as _json
 
@@ -100,8 +101,48 @@ _DETECTOR_LABELS = {
 }
 
 
+def _filtered_events(source, detector, date_start, date_end, modes, animals,
+                     types, min_conf, file_ids, cohort, group_id) -> list[dict]:
+    """The events the filter controls select: what the event table shows
+    (hand-excluded events included, as in the table)."""
+    category = "spike" if source == "spike_cnn" else "seizure"
+    animal_id = animals[0] if animals and len(animals) == 1 else None
+    event_type = types[0] if types and len(types) == 1 else None
+    min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None
+    filter_kw = {
+        "date_start": date_start or None,
+        "date_end": date_end or None,
+        "animal_id": animal_id,
+        "min_confidence": min_confidence,
+        "event_type": event_type,
+        "category": category,
+        "source": detector or None,
+        "cohort": cohort or None,
+        "group_id": group_id or None,
+    }
+    if modes and len(modes) < 3:
+        filter_kw["mode"] = modes[0] if len(modes) == 1 else None
+
+    events = _keep_modes(db.get_events(**filter_kw), modes)
+    if file_ids:
+        chunk_ids = {int(fid) for fid in file_ids}
+        events = [e for e in events if e.get("chunk_id") in chunk_ids]
+    if animals and len(animals) > 1:
+        events = [e for e in events if e.get("animal_id") in animals]
+    if types and len(types) < 2:
+        events = [e for e in events if e.get("type") in types]
+    return events
+
+
 def layout(sid: str | None) -> html.Div:
-    """Build Results tab with filter controls and data panels."""
+    """Build Results tab with filter controls and data panels.
+
+    While a review of database events is open (Review events), the tab shows the
+    review instead.
+    """
+    review = _rrp.take_view(sid, server_state.get_session(sid) if sid else None)
+    if review is not None:
+        return review
     try:
         animals = db.get_all_animals()
         date_min, date_max = db.get_date_range()
@@ -115,6 +156,7 @@ def layout(sid: str | None) -> html.Div:
         {"label": Path(f["path"]).name, "value": str(f["id"])}
         for f in files
     ]
+    review_controls = _rrp.start_controls(sid)
 
     return html.Div(
         style={"padding": "24px"},
@@ -298,6 +340,14 @@ def layout(sid: str | None) -> html.Div:
                         size="sm", outline=True, color="info",
                         className="mt-2",
                     ),
+                    dbc.Checklist(
+                        id="res-reviewed-only",
+                        options=[{"label": "Count only events confirmed in a review",
+                                  "value": "on"}],
+                        value=[], switch=True, inline=True,
+                        style={"fontSize": "0.82rem", "display": "inline-block",
+                               "marginLeft": "18px", "verticalAlign": "middle"},
+                    ),
                 ]),
                 style={"backgroundColor": "var(--ned-sidebar)",
                        "border": "1px solid var(--ned-border)",
@@ -440,7 +490,12 @@ def layout(sid: str | None) -> html.Div:
             ], className="mb-3"),
 
             # ── Events table ───────────────────────────────────────
-            html.H6("Events", style={"color": "var(--ned-accent)", "marginTop": "16px"}),
+            html.Div([
+                html.H6("Events", style={"color": "var(--ned-accent)", "margin": "0"}),
+                review_controls[0],
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "16px",
+                      "marginBottom": "8px"}),
+            *review_controls[1:],
             html.Div(id="res-events-table"),
 
             # ── Event inspector ────────────────────────────────────
@@ -496,6 +551,7 @@ def layout(sid: str | None) -> html.Div:
     Output("res-type-filter", "value"),
     Output("res-min-conf", "value"),
     Output("res-panels-toggle", "value"),
+    Output("res-reviewed-only", "value"),
     Input("res-project-select", "value"),
 )
 def res_on_project_switch(project):
@@ -537,6 +593,7 @@ def res_on_project_switch(project):
         s.get("types", ["convulsive", "non_convulsive"]),
         s.get("min_conf", 0),
         _restored_panels(s),
+        ["on"] if s.get("reviewed_only") else [],
     )
 
 
@@ -564,11 +621,13 @@ def _restored_panels(s: dict) -> list:
     Input("res-cohort-filter", "value"),
     Input("res-group-filter", "value"),
     Input("res-panels-toggle", "value"),
+    Input("res-reviewed-only", "value"),
     State("res-project-select", "value"),
     prevent_initial_call=True,
 )
 def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
-                          types, min_conf, files, cohort, group, panels, project):
+                          types, min_conf, files, cohort, group, panels,
+                          reviewed_only, project):
     """Persist the current Results-tab filter selections for the active project
     so they're restored next time it's opened."""
     if not project:
@@ -578,7 +637,7 @@ def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
         "date_start": ds, "date_end": de, "modes": modes, "animals": animals,
         "types": types, "min_conf": min_conf, "files": files,
         "cohort": cohort, "group": group, "panels": panels,
-        "panels_has_is": True,
+        "panels_has_is": True, "reviewed_only": bool(reviewed_only),
     })
     return no_update
 
@@ -606,6 +665,7 @@ def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
     Input("res-exclude-signal", "data"),
     Input("res-animal-signal", "data"),
     Input("res-normalize", "value"),
+    Input("res-reviewed-only", "value"),
     State("res-date-start", "value"),
     State("res-date-end", "value"),
     State("res-mode-filter", "value"),
@@ -617,8 +677,8 @@ def res_save_filter_state(source, detector, normalize, ds, de, modes, animals,
     State("res-group-filter", "value"),
 )
 def update_results(n, source, project, detector, excl_signal, animal_signal,
-                   normalize, date_start, date_end, modes, animals, types,
-                   min_conf, file_ids, cohort, group_id):
+                   normalize, reviewed_only, date_start, date_end, modes, animals,
+                   types, min_conf, file_ids, cohort, group_id):
     """Re-query SQLite and update all panels."""
     # Honour the active project DB (app-wide; shared with the Analysis tab).
     if project and project != db.get_active_project():
@@ -631,6 +691,7 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         source = s.get("source", "seizure_cnn")
         detector = s.get("detector", None)
         normalize = s.get("normalize", "raw")
+        reviewed_only = s.get("reviewed_only")
         date_start = s.get("date_start") or None
         date_end = s.get("date_end") or None
         modes = s.get("modes", ["single", "batch", "live"])
@@ -643,6 +704,8 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
     # The Seizures/Spikes radio picks the high-level category; the Detector
     # dropdown narrows to a specific source within it (ML or classical).
     category = "spike" if source == "spike_cnn" else "seizure"
+    # "Count only confirmed events" applies to seizures (spikes are not reviewed)
+    reviewed_only = bool(reviewed_only) and category == "seizure"
     detector = detector or None
     cohort = cohort or None
     group_id = group_id or None
@@ -670,7 +733,8 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         # split by group and honour exclude/censor); circadian stays DB-side.
         circadian = db.get_circadian(
             animal_id=animal_id, min_confidence=min_confidence,
-            source=detector, category=category, cohort=cohort, group_id=group_id)
+            source=detector, category=category, cohort=cohort, group_id=group_id,
+            reviewed_only=reviewed_only)
     except Exception as e:
         empty_fig = go.Figure()
         apply_fig_theme(empty_fig)
@@ -700,11 +764,13 @@ def update_results(n, source, project, detector, excl_signal, animal_signal,
         or file_ids
         or (modes and len(modes) < 3))
     table = _build_events_table(events, filters_active=filters_active)
+    if category == "seizure":
+        table = html.Div([_review_line(events, reviewed_only), table])
 
     # Cross-group / per-animal views — computed from the filtered event list
     # (drops per-event excludes) so they inherit every filter applied above.
     is_seizure = category == "seizure"
-    agg_events = _active_events(events)
+    agg_events = _active_events(events, reviewed_only)
 
     # Observation rows (exact recording time) + per-animal review status.
     try:
@@ -1488,9 +1554,29 @@ _GROUP_PALETTE = ["#58a6ff", "#f85149", "#3fb950", "#d29922", "#bc8cff",
                   "#39c5cf", "#ff7b72", "#a5d6ff"]
 
 
-def _active_events(events: list[dict]) -> list[dict]:
-    """Drop excluded events — aggregations never count them."""
-    return [e for e in events if not e.get("excluded")]
+def _active_events(events: list[dict], reviewed_only: bool = False) -> list[dict]:
+    """Drop excluded events — aggregations never count them. With
+    ``reviewed_only``, keep only events a person confirmed in a review."""
+    return [e for e in events if not e.get("excluded")
+            and (not reviewed_only or e.get("review_label") == "confirmed")]
+
+
+def _review_line(events: list[dict], reviewed_only: bool) -> html.Div:
+    """Where the review of the shown events stands (above the event table)."""
+    pool = [e for e in events if e.get("review_label") or not e.get("excluded")]
+    c = sum(e.get("review_label") == "confirmed" for e in pool)
+    r = sum(e.get("review_label") == "rejected" for e in pool)
+    left = len(pool) - c - r
+    if not pool:
+        return html.Div()
+    text = (f"Reviewed: {c + r} of {len(pool)} events ({c} confirmed, {r} rejected), "
+            f"{left} not reviewed.")
+    if reviewed_only:
+        text += " The summaries and plots count the confirmed events only."
+    elif left:
+        text += " Events not reviewed are counted in the summaries and plots."
+    return html.Div(text, style={"fontSize": "0.82rem", "marginBottom": "6px",
+                                 "color": "var(--ned-text-muted)"})
 
 
 def _ev_date(e: dict) -> str:
@@ -2062,6 +2148,7 @@ def _build_events_table(events: list[dict], filters_active: bool = False):
         edf_path = ev.get("path", "")
         rows.append({
             "Exclude": bool(ev.get("excluded")),
+            "Reviewed": ev.get("review_label") or "",
             "Animal": ev.get("animal_id", ""),
             "File": Path(edf_path).name if edf_path else "",
             "Date": ev.get("date", ev.get("chunk_date", "")),
@@ -2092,6 +2179,9 @@ def _build_events_table(events: list[dict], filters_active: bool = False):
         {"field": "Exclude", "width": 90, "editable": True,
          "cellDataType": "boolean",
          "headerTooltip": "Exclude from summaries, plots and export"},
+        {"field": "Reviewed", "width": 100,
+         "headerTooltip": "A person's verdict (Review events): confirmed, rejected, "
+                          "or empty when not reviewed"},
         {"field": "Animal", "width": 80},
         {"field": "File", "width": 150},
         {"field": "Date", "width": 95},
@@ -2184,42 +2274,19 @@ def _minmax_downsample(time_axis, data, max_points=6000):
     State("res-file-filter", "value"),
     State("res-cohort-filter", "value"),
     State("res-group-filter", "value"),
+    State("res-reviewed-only", "value"),
     prevent_initial_call=True,
 )
 def export_csv(n, source, detector, date_start, date_end, modes, animals,
-               types, min_conf, file_ids, cohort, group_id):
+               types, min_conf, file_ids, cohort, group_id, reviewed_only):
     if not n:
         return no_update
 
     # Mirror the displayed table's filters exactly so the CSV == what you see.
-    category = "spike" if source == "spike_cnn" else "seizure"
-    animal_id = animals[0] if animals and len(animals) == 1 else None
-    event_type = types[0] if types and len(types) == 1 else None
-    min_confidence = float(min_conf) if min_conf and float(min_conf) > 0 else None
-    filter_kw = {
-        "date_start": date_start or None,
-        "date_end": date_end or None,
-        "animal_id": animal_id,
-        "min_confidence": min_confidence,
-        "event_type": event_type,
-        "category": category,
-        "source": detector or None,
-        "cohort": cohort or None,
-        "group_id": group_id or None,
-    }
-    if modes and len(modes) < 3:
-        filter_kw["mode"] = modes[0] if len(modes) == 1 else None
-
-    events = _keep_modes(db.get_events(**filter_kw), modes)
-    if file_ids:
-        chunk_ids = {int(fid) for fid in file_ids}
-        events = [e for e in events if e.get("chunk_id") in chunk_ids]
-    if animals and len(animals) > 1:
-        events = [e for e in events if e.get("animal_id") in animals]
-    if types and len(types) < 2:
-        events = [e for e in events if e.get("type") in types]
+    events = _filtered_events(source, detector, date_start, date_end, modes, animals,
+                              types, min_conf, file_ids, cohort, group_id)
     # Excluded events are dropped from exports too.
-    events = [e for e in events if not e.get("excluded")]
+    events = _active_events(events, bool(reviewed_only) and source != "spike_cnn")
     if not events:
         return html.Span("No events to export.", style={"color": "#d29922"})
 
@@ -2236,7 +2303,11 @@ _EVENT_EXPORT_FIELDS = [
     "date", "recording_day", "hour_of_day",
     "start_sec", "end_sec", "duration_sec",
     "cnn_confidence", "convulsive_confidence", "movement_flag",
-    "channel", "cohort", "group_id", "source", "mode", "excluded", "path",
+    "channel", "cohort", "group_id", "source", "mode", "excluded",
+    "review_label", "reviewed_at", "reviewer",
+    "orig_start_sec", "orig_end_sec", "orig_type", "path",
+    "model", "model_sha256", "convulsive_model", "convulsive_model_sha256",
+    "run_params", "app_version",
 ]
 
 
@@ -2293,10 +2364,11 @@ def export_all_events(n, project):
     State("res-file-filter", "value"),
     State("res-cohort-filter", "value"),
     State("res-group-filter", "value"),
+    State("res-reviewed-only", "value"),
     prevent_initial_call=True,
 )
 def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
-                      types, min_conf, file_ids, cohort, group_id):
+                      types, min_conf, file_ids, cohort, group_id, reviewed_only):
     """Export the computed values BEHIND the Results graphs as a multi-sheet
     XLSX under the current filters, for stats in Prism. Sheets: PerAnimal /
     PerGroup (per-subject stats tables), Daily_counts_byGroup / Daily_rate_byGroup
@@ -2335,7 +2407,7 @@ def export_graph_data(n, source, detector, date_start, date_end, modes, animals,
         events = [e for e in events if e.get("type") in types]
 
     status = db.get_animal_status()
-    agg = _active_events(events)
+    agg = _active_events(events, bool(reviewed_only) and source != "spike_cnn")
     agg, fa = _apply_censor(agg, fa, status)
     excluded = {a for a, s in status.items() if s.get("excluded")}
     vis_events = [e for e in agg if (e.get("animal_id") or "") not in excluded]

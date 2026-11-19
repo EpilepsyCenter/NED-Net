@@ -71,6 +71,9 @@ def _clear_recording_state(state) -> None:
 def open_review(state, review_id: str) -> str | None:
     """Load a review folder's recordings as this session's project, after stashing
     the user's own project. Returns an error message, or None on success."""
+    from eeg_seizure_analyzer import results_review as _rr
+    if _rr.review_open(state.extra):
+        return "A review of database events is open. Exit it first (Model > Results)."
     review = br.load_review(review_id)
     if not review:
         return f"No blind review with id {review_id!r} was found."

@@ -451,6 +451,40 @@ def layout(sid: str | None) -> html.Div:
                                 ),
                             ], width=8),
                         ], className="g-2 mb-3"),
+                        dbc.Row([
+                            dbc.Col([
+                                _param_label(
+                                    "Signal scaling",
+                                    "How the EEG is put on a common scale before "
+                                    "the model sees it. Stored with the model and "
+                                    "applied automatically at detection."),
+                                dbc.Select(
+                                    id="ml-normalization",
+                                    options=[
+                                        {"label": "Per recording (recommended)",
+                                         "value": "recording"},
+                                        {"label": "Per window",
+                                         "value": "window"},
+                                    ],
+                                    value="recording",
+                                    size="sm",
+                                ),
+                            ], width=4),
+                            dbc.Col([
+                                html.Div(
+                                    "Per recording: each animal's channel is scaled "
+                                    "by its median and spread over the whole "
+                                    "recording, so a seizure stays large relative "
+                                    "to that animal's baseline. Models trained this "
+                                    "way carry over better to new animals and "
+                                    "cohorts. Per window scales every window on its "
+                                    "own (the behaviour before this option).",
+                                    style={"fontSize": "0.75rem",
+                                           "color": "var(--ned-text-muted)",
+                                           "marginTop": "18px"},
+                                ),
+                            ], width=8),
+                        ], className="g-2 mb-3"),
                     ]),
                     ]),  # /ml-train-hyperparams
 
@@ -1300,6 +1334,7 @@ def update_bg_source_from_selection(selected_rows, current):
     State("ml-freeze-backbone", "value"),
     State("ml-exclude-animals", "value"),
     State("ml-bg-source", "value"),
+    State("ml-normalization", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
@@ -1307,7 +1342,7 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
                    ann_type, epochs, batch_size, lr, patience, pos_weight,
                    neg_ratio, architecture, encoder_lr, freeze_epochs,
                    pretrained_weights, freeze_backbone, exclude_animals,
-                   bg_source, sid):
+                   bg_source, normalization, sid):
     """Start model training in a background thread."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update
@@ -1356,6 +1391,11 @@ def start_training(n_clicks, ds_name, model_name, selected_rows, folder,
             allowed = {v for v, _, _ in _BG_SOURCE_CHOICES}
             dataset_config.background_source = (
                 bg_source if bg_source in allowed else "random")
+            # Signal scaling: per recording by default. Seizure U-Net only; the
+            # convulsive classifier stays per window (it was worse per recording).
+            dataset_config.normalization = (
+                normalization if normalization in ("recording", "window")
+                else "recording")
     _arch = architecture or "unet"
     # The radio uses the short value "convulsive"; the saved/loaded architecture
     # tag is "convulsive_classifier" (matches metadata + load_trained_model).

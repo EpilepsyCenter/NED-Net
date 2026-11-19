@@ -289,6 +289,7 @@ ORIGIN_LABELS = {
     "analysis_single": "Analysis (single file)",
     "analysis_batch": "Analysis (batch)",
     "analysis_live": "Analysis (live monitoring)",
+    "results_review": "Results (review of database events)",
 }
 
 
